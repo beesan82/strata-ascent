@@ -51,6 +51,8 @@ export function drawPlayer(
   ctx.restore();
 
   // 腕(ライト方向。反転の影響を受けないようtranslateの外で描く)
+  // save/restoreでstrokeStyle等の状態を隔離し、メインctxに残さない
+  ctx.save();
   const ax = px;
   const ay = py - 0.35 * s + bob;
   ctx.strokeStyle = '#8f969e';
@@ -60,4 +62,5 @@ export function drawPlayer(
   ctx.moveTo(ax, ay);
   ctx.lineTo(ax + Math.cos(aimAngle) * 0.45 * s, ay + Math.sin(aimAngle) * 0.45 * s);
   ctx.stroke();
+  ctx.restore();
 }
