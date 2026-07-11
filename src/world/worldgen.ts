@@ -12,10 +12,12 @@ export function tileAt(seed: number, x: number, y: number): Tile {
   const s = stratumAt(y);
 
   // 床帯(band): floorSpacing行ごとのまとまり。床行はbandの先頭行
+  // 注: 床行の位相は階層(stratum)の継ぎ目でリセットされるため、継ぎ目ごとに
+  // 床間隔がやや広い区間が1つ生じる(想定内・許容)
   const band = Math.floor(y / s.floorSpacing);
   const isFloorRow = mod(y, s.floorSpacing) === 0;
   const seg = Math.floor(x / 16);
-  const floorGap = hash2(seed + 303, seg, band) < s.gapChance;
+  const floorGap = isFloorRow && hash2(seed + 303, seg, band) < s.gapChance;
 
   // 1. 巨大空洞(低頻度ノイズ)。空洞内は4床帯ごとの橋だけ残る
   const cavity = valueNoise2(seed + 101, x / 160, y / 160) > s.cavityThreshold;
@@ -24,14 +26,16 @@ export function tileAt(seed: number, x: number, y: number): Tile {
     return TILE.AIR;
   }
 
-  // 2. 柱・壁塊(中頻度ノイズ)
-  const mass = valueNoise2(seed + 202, x / 28, y / 28) > s.massThreshold;
-  if (mass) return TILE.SOLID;
-
-  // 3. 梯子: 32タイル幅の列グループごとに1本。床行も貫通して上下のbandをつなぐ
+  // 2. 梯子: 32タイル幅の列グループごとに1本。床行も貫通して上下のbandをつなぐ。
+  //    柱・壁塊(質量ノイズ)より先に判定することで、梯子列が質量構造に
+  //    分断されない(巨大構造体を貫くシャフトとして常に通る)
   const group = Math.floor(x / 32);
   const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, band) * 32);
   if (x === ladderX) return TILE.LADDER;
+
+  // 3. 柱・壁塊(中頻度ノイズ)
+  const mass = valueNoise2(seed + 202, x / 28, y / 28) > s.massThreshold;
+  if (mass) return TILE.SOLID;
 
   // 4. 床
   if (isFloorRow && !floorGap) return TILE.SOLID;

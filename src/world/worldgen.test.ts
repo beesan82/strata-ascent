@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { hash2, valueNoise2 } from './noise';
+import { stratumAt } from './strata';
 import { CHUNK_SIZE, TILE } from './tiles';
 import { findSpawn, generateChunk, tileAt } from './worldgen';
 
@@ -26,6 +28,18 @@ describe('generateChunk', () => {
       }
     }
   });
+
+  it('階層境界(高度500)をまたぐチャンクでもtileAtと一致する', () => {
+    // cy=-8 → y=-512..-449。高度500(y=-500)の階層境界を横断する
+    const chunk = generateChunk(42, 2, -8);
+    for (let ty = 0; ty < CHUNK_SIZE; ty += 7) {
+      for (let tx = 0; tx < CHUNK_SIZE; tx += 7) {
+        expect(chunk[ty * CHUNK_SIZE + tx]).toBe(
+          tileAt(42, 2 * CHUNK_SIZE + tx, -8 * CHUNK_SIZE + ty),
+        );
+      }
+    }
+  });
 });
 
 describe('tileAt', () => {
@@ -45,6 +59,33 @@ describe('tileAt', () => {
       expect(counts.air).toBeGreaterThan(0);
       expect(counts.solid).toBeGreaterThan(0);
       expect(counts.ladder).toBeGreaterThan(0);
+    }
+  });
+
+  it('梯子列は質量ノイズ(柱・壁塊)に分断されない(空洞内を除き常にLADDER)', () => {
+    // 回帰テスト: 梯子判定は質量ノイズより先に行われるため、空洞でない限り
+    // 梯子列の全行がLADDERであることを固定する(将来のパラメータ調整で退行させない)。
+    // ladderXと空洞条件は実装(tileAt)の式をそのまま再現している。実装と鏡写しの
+    // 結合だが、「空洞だけが梯子を除去できる」性質を固定する目的で意図的に許容する。
+    const FLOOR_SPACING = 8; // 階層0(最下層)
+    for (const seed of [1, 42, 20260711]) {
+      for (let group = 0; group < 8; group++) {
+        // 階層0内の床帯を地上側(band -40..-1, y=-320..-1)と
+        // 地下側(band 1..40, y=8..327)の両方で検証
+        for (let band = -40; band <= 40; band++) {
+          if (band === 0) continue;
+          const ladderX =
+            group * 32 + Math.floor(hash2(seed + 404, group, band) * 32);
+          for (let y = band * FLOOR_SPACING; y < (band + 1) * FLOOR_SPACING; y++) {
+            const s = stratumAt(y);
+            expect(s.floorSpacing).toBe(FLOOR_SPACING);
+            const cavity =
+              valueNoise2(seed + 101, ladderX / 160, y / 160) > s.cavityThreshold;
+            if (cavity) continue;
+            expect(tileAt(seed, ladderX, y)).toBe(TILE.LADDER);
+          }
+        }
+      }
     }
   });
 
