@@ -2,6 +2,7 @@ import type { Camera } from '../core/camera';
 import type { Player } from '../entities/player';
 import type { ChunkStore } from '../world/chunks';
 import { CHUNK_SIZE } from '../world/tiles';
+import { Background } from './background';
 import { ChunkBaker } from './chunkbake';
 import { Lighting } from './lighting';
 
@@ -12,6 +13,7 @@ export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private lighting = new Lighting();
   private baker: ChunkBaker;
+  private background: Background;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -19,6 +21,7 @@ export class Renderer {
   ) {
     this.ctx = canvas.getContext('2d')!;
     this.baker = new ChunkBaker(seed);
+    this.background = new Background(seed);
   }
 
   resize(w: number, h: number): void {
@@ -40,6 +43,9 @@ export class Renderer {
 
     ctx.fillStyle = '#050607';
     ctx.fillRect(0, 0, w, h);
+
+    // パララックス遠景(闇の奥の巨大構造)
+    this.background.render(ctx, cam.x, cam.y, w, h, ppt);
 
     // 可視チャンクの焼き込み画像を貼る
     const chunkPx = CHUNK_SIZE * ppt;
