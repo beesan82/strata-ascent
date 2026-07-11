@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blobId, BLOB_COUNT } from './autotile';
+import { blobId, BLOB_COUNT, edgesForBlobId } from './autotile';
 
 function id(n: boolean, e: boolean, s: boolean, w: boolean, ne: boolean, se: boolean, sw: boolean, nw: boolean) {
   return blobId({ n, e, s, w, ne, se, sw, nw });
@@ -44,5 +44,27 @@ describe('blobId', () => {
       expect(v).toBeGreaterThanOrEqual(0);
       expect(v).toBeLessThan(BLOB_COUNT);
     }
+  });
+
+  it('全射性: 256近傍が 0..46 を各1回ずつ網羅する', () => {
+    const ids: number[] = [];
+    for (let m = 0; m < 256; m++) {
+      const nb = {
+        n: !!(m & 1), e: !!(m & 2), s: !!(m & 4), w: !!(m & 8),
+        ne: !!(m & 16), se: !!(m & 32), sw: !!(m & 64), nw: !!(m & 128),
+      };
+      ids.push(blobId(nb));
+    }
+    const set = new Set(ids);
+    expect(set.size).toBe(47);
+    const expected = new Set(Array.from({ length: 47 }, (_, i) => i));
+    expect(set).toEqual(expected);
+  });
+
+  it('edgesForBlobId: 孤立タイルは四辺すべてAIR、内部タイルは四辺すべて非AIR', () => {
+    const isolated = id(F, F, F, F, F, F, F, F);
+    expect(edgesForBlobId(isolated)).toEqual({ top: true, right: true, bottom: true, left: true });
+    const inner = id(T, T, T, T, T, T, T, T);
+    expect(edgesForBlobId(inner)).toEqual({ top: false, right: false, bottom: false, left: false });
   });
 });
