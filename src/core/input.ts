@@ -1,13 +1,29 @@
 import type { PlayerInput } from '../entities/player';
 
+const GAME_KEYS = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'KeyA',
+  'KeyD',
+  'KeyW',
+  'KeyS',
+  'Space',
+]);
+
 /** キーボード・マウス状態の集約。updateループから同期的に読む */
 export class Input {
   private keys = new Set<string>();
+  /** ビューポート座標。キャンバスが(0,0)起点のフルスクリーンである前提 */
   mouseX = 0;
   mouseY = 0;
 
   constructor() {
-    window.addEventListener('keydown', (e) => this.keys.add(e.code));
+    window.addEventListener('keydown', (e) => {
+      if (GAME_KEYS.has(e.code)) e.preventDefault();
+      this.keys.add(e.code);
+    });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('mousemove', (e) => {
       this.mouseX = e.clientX;
