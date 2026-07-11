@@ -6,6 +6,7 @@ import { Background } from './background';
 import { ChunkBaker } from './chunkbake';
 import { Lighting } from './lighting';
 import { drawPlayer } from './playerSprite';
+import { Post } from './post';
 
 /** 画面の横幅に収めるタイル数(スケール感の基準) */
 const VIEW_TILES_X = 44;
@@ -13,6 +14,7 @@ const VIEW_TILES_X = 44;
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private lighting = new Lighting();
+  private post = new Post();
   private baker: ChunkBaker;
   private background: Background;
 
@@ -29,6 +31,7 @@ export class Renderer {
     this.canvas.width = w;
     this.canvas.height = h;
     this.lighting.resize(w, h);
+    this.post.resize(w, h);
   }
 
   /** ChunkStore.evictFarFromと対で呼ぶ(焼き込みキャッシュの解放) */
@@ -36,7 +39,7 @@ export class Renderer {
     this.baker.evictFarFrom(cx, cy, radius);
   }
 
-  render(store: ChunkStore, cam: Camera, player: Player, mouseX: number, mouseY: number): void {
+  render(store: ChunkStore, cam: Camera, player: Player, mouseX: number, mouseY: number, timeSec: number): void {
     const w = this.canvas.width;
     const h = this.canvas.height;
     const ppt = w / VIEW_TILES_X;
@@ -70,6 +73,9 @@ export class Renderer {
     drawPlayer(ctx, px, py, ppt, player.facing, player.walkPhase, angle);
 
     // 闇+ライト
-    this.lighting.render(ctx, px, py, angle, ppt);
+    this.lighting.render(ctx, px, py, angle, ppt, timeSec);
+
+    // ポストプロセス(グレイン+ビネット)
+    this.post.render(ctx, w, h);
   }
 }

@@ -44,8 +44,10 @@ resize();
 const tiles = (tx: number, ty: number) => store.tileAt(tx, ty);
 
 let frames = 0;
+let simTime = 0;
 
 function update(dt: number): void {
+  simTime += dt;
   player.update(input.state, dt, tiles);
   camera.follow(player.centerX, player.centerY, dt);
 
@@ -74,7 +76,7 @@ function frame(now: number): void {
     update(STEP_MS / 1000);
     acc -= STEP_MS;
   }
-  renderer.render(store, camera, player, input.mouseX * dpr, input.mouseY * dpr);
+  renderer.render(store, camera, player, input.mouseX * dpr, input.mouseY * dpr, simTime);
   updateHud();
   requestAnimationFrame(frame);
 }
