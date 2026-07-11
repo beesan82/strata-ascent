@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>BLAME! SIM</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; }
+    #hud {
+      position: fixed; left: 12px; top: 10px;
+      color: #9aa4ad; font: 12px monospace; letter-spacing: 0.2em;
+      pointer-events: none; user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="hud"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
