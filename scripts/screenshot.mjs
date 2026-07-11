@@ -26,10 +26,22 @@ if (pos) {
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-await page.goto(url);
-await page.waitForTimeout(wait);
-await mkdir(dirname(out), { recursive: true });
-await page.screenshot({ path: out });
-await browser.close();
-await server.close();
-console.log(`saved: ${out} (url: ${url})`);
+let pageFailed = false;
+page.on('pageerror', (e) => { pageFailed = true; console.error('[pageerror]', e); });
+page.on('console', (m) => { if (m.type() === 'error') { pageFailed = true; console.error('[console]', m.text()); } });
+
+try {
+  await page.goto(url);
+  await page.waitForTimeout(wait);
+  await mkdir(dirname(out), { recursive: true });
+  await page.screenshot({ path: out });
+  console.log(`saved: ${out} (url: ${url})`);
+} finally {
+  await browser.close();
+  await server.close();
+}
+
+if (pageFailed) {
+  console.error('ページ内エラーあり — スクリーンショットは信頼できない');
+  process.exitCode = 1;
+}
