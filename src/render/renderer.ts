@@ -5,6 +5,7 @@ import { CHUNK_SIZE } from '../world/tiles';
 import { Background } from './background';
 import { ChunkBaker } from './chunkbake';
 import { Lighting } from './lighting';
+import { drawPlayer } from './playerSprite';
 
 /** 画面の横幅に収めるタイル数(スケール感の基準) */
 const VIEW_TILES_X = 44;
@@ -62,14 +63,13 @@ export class Renderer {
       }
     }
 
-    // プレイヤー(Task 6でスプライト化するまでは矩形)
+    // プレイヤー(コートの人影)
     const px = (player.centerX - cam.x) * ppt + w / 2;
     const py = (player.centerY - cam.y) * ppt + h / 2;
-    ctx.fillStyle = '#c8ccd2';
-    ctx.fillRect(px - (player.body.w * ppt) / 2, py - (player.body.h * ppt) / 2, player.body.w * ppt, player.body.h * ppt);
+    const angle = Math.atan2(mouseY - py, mouseX - px);
+    drawPlayer(ctx, px, py, ppt, player.facing, player.walkPhase, angle);
 
     // 闇+ライト
-    const angle = Math.atan2(mouseY - py, mouseX - px);
     this.lighting.render(ctx, px, py, angle, ppt);
   }
 }

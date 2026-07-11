@@ -83,3 +83,26 @@ describe('Player', () => {
     expect(p.body.vy).toBe(JUMP_VELOCITY);
   });
 });
+
+describe('Player 向きと歩行位相', () => {
+  it('左右入力で向きが変わり、入力がなければ維持される', () => {
+    const p = new Player(0, 8);
+    for (let i = 0; i < 120; i++) p.update(noInput, 1 / 60, floorTiles);
+    p.update({ ...noInput, left: true }, 1 / 60, floorTiles);
+    expect(p.facing).toBe(-1);
+    p.update(noInput, 1 / 60, floorTiles);
+    expect(p.facing).toBe(-1);
+    p.update({ ...noInput, right: true }, 1 / 60, floorTiles);
+    expect(p.facing).toBe(1);
+  });
+
+  it('接地して歩いている間だけwalkPhaseが進む', () => {
+    const p = new Player(0, 8);
+    for (let i = 0; i < 120; i++) p.update(noInput, 1 / 60, floorTiles);
+    const before = p.walkPhase;
+    p.update(noInput, 1 / 60, floorTiles);
+    expect(p.walkPhase).toBe(before); // 静止中は進まない
+    p.update({ ...noInput, right: true }, 1 / 60, floorTiles);
+    expect(p.walkPhase).toBeGreaterThan(before);
+  });
+});

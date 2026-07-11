@@ -17,6 +17,10 @@ const MAX_FALL = 25;
 
 export class Player {
   body: Body;
+  /** 向き(1=右, -1=左)。描画用でゲームプレイには影響しない */
+  facing: 1 | -1 = 1;
+  /** 歩行アニメーションの位相(接地歩行中のみ進む) */
+  walkPhase = 0;
 
   constructor(x: number, y: number) {
     this.body = { x, y, w: 0.75, h: 1.75, vx: 0, vy: 0, onGround: false };
@@ -33,6 +37,10 @@ export class Player {
   update(input: PlayerInput, dt: number, tiles: TileLookup): void {
     const b = this.body;
     b.vx = (input.right ? WALK_SPEED : 0) - (input.left ? WALK_SPEED : 0);
+
+    if (b.vx > 0) this.facing = 1;
+    else if (b.vx < 0) this.facing = -1;
+    if (b.vx !== 0 && b.onGround) this.walkPhase += dt * 9;
 
     if (this.onLadder(tiles)) {
       b.vy = (input.down ? CLIMB_SPEED : 0) - (input.up ? CLIMB_SPEED : 0);
