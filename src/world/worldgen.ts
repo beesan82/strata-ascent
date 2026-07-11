@@ -1,0 +1,68 @@
+import { hash2, valueNoise2 } from './noise';
+import { stratumAt } from './strata';
+import { CHUNK_SIZE, TILE, type Tile } from './tiles';
+
+/** 負数でも正しく回る剰余 */
+function mod(n: number, m: number): number {
+  return ((n % m) + m) % m;
+}
+
+/** シード+ワールドタイル座標 → タイル種。純粋関数(同じ入力なら常に同じ出力) */
+export function tileAt(seed: number, x: number, y: number): Tile {
+  const s = stratumAt(y);
+
+  // 床帯(band): floorSpacing行ごとのまとまり。床行はbandの先頭行
+  const band = Math.floor(y / s.floorSpacing);
+  const isFloorRow = mod(y, s.floorSpacing) === 0;
+  const seg = Math.floor(x / 16);
+  const floorGap = hash2(seed + 303, seg, band) < s.gapChance;
+
+  // 1. 巨大空洞(低頻度ノイズ)。空洞内は4床帯ごとの橋だけ残る
+  const cavity = valueNoise2(seed + 101, x / 160, y / 160) > s.cavityThreshold;
+  if (cavity) {
+    if (isFloorRow && mod(band, 4) === 0 && !floorGap) return TILE.SOLID;
+    return TILE.AIR;
+  }
+
+  // 2. 柱・壁塊(中頻度ノイズ)
+  const mass = valueNoise2(seed + 202, x / 28, y / 28) > s.massThreshold;
+  if (mass) return TILE.SOLID;
+
+  // 3. 梯子: 32タイル幅の列グループごとに1本。床行も貫通して上下のbandをつなぐ
+  const group = Math.floor(x / 32);
+  const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, band) * 32);
+  if (x === ladderX) return TILE.LADDER;
+
+  // 4. 床
+  if (isFloorRow && !floorGap) return TILE.SOLID;
+
+  return TILE.AIR;
+}
+
+/** チャンク(64x64)のタイル配列を生成。index = ty * CHUNK_SIZE + tx */
+export function generateChunk(seed: number, cx: number, cy: number): Uint8Array {
+  const data = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
+  const baseX = cx * CHUNK_SIZE;
+  const baseY = cy * CHUNK_SIZE;
+  for (let ty = 0; ty < CHUNK_SIZE; ty++) {
+    for (let tx = 0; tx < CHUNK_SIZE; tx++) {
+      data[ty * CHUNK_SIZE + tx] = tileAt(seed, baseX + tx, baseY + ty);
+    }
+  }
+  return data;
+}
+
+/** 開始地点: x=8付近で「足元が床・体の入る空間」を上から探す */
+export function findSpawn(seed: number): { x: number; y: number } {
+  for (let y = -1; y < 400; y++) {
+    const head = tileAt(seed, 8, y - 1);
+    const body = tileAt(seed, 8, y);
+    const below = tileAt(seed, 8, y + 1);
+    if (head !== TILE.SOLID && body !== TILE.SOLID && below === TILE.SOLID) {
+      // 床の上面(y+1の上端)に高さ1.75の体を置く。少し浮かせて重力で着地させる
+      // 体(幅0.75)が検証済みのx=8列に収まるようx=8.1に置く
+      return { x: 8.1, y: y + 1 - 1.9 };
+    }
+  }
+  return { x: 8.1, y: 0 };
+}
