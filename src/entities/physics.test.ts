@@ -53,4 +53,48 @@ describe('moveBody', () => {
     moveBody(b, 1, ladderTiles);
     expect(b.y).toBeCloseTo(13); // 素通り
   });
+
+  it('SOLIDに部分的に埋まった状態で開始しても停止して終了する(埋まりガード)', () => {
+    // ty=5の一枚床に体の上端が食い込んだ状態。旧実装ではステップ探索が
+    // 無限ループになるケース。テストが完走すること自体が停止性の証明。
+    const b = makeBody(2, 5.5);
+    b.vx = 7;
+    b.vy = 10;
+    moveBody(b, 1, testTiles);
+    expect(b.x).toBe(2); // 位置は変化しない
+    expect(b.y).toBe(5.5);
+    expect(b.vx).toBe(0);
+    expect(b.vy).toBe(0);
+  });
+
+  it('完全にSOLID内部で開始しても停止して終了する(埋まりガード)', () => {
+    const allSolid = (): Tile => TILE.SOLID;
+    const b = makeBody(3, 3);
+    b.vx = 5;
+    b.vy = 5;
+    moveBody(b, 1, allSolid);
+    expect(b.x).toBe(3);
+    expect(b.y).toBe(3);
+    expect(b.vx).toBe(0);
+    expect(b.vy).toBe(0);
+  });
+
+  it('左に歩くと壁の右面で止まる', () => {
+    const b = makeBody(13, 0); // 左端 = 13、壁(x=10)の右面 = 11
+    b.vx = -10;
+    moveBody(b, 1, testTiles);
+    expect(b.x).toBeGreaterThanOrEqual(11 - 1e-6);
+    expect(b.x).toBeLessThan(11.2);
+    expect(b.vx).toBe(0);
+  });
+
+  it('上にジャンプすると天井の下面で止まり、onGroundにならない', () => {
+    const b = makeBody(2, 8); // 上端 = 8、天井(ty=5)の下面 = 6
+    b.vy = -10;
+    moveBody(b, 1, testTiles);
+    expect(b.y).toBeGreaterThanOrEqual(6 - 1e-6);
+    expect(b.y).toBeLessThan(6.2);
+    expect(b.vy).toBe(0);
+    expect(b.onGround).toBe(false);
+  });
 });
