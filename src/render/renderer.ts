@@ -4,6 +4,7 @@ import type { ChunkStore } from '../world/chunks';
 import { CHUNK_SIZE } from '../world/tiles';
 import { Background } from './background';
 import { ChunkBaker } from './chunkbake';
+import { generateAtlas } from './tileset/generate';
 import { Lighting } from './lighting';
 import { drawPlayer } from './playerSprite';
 import { Post } from './post';
@@ -23,7 +24,11 @@ export class Renderer {
     seed: number,
   ) {
     this.ctx = canvas.getContext('2d')!;
-    this.baker = new ChunkBaker(seed);
+    const atlas = generateAtlas({
+      fillDark: '#1a2026', fillMid: '#2b343d', fillLight: '#3d4a55',
+      edge: '#5b6b78', line: '#12171b',
+    });
+    this.baker = new ChunkBaker(seed, atlas);
     this.background = new Background(seed);
   }
 

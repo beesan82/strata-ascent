@@ -1,20 +1,24 @@
 import type { ChunkStore } from '../world/chunks';
-import { stratumIndexAt } from '../world/strata';
 import { CHUNK_SIZE, TILE } from '../world/tiles';
-import { decorateChunk, type DecorOp } from './decor';
+import { blobId } from './tileset/autotile';
+import type { Atlas } from './tileset/atlas';
+import { decorateChunk, PALETTE, type DecorOp } from './decor';
 
 /** 焼き込み解像度(px/タイル)。表示は拡縮されるが16pxあれば線は読める */
 export const BAKE_PPT = 16;
 
-/** 階層ごとのSOLIDベース色(わずかな色味の違い) */
-const SOLID_FILLS = ['#161b20', '#171c18', '#1d1a16', '#151721', '#1a151c'];
+/**
+ * アトラスが辺/角/継ぎ目/リベットを描くようになったため、装飾側の
+ * 「表面線画」色はスキップする(二重描画防止)。物理的装飾は残す。
+ */
+const SKIP_COLORS = new Set<string>([PALETTE.edgeTop, PALETTE.edgeSide, PALETTE.seam, PALETTE.rivet]);
 
 /** チャンク1枚を一度だけオフスクリーンCanvasへ焼き込み、以後はdrawImageで貼る */
 export class ChunkBaker {
   private cache = new Map<string, HTMLCanvasElement>();
   private patterns = new Map<string, CanvasPattern>();
 
-  constructor(private seed: number) {}
+  constructor(private seed: number, private atlas: Atlas) {}
 
   get size(): number {
     return this.cache.size;
@@ -46,21 +50,46 @@ export class ChunkBaker {
     canvas.width = px;
     canvas.height = px;
     const ctx = canvas.getContext('2d')!;
+    // タイルは滑らかに陰影付けされているが、境界で隣接アトラスセルを拾わないよう
+    // スムージングを無効化してエッジをこの解像度で明瞭に保つ。
+    ctx.imageSmoothingEnabled = false;
     const chunk = store.getChunk(cx, cy);
+    const bx = cx * CHUNK_SIZE;
+    const by = cy * CHUNK_SIZE;
 
-    // ベース: SOLIDタイルを階層色で塗る(+1pxで継ぎ目の光漏れ防止)
+    // ベース: SOLIDタイルを8近傍から求めたブロブIDでオートタイル描画する。
+    // 近傍参照はstore.tileAt(純粋)経由でチャンクをまたいでも継ぎ目なく一致する。
     for (let ty = 0; ty < CHUNK_SIZE; ty++) {
-      const fill = SOLID_FILLS[stratumIndexAt(cy * CHUNK_SIZE + ty) % SOLID_FILLS.length];
+      const wy = by + ty;
       for (let tx = 0; tx < CHUNK_SIZE; tx++) {
         if (chunk[ty * CHUNK_SIZE + tx] !== TILE.SOLID) continue;
-        ctx.fillStyle = fill;
-        ctx.fillRect(tx * BAKE_PPT, ty * BAKE_PPT, BAKE_PPT + 1, BAKE_PPT + 1);
+        const wx = bx + tx;
+        const nb = {
+          n: store.tileAt(wx, wy - 1) === TILE.SOLID,
+          e: store.tileAt(wx + 1, wy) === TILE.SOLID,
+          s: store.tileAt(wx, wy + 1) === TILE.SOLID,
+          w: store.tileAt(wx - 1, wy) === TILE.SOLID,
+          ne: store.tileAt(wx + 1, wy - 1) === TILE.SOLID,
+          se: store.tileAt(wx + 1, wy + 1) === TILE.SOLID,
+          sw: store.tileAt(wx - 1, wy + 1) === TILE.SOLID,
+          nw: store.tileAt(wx - 1, wy - 1) === TILE.SOLID,
+        };
+        const r = this.atlas.rect(blobId(nb));
+        ctx.drawImage(
+          this.atlas.source,
+          r.sx, r.sy, r.sw, r.sh,
+          tx * BAKE_PPT, ty * BAKE_PPT, BAKE_PPT + 1, BAKE_PPT + 1,
+        );
       }
     }
 
-    // 装飾
+    // 装飾(アトラスが描く表面線画=hatch/edge/seam/rivetはスキップ、物理装飾は残す)
     ctx.lineCap = 'round';
-    for (const op of decorateChunk(this.seed, cx, cy)) this.draw(ctx, op);
+    for (const op of decorateChunk(this.seed, cx, cy)) {
+      if (op.kind === 'hatch') continue;
+      if ((op.kind === 'line' || op.kind === 'dot') && SKIP_COLORS.has(op.color)) continue;
+      this.draw(ctx, op);
+    }
     return canvas;
   }
 
