@@ -19,19 +19,19 @@ export function tileAt(seed: number, x: number, y: number): Tile {
   const seg = Math.floor(x / 16);
   const floorGap = isFloorRow && hash2(seed + 303, seg, band) < s.gapChance;
 
-  // 1. 巨大空洞(低頻度ノイズ)。空洞内は4床帯ごとの橋だけ残る
+  // 1. 梯子: 32タイル幅の列グループごとに1本。巨大空洞・柱壁・床のいずれよりも
+  //    先に判定する。巨大空洞を貫く垂直シャフト(塔)として読める。Blame!的にも
+  //    自然で、「上へ昇るルートが常に存在する」保証が空洞内でも成立する。
+  const group = Math.floor(x / 32);
+  const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, band) * 32);
+  if (x === ladderX) return TILE.LADDER;
+
+  // 2. 巨大空洞(低頻度ノイズ)。空洞内は4床帯ごとの橋だけ残る
   const cavity = valueNoise2(seed + 101, x / 160, y / 160) > s.cavityThreshold;
   if (cavity) {
     if (isFloorRow && mod(band, 4) === 0 && !floorGap) return TILE.SOLID;
     return TILE.AIR;
   }
-
-  // 2. 梯子: 32タイル幅の列グループごとに1本。床行も貫通して上下のbandをつなぐ。
-  //    柱・壁塊(質量ノイズ)より先に判定することで、梯子列が質量構造に
-  //    分断されない(巨大構造体を貫くシャフトとして常に通る)
-  const group = Math.floor(x / 32);
-  const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, band) * 32);
-  if (x === ladderX) return TILE.LADDER;
 
   // 3. 柱・壁塊(中頻度ノイズ)
   const mass = valueNoise2(seed + 202, x / 28, y / 28) > s.massThreshold;
@@ -68,5 +68,6 @@ export function findSpawn(seed: number): { x: number; y: number } {
       return { x: 8.1, y: y + 1 - 1.9 };
     }
   }
+  console.warn('findSpawn: フォールバック位置を使用');
   return { x: 8.1, y: 0 };
 }

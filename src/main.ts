@@ -12,9 +12,10 @@ const STEP_MS = 1000 / 60;
 const EVICT_INTERVAL_FRAMES = 120;
 const EVICT_RADIUS = 4;
 
-// ?seed=123 で世界を変えられる
+// ?seed=123 で世界を変えられる(0も有効な値として許可。未指定/非数値時のみデフォルト)
 const params = new URLSearchParams(location.search);
-const seed = Number(params.get('seed')) || DEFAULT_SEED;
+const seedParam = params.get('seed');
+const seed = seedParam !== null && Number.isFinite(Number(seedParam)) ? Number(seedParam) : DEFAULT_SEED;
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
@@ -26,8 +27,13 @@ const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
 const renderer = new Renderer(canvas);
 
+let dpr = window.devicePixelRatio || 1;
+
 function resize(): void {
-  renderer.resize(window.innerWidth, window.innerHeight);
+  dpr = window.devicePixelRatio || 1;
+  renderer.resize(Math.round(window.innerWidth * dpr), Math.round(window.innerHeight * dpr));
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
 }
 window.addEventListener('resize', resize);
 resize();
@@ -49,7 +55,7 @@ function update(dt: number): void {
 }
 
 function updateHud(): void {
-  const altitude = Math.max(0, Math.floor(-player.body.y));
+  const altitude = Math.max(0, Math.floor(-(player.body.y + player.body.h)));
   const stratum = stratumAt(player.body.y);
   hud.textContent = `高度 ${altitude}m — ${stratum.name} [seed:${seed}]`;
 }
@@ -64,7 +70,7 @@ function frame(now: number): void {
     update(STEP_MS / 1000);
     acc -= STEP_MS;
   }
-  renderer.render(store, camera, player, input.mouseX, input.mouseY);
+  renderer.render(store, camera, player, input.mouseX * dpr, input.mouseY * dpr);
   updateHud();
   requestAnimationFrame(frame);
 }

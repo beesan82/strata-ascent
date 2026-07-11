@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { hash2, valueNoise2 } from './noise';
+import { Player } from '../entities/player';
+import { hash2 } from './noise';
 import { stratumAt } from './strata';
 import { CHUNK_SIZE, TILE } from './tiles';
 import { findSpawn, generateChunk, tileAt } from './worldgen';
@@ -62,11 +63,12 @@ describe('tileAt', () => {
     }
   });
 
-  it('梯子列は質量ノイズ(柱・壁塊)に分断されない(空洞内を除き常にLADDER)', () => {
-    // 回帰テスト: 梯子判定は質量ノイズより先に行われるため、空洞でない限り
-    // 梯子列の全行がLADDERであることを固定する(将来のパラメータ調整で退行させない)。
-    // ladderXと空洞条件は実装(tileAt)の式をそのまま再現している。実装と鏡写しの
-    // 結合だが、「空洞だけが梯子を除去できる」性質を固定する目的で意図的に許容する。
+  it('梯子列は質量ノイズ(柱・壁塊)にも巨大空洞にも分断されない(全行LADDER)', () => {
+    // 回帰テスト: 梯子判定は巨大空洞・質量ノイズ・床のいずれよりも先に行われるため、
+    // 梯子列は空洞の有無に関わらず全行LADDERであることを固定する
+    // (将来のパラメータ調整で退行させない)。
+    // ladderXは実装(tileAt)の式をそのまま再現している。実装と鏡写しの結合だが、
+    // 「梯子は常にどんな地形も貫通する」性質を固定する目的で意図的に許容する。
     const FLOOR_SPACING = 8; // 階層0(最下層)
     for (const seed of [1, 42, 20260711]) {
       for (let group = 0; group < 8; group++) {
@@ -79,9 +81,6 @@ describe('tileAt', () => {
           for (let y = band * FLOOR_SPACING; y < (band + 1) * FLOOR_SPACING; y++) {
             const s = stratumAt(y);
             expect(s.floorSpacing).toBe(FLOOR_SPACING);
-            const cavity =
-              valueNoise2(seed + 101, ladderX / 160, y / 160) > s.cavityThreshold;
-            if (cavity) continue;
             expect(tileAt(seed, ladderX, y)).toBe(TILE.LADDER);
           }
         }
@@ -105,5 +104,38 @@ describe('findSpawn', () => {
       const { x, y } = findSpawn(seed);
       expect(tileAt(seed, Math.floor(x), Math.floor(y))).not.toBe(TILE.SOLID);
     }
+  });
+
+  it('上方向ルートの存在: スポーンから実際にPlayerで梯子を登り、床帯を1つ以上突破できる', () => {
+    // 結合テスト(意図的): 単体テストだけではプレイヤーの足元判定とワールド生成の
+    // 統合契約(梯子が床帯を貫通し、実際に登り切れること)を検証できない。
+    // このテストはそのレビューの見落としを固定するための回帰テスト。
+    const seed = 20260711;
+    const spawn = findSpawn(seed);
+    const floorSpacing = stratumAt(spawn.y).floorSpacing;
+
+    // スポーンが属する32タイル幅の列グループの梯子x座標を求める(tileAtの式を再現)。
+    // 実装と鏡写しの結合だが、「スポーン地点の近くに必ず梯子がある」ことを固定する
+    // 目的で意図的に許容する。
+    const group = Math.floor(spawn.x / 32);
+    const band = Math.floor(spawn.y / floorSpacing);
+    const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, band) * 32);
+
+    const tiles = (tx: number, ty: number) => tileAt(seed, tx, ty);
+    // 梯子列の上、スポーンと同じ高度に配置して登り始める
+    const player = new Player(ladderX + 0.1, spawn.y);
+    const startFeet = player.body.y + player.body.h;
+
+    const upInput = { left: false, right: false, jump: false, up: true, down: false };
+    let maxRise = 0;
+    for (let i = 0; i < 1800; i++) {
+      // 30秒(dt=1/60)まで登り続ける
+      player.update(upInput, 1 / 60, tiles);
+      maxRise = Math.max(maxRise, startFeet - (player.body.y + player.body.h));
+    }
+
+    // 足元が最低でも1床帯分(floorSpacing)は上昇できているはず。
+    // 旧・中心のみのonLadder判定では自bandの床行で頭打ちになり、これが破綻する。
+    expect(maxRise).toBeGreaterThanOrEqual(floorSpacing);
   });
 });

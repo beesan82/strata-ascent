@@ -11,7 +11,7 @@ export interface PlayerInput {
 
 const WALK_SPEED = 6; // タイル/秒
 const CLIMB_SPEED = 4;
-const JUMP_VELOCITY = -13;
+export const JUMP_VELOCITY = -13;
 const GRAVITY = 30;
 const MAX_FALL = 25;
 
@@ -36,6 +36,7 @@ export class Player {
 
     if (this.onLadder(tiles)) {
       b.vy = (input.down ? CLIMB_SPEED : 0) - (input.up ? CLIMB_SPEED : 0);
+      if (input.jump) b.vy = JUMP_VELOCITY;
     } else {
       b.vy = Math.min(b.vy + GRAVITY * dt, MAX_FALL);
       if (input.jump && b.onGround) b.vy = JUMP_VELOCITY;
@@ -44,7 +45,16 @@ export class Player {
     moveBody(b, dt, tiles);
   }
 
+  /**
+   * 体の中心タイルだけでなく足元タイル(体がSOLID床に埋まる直前の行)も見る。
+   * 中心のみだと、床帯の梯子は自bandの床行で終わっているため、体の中心が
+   * 床行を越えた瞬間にonLadderがfalseになり、足はまだ床に埋まっていて
+   * 上昇できず梯子の頂上で永久に足踏みするバグがあった。
+   */
   private onLadder(tiles: TileLookup): boolean {
-    return tiles(Math.floor(this.centerX), Math.floor(this.centerY)) === TILE.LADDER;
+    const cx = Math.floor(this.centerX);
+    if (tiles(cx, Math.floor(this.centerY)) === TILE.LADDER) return true;
+    const feetY = Math.floor(this.body.y + this.body.h - 1e-6);
+    return tiles(cx, feetY) === TILE.LADDER;
   }
 }
