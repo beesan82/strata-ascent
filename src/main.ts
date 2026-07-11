@@ -28,7 +28,7 @@ const spawn = qx !== null && qy !== null ? { x: Number(qx), y: Number(qy) } : fi
 const player = new Player(spawn.x, spawn.y);
 const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
-const renderer = new Renderer(canvas);
+const renderer = new Renderer(canvas, seed);
 
 let dpr = window.devicePixelRatio || 1;
 
@@ -54,6 +54,7 @@ function update(dt: number): void {
     const pcx = Math.floor(player.centerX / CHUNK_SIZE);
     const pcy = Math.floor(player.centerY / CHUNK_SIZE);
     store.evictFarFrom(pcx, pcy, EVICT_RADIUS);
+    renderer.evictFarFrom(pcx, pcy, EVICT_RADIUS);
   }
 }
 

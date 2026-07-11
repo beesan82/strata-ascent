@@ -1,8 +1,9 @@
 import type { Camera } from '../core/camera';
 import type { Player } from '../entities/player';
 import type { ChunkStore } from '../world/chunks';
+import { CHUNK_SIZE } from '../world/tiles';
+import { ChunkBaker } from './chunkbake';
 import { Lighting } from './lighting';
-import { drawTiles } from './silhouette';
 
 /** 画面の横幅に収めるタイル数(スケール感の基準) */
 const VIEW_TILES_X = 44;
@@ -10,9 +11,14 @@ const VIEW_TILES_X = 44;
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private lighting = new Lighting();
+  private baker: ChunkBaker;
 
-  constructor(private canvas: HTMLCanvasElement) {
+  constructor(
+    private canvas: HTMLCanvasElement,
+    seed: number,
+  ) {
     this.ctx = canvas.getContext('2d')!;
+    this.baker = new ChunkBaker(seed);
   }
 
   resize(w: number, h: number): void {
@@ -21,25 +27,40 @@ export class Renderer {
     this.lighting.resize(w, h);
   }
 
+  /** ChunkStore.evictFarFromと対で呼ぶ(焼き込みキャッシュの解放) */
+  evictFarFrom(cx: number, cy: number, radius: number): void {
+    this.baker.evictFarFrom(cx, cy, radius);
+  }
+
   render(store: ChunkStore, cam: Camera, player: Player, mouseX: number, mouseY: number): void {
     const w = this.canvas.width;
     const h = this.canvas.height;
     const ppt = w / VIEW_TILES_X;
     const ctx = this.ctx;
 
-    // 背景(照らされた時に構造の背後に見える最暗色)
-    ctx.fillStyle = '#07080a';
+    ctx.fillStyle = '#050607';
     ctx.fillRect(0, 0, w, h);
 
-    drawTiles(ctx, store, cam.x, cam.y, w, h, ppt);
+    // 可視チャンクの焼き込み画像を貼る
+    const chunkPx = CHUNK_SIZE * ppt;
+    const cx0 = Math.floor((cam.x - w / ppt / 2) / CHUNK_SIZE);
+    const cx1 = Math.floor((cam.x + w / ppt / 2) / CHUNK_SIZE);
+    const cy0 = Math.floor((cam.y - h / ppt / 2) / CHUNK_SIZE);
+    const cy1 = Math.floor((cam.y + h / ppt / 2) / CHUNK_SIZE);
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const baked = this.baker.get(cx, cy, store);
+        const sx = (cx * CHUNK_SIZE - cam.x) * ppt + w / 2;
+        const sy = (cy * CHUNK_SIZE - cam.y) * ppt + h / 2;
+        ctx.drawImage(baked, sx, sy, chunkPx, chunkPx);
+      }
+    }
 
-    // プレイヤー(明るいシルエット)
+    // プレイヤー(Task 6でスプライト化するまでは矩形)
     const px = (player.centerX - cam.x) * ppt + w / 2;
     const py = (player.centerY - cam.y) * ppt + h / 2;
-    const pw = player.body.w * ppt;
-    const ph = player.body.h * ppt;
     ctx.fillStyle = '#c8ccd2';
-    ctx.fillRect(px - pw / 2, py - ph / 2, pw, ph);
+    ctx.fillRect(px - (player.body.w * ppt) / 2, py - (player.body.h * ppt) / 2, player.body.w * ppt, player.body.h * ppt);
 
     // 闇+ライト
     const angle = Math.atan2(mouseY - py, mouseX - px);
