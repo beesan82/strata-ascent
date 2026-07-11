@@ -243,7 +243,7 @@ function segmentOps(
         if (!ok) continue;
         const face = dir === -1 ? lx + 0.08 : lx + 0.92;
         const ly0 = y0 - by;
-        const r = hash2(seed + 708, wx * dir, s);
+        const r = hash2(seed + 708, wx, s * 2 + (dir < 0 ? 0 : 1));
         if (r < 0.14) {
           // 排気グリル(短い横線4本)
           for (let i = 0; i < 4; i++) {
