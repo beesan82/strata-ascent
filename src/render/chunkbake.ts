@@ -101,7 +101,7 @@ export class ChunkBaker {
         ctx.beginPath();
         ctx.rect(op.x * P, op.y * P, op.w * P, op.h * P);
         ctx.clip();
-        ctx.fillStyle = this.hatchPattern(op.spacing, op.color);
+        ctx.fillStyle = this.hatchPattern(op.spacing, op.color, !!op.cross);
         ctx.fillRect(op.x * P, op.y * P, op.w * P, op.h * P);
         ctx.restore();
         break;
@@ -109,8 +109,8 @@ export class ChunkBaker {
     }
   }
 
-  private hatchPattern(spacing: number, color: string): CanvasPattern {
-    const key = `${spacing}|${color}`;
+  private hatchPattern(spacing: number, color: string, cross: boolean): CanvasPattern {
+    const key = `${spacing}|${color}|${cross ? 'x' : '/'}`;
     let pat = this.patterns.get(key);
     if (!pat) {
       const s = Math.max(3, Math.round(spacing * BAKE_PPT));
@@ -118,10 +118,10 @@ export class ChunkBaker {
       c.width = s;
       c.height = s;
       const pctx = c.getContext('2d')!;
-      pctx.strokeStyle = color;
       pctx.lineWidth = 1;
+      // 主方向の45°線(タイル境界で連続するようセル内で完結する複数本)
+      pctx.strokeStyle = color;
       pctx.beginPath();
-      // 45°線(タイル境界で連続するようセル内で完結する複数本)
       pctx.moveTo(0, s);
       pctx.lineTo(s, 0);
       pctx.moveTo(-s / 2, s / 2);
@@ -129,6 +129,19 @@ export class ChunkBaker {
       pctx.moveTo(s / 2, s * 1.5);
       pctx.lineTo(s * 1.5, s / 2);
       pctx.stroke();
+      if (cross) {
+        // 逆向き45°線を淡く重ねてクロスハッチ(格子ではなく織り目状の陰影で密度アップ)
+        pctx.globalAlpha = 0.5;
+        pctx.beginPath();
+        pctx.moveTo(0, 0);
+        pctx.lineTo(s, s);
+        pctx.moveTo(s / 2, -s / 2);
+        pctx.lineTo(s * 1.5, s / 2);
+        pctx.moveTo(-s / 2, s / 2);
+        pctx.lineTo(s / 2, s * 1.5);
+        pctx.stroke();
+        pctx.globalAlpha = 1;
+      }
       pat = pctx.createPattern(c, 'repeat')! as CanvasPattern;
       this.patterns.set(key, pat);
     }

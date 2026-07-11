@@ -11,7 +11,7 @@ export type DecorOp =
   | { kind: 'line'; x1: number; y1: number; x2: number; y2: number; w: number; color: string }
   | { kind: 'dot'; x: number; y: number; r: number; color: string }
   | { kind: 'poly'; pts: number[]; w: number; color: string; fill?: boolean }
-  | { kind: 'hatch'; x: number; y: number; w: number; h: number; spacing: number; color: string };
+  | { kind: 'hatch'; x: number; y: number; w: number; h: number; spacing: number; color: string; cross?: boolean };
 
 /** 装飾の色パレット(すべて暗色。ライトに照らされて初めて質感として読める) */
 export const PALETTE = {
@@ -19,7 +19,9 @@ export const PALETTE = {
   edgeSide: '#39424b',
   seam: '#0a0d10',
   rivet: '#3b434b',
-  hatch: '#2b3238',
+  bolt: '#333b43',
+  hatch: '#313a42',
+  hatchFaint: '#232a30',
   pipe: '#252c33',
   pipeThin: '#1f262c',
   bracket: '#30383f',
@@ -87,24 +89,41 @@ export function decorateChunk(seed: number, cx: number, cy: number): DecorOp[] {
       if (leftAir) ops.push({ kind: 'line', x1: lx + 0.03, y1: ly, x2: lx + 0.03, y2: ly + 1, w: 0.06, color: PALETTE.edgeSide });
       if (rightAir) ops.push({ kind: 'line', x1: lx + 0.97, y1: ly, x2: lx + 0.97, y2: ly + 1, w: 0.06, color: PALETTE.edgeSide });
 
-      // パネル継ぎ目(ワールド座標基準なのでチャンクをまたいで連続する)
-      const seamV = hash2(seed + 601, wx, 0) < 0.22;
+      // パネル継ぎ目(ワールド座標基準なのでチャンクをまたいで連続する)。
+      // 密なパネル格子を作るため出現率を上げ、継ぎ目沿いに一定間隔でリベットを打つ。
+      const seamV = hash2(seed + 601, wx, 0) < 0.34;
       if (seamV && !rightAir) {
         ops.push({ kind: 'line', x1: lx + 1, y1: ly, x2: lx + 1, y2: ly + 1, w: 0.08, color: PALETTE.seam });
         if (upAir) ops.push({ kind: 'dot', x: lx + 1, y: ly + 0.35, r: 0.07, color: PALETTE.rivet });
+        else if (mod(wy, 3) === 0) ops.push({ kind: 'dot', x: lx + 1, y: ly + 0.5, r: 0.05, color: PALETTE.rivet });
       }
-      const seamH = hash2(seed + 602, 0, wy) < 0.16;
+      const seamH = hash2(seed + 602, 0, wy) < 0.26;
       if (seamH && !downAir) {
         ops.push({ kind: 'line', x1: lx, y1: ly + 1, x2: lx + 1, y2: ly + 1, w: 0.08, color: PALETTE.seam });
-        if (hash2(seed + 603, wx, wy) < 0.35) {
-          ops.push({ kind: 'dot', x: lx + 0.5, y: ly + 1, r: 0.07, color: PALETTE.rivet });
+        if (hash2(seed + 603, wx, wy) < 0.4) {
+          ops.push({ kind: 'dot', x: lx + 0.5, y: ly + 1, r: 0.06, color: PALETTE.rivet });
+        }
+      }
+      // パネル交点のボルト群(縦横の継ぎ目が交わる内側の角に4点)
+      if (seamV && seamH && !rightAir && !downAir && hash2(seed + 605, wx, wy) < 0.5) {
+        const cxp = lx + 1;
+        const cyp = ly + 1;
+        for (const [ox, oy] of [
+          [-0.16, -0.16],
+          [0.16, -0.16],
+          [-0.16, 0.16],
+          [0.16, 0.16],
+        ] as const) {
+          ops.push({ kind: 'dot', x: cxp + ox, y: cyp + oy, r: 0.04, color: PALETTE.bolt });
         }
       }
 
-      // 内部ハッチング(露出面のないタイルのみ。階層で密度が変わる)
+      // 内部ハッチング(露出面のないタイルのみ。階層で密度・向きが変わる)
       if (!upAir && !downAir && !leftAir && !rightAir) {
-        const spacing = 0.3 + 0.1 * (stratumIndexAt(wy) % 3);
-        ops.push({ kind: 'hatch', x: lx, y: ly, w: 1, h: 1, spacing, color: PALETTE.hatch });
+        const si = stratumIndexAt(wy) % 3;
+        const spacing = 0.22 + 0.07 * si;
+        // 一部の階層はクロスハッチで密度を上げる(決定論的に階層で切替)
+        ops.push({ kind: 'hatch', x: lx, y: ly, w: 1, h: 1, spacing, color: PALETTE.hatch, cross: si !== 1 });
       }
     }
   }
@@ -158,17 +177,17 @@ function segmentOps(
       if (!ok) continue;
       const lx0 = x0 - bx;
       const r = hash2(seed + 701, s, wy);
-      if (r < 0.45) {
-        // 這う配管(太)+ときどき細い並走管、5タイルごとにブラケット
+      if (r < 0.52) {
+        // 這う配管(太)+ときどき細い並走管、4タイルごとにブラケット
         const yy = ly - 0.22;
         ops.push({ kind: 'line', x1: lx0, y1: yy, x2: lx0 + 16, y2: yy, w: 0.22, color: PALETTE.pipe });
-        if (r < 0.22) {
-          ops.push({ kind: 'line', x1: lx0, y1: yy - 0.3, x2: lx0 + 16, y2: yy - 0.3, w: 0.13, color: PALETTE.pipeThin });
+        if (r < 0.3) {
+          ops.push({ kind: 'line', x1: lx0, y1: yy - 0.32, x2: lx0 + 16, y2: yy - 0.32, w: 0.13, color: PALETTE.pipeThin });
         }
-        for (let i = 2; i < 16; i += 5) {
+        for (let i = 2; i < 16; i += 4) {
           ops.push({ kind: 'line', x1: lx0 + i, y1: yy, x2: lx0 + i, y2: ly, w: 0.1, color: PALETTE.bracket });
         }
-      } else if (r < 0.58) {
+      } else if (r < 0.66) {
         // 瓦礫の山
         const dx = lx0 + 3 + hash2(seed + 702, s, wy) * 8;
         ops.push({
@@ -202,7 +221,7 @@ function segmentOps(
       if (!ok) continue;
       const lx0 = x0 - bx;
       const r = hash2(seed + 703, s, wy);
-      if (r < 0.35) {
+      if (r < 0.44) {
         // カテナリーケーブル(2次ベジェを9点でサンプリング)
         const sag = 1 + hash2(seed + 704, s, wy) * 2.2;
         const pts: number[] = [];
@@ -213,7 +232,7 @@ function segmentOps(
           pts.push(x, y);
         }
         ops.push({ kind: 'poly', pts, w: 0.09, color: PALETTE.cable });
-      } else if (r < 0.5) {
+      } else if (r < 0.62) {
         // 切れて垂れる短いワイヤー
         const wx0 = lx0 + 1 + Math.floor(hash2(seed + 705, s, wy) * 6);
         const len = 0.8 + hash2(seed + 706, s, wy) * 1.2;
@@ -244,14 +263,14 @@ function segmentOps(
         const face = dir === -1 ? lx + 0.08 : lx + 0.92;
         const ly0 = y0 - by;
         const r = hash2(seed + 708, wx, s * 2 + (dir < 0 ? 0 : 1));
-        if (r < 0.14) {
-          // 排気グリル(短い横線4本)
-          for (let i = 0; i < 4; i++) {
-            const gy = ly0 + 0.8 + i * 0.45;
+        if (r < 0.2) {
+          // 排気グリル(短い横線5本)
+          for (let i = 0; i < 5; i++) {
+            const gy = ly0 + 0.7 + i * 0.42;
             const gx = dir === -1 ? lx + 0.12 : lx + 0.55;
             ops.push({ kind: 'line', x1: gx, y1: gy, x2: gx + 0.33, y2: gy, w: 0.07, color: PALETTE.grill });
           }
-        } else if (r < 0.26) {
+        } else if (r < 0.36) {
           // 壁面を走る縦配管
           ops.push({ kind: 'line', x1: face, y1: ly0, x2: face, y2: ly0 + 4, w: 0.14, color: PALETTE.pipe });
           ops.push({ kind: 'dot', x: face, y: ly0 + 2, r: 0.12, color: PALETTE.bracket });
