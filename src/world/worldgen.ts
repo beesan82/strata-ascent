@@ -20,8 +20,10 @@ export function tileAt(seed: number, x: number, y: number): Tile {
   const floorGap = isFloorRow && hash2(seed + 303, seg, band) < s.gapChance;
 
   // 1. 梯子: 32タイル幅の列グループごとに1本。巨大空洞・柱壁・床のいずれよりも
-  //    先に判定する。巨大空洞を貫く垂直シャフト(塔)として読める。Blame!的にも
-  //    自然で、「上へ昇るルートが常に存在する」保証が空洞内でも成立する。
+  //    先に判定する。巨大空洞を貫く垂直シャフト(塔)として読める。
+  //    注: ladderXはband単位でずれるため、空洞内では8〜14タイルの梯子片が
+  //    列をまたいで不連続になる。空洞からの脱出は「橋を渡って空洞の縁へ」が
+  //    現状の想定ルート(段階3の重力子砲が詰み防止の最終手段)。
   const group = Math.floor(x / 32);
   const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, band) * 32);
   if (x === ladderX) return TILE.LADDER;
