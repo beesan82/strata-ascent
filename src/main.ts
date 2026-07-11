@@ -11,6 +11,9 @@ const DEFAULT_SEED = 20260711;
 const STEP_MS = 1000 / 60;
 const EVICT_INTERVAL_FRAMES = 120;
 const EVICT_RADIUS = 4;
+// 焼き込みキャッシュは1枚1024×1024(~4MB)と重いので、衝突ストアより狭い半径で破棄する。
+// 半径2=5チャンク幅=320タイル > ビューポート44タイルなので視界は常にカバーされる。
+const BAKE_EVICT_RADIUS = 2;
 
 // ?seed=123 で世界を変えられる(0も有効な値として許可。未指定/非数値時のみデフォルト)
 const params = new URLSearchParams(location.search);
@@ -56,7 +59,7 @@ function update(dt: number): void {
     const pcx = Math.floor(player.centerX / CHUNK_SIZE);
     const pcy = Math.floor(player.centerY / CHUNK_SIZE);
     store.evictFarFrom(pcx, pcy, EVICT_RADIUS);
-    renderer.evictFarFrom(pcx, pcy, EVICT_RADIUS);
+    renderer.evictFarFrom(pcx, pcy, BAKE_EVICT_RADIUS);
   }
 }
 
