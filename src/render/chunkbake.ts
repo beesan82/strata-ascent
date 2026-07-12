@@ -2,16 +2,10 @@ import type { ChunkStore } from '../world/chunks';
 import { CHUNK_SIZE, TILE } from '../world/tiles';
 import { blobId } from './tileset/autotile';
 import type { Atlas } from './tileset/atlas';
-import { decorateChunk, PALETTE, type DecorOp } from './decor';
+import { decorateChunk, type DecorOp } from './decor';
 
 /** 焼き込み解像度(px/タイル)。表示は拡縮されるが16pxあれば線は読める */
 export const BAKE_PPT = 16;
-
-/**
- * アトラスが辺/角/継ぎ目/リベットを描くようになったため、装飾側の
- * 「表面線画」色はスキップする(二重描画防止)。物理的装飾は残す。
- */
-const SKIP_COLORS = new Set<string>([PALETTE.edgeTop, PALETTE.edgeSide, PALETTE.seam, PALETTE.rivet]);
 
 /** チャンク1枚を一度だけオフスクリーンCanvasへ焼き込み、以後はdrawImageで貼る */
 export class ChunkBaker {
@@ -83,11 +77,10 @@ export class ChunkBaker {
       }
     }
 
-    // 装飾(アトラスが描く表面線画=hatch/edge/seam/rivetはスキップ、物理装飾は残す)
+    // 装飾(アトラスが描く表面線画=surfaceタグ付きはスキップ、物理装飾は残す)
     ctx.lineCap = 'round';
     for (const op of decorateChunk(this.seed, cx, cy)) {
-      if (op.kind === 'hatch') continue;
-      if ((op.kind === 'line' || op.kind === 'dot') && SKIP_COLORS.has(op.color)) continue;
+      if (op.surface) continue;
       this.draw(ctx, op);
     }
     return canvas;

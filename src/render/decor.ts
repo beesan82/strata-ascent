@@ -7,11 +7,13 @@ import { tileAt } from '../world/worldgen';
  * 装飾の描画命令。座標はチャンクローカルのタイル単位(浮動小数)。
  * チャンク境界をまたぐ装飾は範囲外の座標を取ることがある(焼き込み時にクリップされる)。
  */
+// surface: アトラスのオートタイルが同等の表現を描くようになった「表面線画」
+// (辺ハイライト・パネル継ぎ目・リベット・ハッチ)を示す。焼き込み時に二重描画を避けて間引く。
 export type DecorOp =
-  | { kind: 'line'; x1: number; y1: number; x2: number; y2: number; w: number; color: string }
-  | { kind: 'dot'; x: number; y: number; r: number; color: string }
-  | { kind: 'poly'; pts: number[]; w: number; color: string; fill?: boolean }
-  | { kind: 'hatch'; x: number; y: number; w: number; h: number; spacing: number; color: string; cross?: boolean };
+  | { kind: 'line'; x1: number; y1: number; x2: number; y2: number; w: number; color: string; surface?: boolean }
+  | { kind: 'dot'; x: number; y: number; r: number; color: string; surface?: boolean }
+  | { kind: 'poly'; pts: number[]; w: number; color: string; fill?: boolean; surface?: boolean }
+  | { kind: 'hatch'; x: number; y: number; w: number; h: number; spacing: number; color: string; cross?: boolean; surface?: boolean };
 
 /** 装飾の色パレット(すべて暗色。ライトに照らされて初めて質感として読める) */
 export const PALETTE = {
@@ -84,24 +86,24 @@ export function decorateChunk(seed: number, cx: number, cy: number): DecorOp[] {
       const rightAir = !solid(lx + 1, ly);
 
       // エッジハイライト(空気に面した輪郭。上面は明るく太く)
-      if (upAir) ops.push({ kind: 'line', x1: lx, y1: ly + 0.06, x2: lx + 1, y2: ly + 0.06, w: 0.12, color: PALETTE.edgeTop });
-      if (downAir) ops.push({ kind: 'line', x1: lx, y1: ly + 0.97, x2: lx + 1, y2: ly + 0.97, w: 0.06, color: PALETTE.edgeSide });
-      if (leftAir) ops.push({ kind: 'line', x1: lx + 0.03, y1: ly, x2: lx + 0.03, y2: ly + 1, w: 0.06, color: PALETTE.edgeSide });
-      if (rightAir) ops.push({ kind: 'line', x1: lx + 0.97, y1: ly, x2: lx + 0.97, y2: ly + 1, w: 0.06, color: PALETTE.edgeSide });
+      if (upAir) ops.push({ kind: 'line', x1: lx, y1: ly + 0.06, x2: lx + 1, y2: ly + 0.06, w: 0.12, color: PALETTE.edgeTop, surface: true });
+      if (downAir) ops.push({ kind: 'line', x1: lx, y1: ly + 0.97, x2: lx + 1, y2: ly + 0.97, w: 0.06, color: PALETTE.edgeSide, surface: true });
+      if (leftAir) ops.push({ kind: 'line', x1: lx + 0.03, y1: ly, x2: lx + 0.03, y2: ly + 1, w: 0.06, color: PALETTE.edgeSide, surface: true });
+      if (rightAir) ops.push({ kind: 'line', x1: lx + 0.97, y1: ly, x2: lx + 0.97, y2: ly + 1, w: 0.06, color: PALETTE.edgeSide, surface: true });
 
       // パネル継ぎ目(ワールド座標基準なのでチャンクをまたいで連続する)。
       // 密なパネル格子を作るため出現率を上げ、継ぎ目沿いに一定間隔でリベットを打つ。
       const seamV = hash2(seed + 601, wx, 0) < 0.34;
       if (seamV && !rightAir) {
-        ops.push({ kind: 'line', x1: lx + 1, y1: ly, x2: lx + 1, y2: ly + 1, w: 0.08, color: PALETTE.seam });
-        if (upAir) ops.push({ kind: 'dot', x: lx + 1, y: ly + 0.35, r: 0.07, color: PALETTE.rivet });
-        else if (mod(wy, 3) === 0) ops.push({ kind: 'dot', x: lx + 1, y: ly + 0.5, r: 0.05, color: PALETTE.rivet });
+        ops.push({ kind: 'line', x1: lx + 1, y1: ly, x2: lx + 1, y2: ly + 1, w: 0.08, color: PALETTE.seam, surface: true });
+        if (upAir) ops.push({ kind: 'dot', x: lx + 1, y: ly + 0.35, r: 0.07, color: PALETTE.rivet, surface: true });
+        else if (mod(wy, 3) === 0) ops.push({ kind: 'dot', x: lx + 1, y: ly + 0.5, r: 0.05, color: PALETTE.rivet, surface: true });
       }
       const seamH = hash2(seed + 602, 0, wy) < 0.26;
       if (seamH && !downAir) {
-        ops.push({ kind: 'line', x1: lx, y1: ly + 1, x2: lx + 1, y2: ly + 1, w: 0.08, color: PALETTE.seam });
+        ops.push({ kind: 'line', x1: lx, y1: ly + 1, x2: lx + 1, y2: ly + 1, w: 0.08, color: PALETTE.seam, surface: true });
         if (hash2(seed + 603, wx, wy) < 0.4) {
-          ops.push({ kind: 'dot', x: lx + 0.5, y: ly + 1, r: 0.06, color: PALETTE.rivet });
+          ops.push({ kind: 'dot', x: lx + 0.5, y: ly + 1, r: 0.06, color: PALETTE.rivet, surface: true });
         }
       }
       // パネル交点のボルト群(縦横の継ぎ目が交わる内側の角に4点)
@@ -123,7 +125,7 @@ export function decorateChunk(seed: number, cx: number, cy: number): DecorOp[] {
         const si = stratumIndexAt(wy) % 3;
         const spacing = 0.22 + 0.07 * si;
         // 一部の階層はクロスハッチで密度を上げる(決定論的に階層で切替)
-        ops.push({ kind: 'hatch', x: lx, y: ly, w: 1, h: 1, spacing, color: PALETTE.hatch, cross: si !== 1 });
+        ops.push({ kind: 'hatch', x: lx, y: ly, w: 1, h: 1, spacing, color: PALETTE.hatch, cross: si !== 1, surface: true });
       }
     }
   }
