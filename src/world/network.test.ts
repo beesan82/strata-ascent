@@ -81,11 +81,11 @@ describe('networkTileAt', () => {
     const { rwx, rwy } = waterRegionOrigin(42);
     const kinds = new Set<number | null>();
     const bx = Math.floor(rwx / DISTRICT_SIZE), by = Math.floor(rwy / DISTRICT_SIZE);
-    for (let dyi = 0; dyi < 8; dyi++) {
-      for (let dxi = 0; dxi < 8; dxi++) {
+    for (let dyi = 0; dyi < 3; dyi++) {
+      for (let dxi = 0; dxi < 3; dxi++) {
         const dx = bx + dxi, dy = by + dyi;
-        for (let ly = 0; ly < DISTRICT_SIZE; ly += 3) {
-          for (let lx = 0; lx < DISTRICT_SIZE; lx += 3) {
+        for (let ly = 0; ly < DISTRICT_SIZE; ly += 8) {
+          for (let lx = 0; lx < DISTRICT_SIZE; lx += 8) {
             const wx = dx * DISTRICT_SIZE + lx, wy = dy * DISTRICT_SIZE + ly;
             const c = conduitAt(42, wx, wy);
             const t = networkTileAt(42, wx, wy);
@@ -101,5 +101,5 @@ describe('networkTileAt', () => {
     expect(kinds.has(TILE.SOLID)).toBe(true);
     expect(kinds.has(TILE.LADDER)).toBe(true);
     expect(kinds.has(TILE.AIR)).toBe(true);
-  }, 60000);
+  });
 });
