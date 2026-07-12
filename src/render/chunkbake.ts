@@ -4,6 +4,8 @@ import { blobId } from './tileset/autotile';
 import type { Atlas } from './tileset/atlas';
 import { generateAtlas } from './tileset/generate';
 import { stratumIndexAt } from '../world/strata';
+import { regionAt } from '../world/hierarchy';
+import { conduitAt } from '../world/network';
 import { BIOMES } from './biome';
 import { decorateChunk, PALETTE, type DecorOp } from './decor';
 
@@ -117,6 +119,36 @@ export class ChunkBaker {
     for (const op of decorateChunk(this.seed, cx, cy)) {
       if (op.surface) continue;
       this.draw(ctx, ACCENT_SOURCE_COLORS.has(op.color) ? { ...op, color: biome.accent } : op);
+    }
+
+    // 配管コリドー: 水系統のconduitに配管ラインを重ね、通路が「配管」として読めるようにする。
+    // 水系統ゲートはregionAtキャッシュのヒットで安価に判定し、水系統のときだけconduitAtを呼ぶ
+    // (networkTileAtと同じ条件なので、conduitが歩けるタイルを生む場所と正確に一致する)。
+    // 装飾は焼き込みキャンバスへの描画のみ。tileAt/ゲームプレイには一切影響しない。
+    const P = BAKE_PPT;
+    ctx.strokeStyle = biome.accent;
+    ctx.lineWidth = Math.max(1, 0.14 * P);
+    for (let ty = 0; ty < CHUNK_SIZE; ty++) {
+      const wy = by + ty;
+      for (let tx = 0; tx < CHUNK_SIZE; tx++) {
+        const wx = bx + tx;
+        if (regionAt(this.seed, wx, wy).system !== 'water') continue;
+        const c = conduitAt(this.seed, wx, wy);
+        if (!c) continue;
+        ctx.beginPath();
+        if (c.role === 'vertical') {
+          // 縦シャフト: タイル中央に縦配管/ケーブルを1本
+          const x = (tx + 0.5) * P;
+          ctx.moveTo(x, ty * P);
+          ctx.lineTo(x, (ty + 1) * P);
+        } else {
+          // 水平コリドー(floor/inside): タイル上部に水平配管を1本
+          const y = (ty + 0.18) * P;
+          ctx.moveTo(tx * P, y);
+          ctx.lineTo((tx + 1) * P, y);
+        }
+        ctx.stroke();
+      }
     }
     return canvas;
   }
