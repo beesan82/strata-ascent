@@ -53,7 +53,7 @@ export class Renderer {
     const ctx = this.ctx;
 
     // バイオーム混合(背景・環境光で共有)
-    const bb = biomeBlend(player.body.y);
+    const bb = biomeBlend(this.seed, player.centerX, player.body.y);
 
     // 背景(最初のフィル): 開放空間もバイオーム環境色でわずかに持ち上げる。
     // ambientLevelが高いほど明るく色づき(大空洞帯は暗青の空気に)、

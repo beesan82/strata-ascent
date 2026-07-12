@@ -1,16 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { BIOMES, biomeAt, biomeBlend, mixHex } from './biome';
+import { biomeForSystem, biomeAt, biomeBlend, mixHex, SYSTEM_BIOME } from './biome';
+import { regionAt, REGION_SIZE } from '../world/hierarchy';
 
-describe('biomeAt', () => {
-  it('地表(y=0)は最初のバイオーム、深いほど進む(yは上が負)', () => {
-    expect(biomeAt(0)).toBe(BIOMES[0]);
-    expect(biomeAt(-600)).toBe(BIOMES[1]);
+describe('biomeForSystem', () => {
+  it('biomeForSystem は SYSTEM_BIOME と一致', () => {
+    expect(biomeForSystem('water')).toBe(SYSTEM_BIOME.water);
+    expect(biomeForSystem('foundry')).toBe(SYSTEM_BIOME.foundry);
   });
-  it('末尾以降はループ(strataと同じ)', () => {
-    expect(biomeAt(-500 * BIOMES.length)).toBe(BIOMES[0]);
-  });
-  it('各バイオームのパラメータが妥当な範囲', () => {
-    for (const b of BIOMES) {
+  it('全系統に配色があり、パラメータが妥当', () => {
+    for (const sys of ['water', 'power', 'habitation', 'disposal', 'foundry'] as const) {
+      const b = SYSTEM_BIOME[sys];
       expect(b.ambientLevel).toBeGreaterThan(0);
       expect(b.ambientLevel).toBeLessThanOrEqual(1);
       expect(b.palette.fillMid).toMatch(/^#[0-9a-f]{6}$/i);
@@ -18,39 +17,41 @@ describe('biomeAt', () => {
       expect(b.bgLayers.length).toBeGreaterThanOrEqual(2);
     }
   });
+  it('系統ごとに異なる配色(fillMid が全て異なる)', () => {
+    const mids = new Set(['water', 'power', 'habitation', 'disposal', 'foundry'].map(
+      (s) => SYSTEM_BIOME[s as keyof typeof SYSTEM_BIOME].palette.fillMid));
+    expect(mids.size).toBe(5);
+  });
+});
+
+describe('biomeAt(地域ベース)', () => {
+  it('その座標の地域 system の配色を返す(決定論)', () => {
+    const b = biomeAt(42, 5000, -3000);
+    expect(biomeAt(42, 5000, -3000)).toBe(b);
+    expect(b).toBe(SYSTEM_BIOME[regionAt(42, 5000, -3000).system]);
+  });
+  it('別地域で複数 system が存在', () => {
+    const systems = new Set<string>();
+    for (let i = 0; i < 24; i++) systems.add(regionAt(42, i * REGION_SIZE, 0).system);
+    expect(systems.size).toBeGreaterThan(1);
+  });
+});
+
+describe('biomeBlend(地域ベース)', () => {
+  it('地域内は from=to=地域配色, t=0(決定論)', () => {
+    const bb = biomeBlend(42, 5000, -3000);
+    expect(biomeBlend(42, 5000, -3000)).toEqual(bb);
+    expect(bb.t).toBe(0);
+    expect(bb.from).toBe(bb.to);
+    expect(bb.ambientColor).toBe(bb.from.ambientColor);
+    expect(bb.ambientLevel).toBe(bb.from.ambientLevel);
+  });
 });
 
 describe('mixHex', () => {
-  it('t=0でa、t=1でb', () => {
+  it('端点と中点', () => {
     expect(mixHex('#000000', '#ffffff', 0)).toBe('#000000');
     expect(mixHex('#000000', '#ffffff', 1)).toBe('#ffffff');
-  });
-  it('中間は各チャンネルの中点', () => {
     expect(mixHex('#000000', '#ffffff', 0.5)).toBe('#808080');
-  });
-});
-
-describe('biomeBlend', () => {
-  it('境界(高度500)近傍でtは0..1', () => {
-    const mid = biomeBlend(-500);
-    expect(mid.t).toBeGreaterThanOrEqual(0);
-    expect(mid.t).toBeLessThanOrEqual(1);
-    expect([mid.from, mid.to]).toContain(BIOMES[0]);
-  });
-  it('遷移帯の外(帯中央)はt=0で単一バイオーム', () => {
-    const deep = biomeBlend(-250);
-    expect(deep.t).toBe(0);
-    expect(deep.from).toBe(BIOMES[0]);
-    expect(deep.to).toBe(BIOMES[0]);
-  });
-  it('補間した環境光レベルは両端の間', () => {
-    const b = biomeBlend(-480);
-    const lo = Math.min(b.from.ambientLevel, b.to.ambientLevel);
-    const hi = Math.max(b.from.ambientLevel, b.to.ambientLevel);
-    expect(b.ambientLevel).toBeGreaterThanOrEqual(lo - 1e-9);
-    expect(b.ambientLevel).toBeLessThanOrEqual(hi + 1e-9);
-  });
-  it('決定論的', () => {
-    expect(biomeBlend(-480)).toEqual(biomeBlend(-480));
   });
 });

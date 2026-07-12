@@ -1,5 +1,5 @@
 import type { TilePalette } from './tileset/generate';
-import { STRATUM_HEIGHT } from '../world/strata';
+import { regionAt, type System } from '../world/hierarchy';
 
 /** パララックス背景1層の定義 */
 export interface BgLayer {
@@ -69,16 +69,28 @@ export const BIOMES: readonly Biome[] = [
   },
 ];
 
-const TRANSITION = 60; // 遷移帯の幅(タイル)
+/** 精錬炉(foundry): 溶鉱の赤熱を帯びた系統配色 */
+const FOUNDRY: Biome = {
+  name: '精錬炉', ambientColor: '#4a2620', ambientLevel: 0.44,
+  palette: { fillDark: '#241310', fillMid: '#432018', fillLight: '#6b3426', edge: '#d06a3c', line: '#160b08' },
+  accent: '#e8834a',
+  bgLayers: [
+    { factor: 0.2, color: '#2a1512', density: 0.5, kind: 'tower' },
+    { factor: 0.4, color: '#3a1d18', density: 0.45, kind: 'deck' },
+  ],
+};
 
-function indexAt(worldY: number): number {
-  const altitude = Math.max(0, -worldY);
-  return Math.floor(altitude / STRATUM_HEIGHT);
-}
+/** 系統 → バイオーム配色。地域(REGION)の系統でワールドを塗り分ける。 */
+export const SYSTEM_BIOME: Record<System, Biome> = {
+  water: BIOMES[3],
+  habitation: BIOMES[1],
+  disposal: BIOMES[2],
+  power: BIOMES[4],
+  foundry: FOUNDRY,
+};
 
-/** ワールドy → バイオーム(末尾ループ) */
-export function biomeAt(worldY: number): Biome {
-  return BIOMES[indexAt(worldY) % BIOMES.length];
+export function biomeForSystem(system: System): Biome {
+  return SYSTEM_BIOME[system];
 }
 
 export interface BiomeBlend {
@@ -89,26 +101,15 @@ export interface BiomeBlend {
   ambientColor: string;
 }
 
-/** 境界の下側 TRANSITION タイルで from→to を線形補間。帯の外では t=0。境界点は下側バイオームの遷移帯に含む。 */
-export function biomeBlend(worldY: number): BiomeBlend {
-  const altitude = Math.max(0, -worldY);
-  // 高度方向で直上(次)の境界の番号と、その境界までの距離。
-  const boundaryIndex = Math.ceil(altitude / STRATUM_HEIGHT);
-  const distToNext = boundaryIndex * STRATUM_HEIGHT - altitude;
-  let from: Biome;
-  let to: Biome;
-  let t = 0;
-  if (boundaryIndex >= 1 && distToNext < TRANSITION) {
-    from = BIOMES[(boundaryIndex - 1) % BIOMES.length];
-    to = BIOMES[boundaryIndex % BIOMES.length];
-    t = (TRANSITION - distToNext) / TRANSITION;
-  } else {
-    from = BIOMES[Math.floor(altitude / STRATUM_HEIGHT) % BIOMES.length];
-    to = from;
-  }
-  const ambientLevel = from.ambientLevel + (to.ambientLevel - from.ambientLevel) * t;
-  const ambientColor = mixHex(from.ambientColor, to.ambientColor, t);
-  return { from, to, t, ambientLevel, ambientColor };
+/** ワールド座標 → その地域(系統)のバイオーム */
+export function biomeAt(seed: number, x: number, y: number): Biome {
+  return SYSTEM_BIOME[regionAt(seed, x, y).system];
+}
+
+/** 地域ベースでは地域内は単色。from=to=地域配色, t=0。 */
+export function biomeBlend(seed: number, x: number, y: number): BiomeBlend {
+  const b = biomeAt(seed, x, y);
+  return { from: b, to: b, t: 0, ambientLevel: b.ambientLevel, ambientColor: b.ambientColor };
 }
 
 /** #rrggbb を線形混合 */

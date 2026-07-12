@@ -3,9 +3,9 @@ import { CHUNK_SIZE, TILE } from '../world/tiles';
 import { blobId } from './tileset/autotile';
 import type { Atlas } from './tileset/atlas';
 import { generateAtlas } from './tileset/generate';
-import { stratumIndexAt } from '../world/strata';
+import { regionAt } from '../world/hierarchy';
 import { conduitAt } from '../world/network';
-import { BIOMES } from './biome';
+import { biomeForSystem, type Biome } from './biome';
 import { decorateChunk, PALETTE, type DecorOp } from './decor';
 
 /** 焼き込み解像度(px/タイル)。表示は拡縮されるが16pxあれば線は読める */
@@ -25,17 +25,17 @@ const ACCENT_SOURCE_COLORS: ReadonlySet<string> = new Set([
 export class ChunkBaker {
   private cache = new Map<string, HTMLCanvasElement>();
   private patterns = new Map<string, CanvasPattern>();
-  /** バイオームindex → タイルアトラス(生成は高価なのでキャッシュ) */
-  private atlasByBiome = new Map<number, Atlas>();
+  /** バイオーム名 → タイルアトラス(生成は高価なのでキャッシュ) */
+  private atlasByBiome = new Map<string, Atlas>();
 
   constructor(private seed: number) {}
 
-  /** バイオームindexに対応する色付きアトラスを取得(なければ生成してキャッシュ) */
-  private atlasFor(biomeIdx: number): Atlas {
-    let atlas = this.atlasByBiome.get(biomeIdx);
+  /** バイオームに対応する色付きアトラスを取得(なければ生成してキャッシュ) */
+  private atlasFor(biome: Biome): Atlas {
+    let atlas = this.atlasByBiome.get(biome.name);
     if (!atlas) {
-      atlas = generateAtlas(BIOMES[biomeIdx].palette);
-      this.atlasByBiome.set(biomeIdx, atlas);
+      atlas = generateAtlas(biome.palette);
+      this.atlasByBiome.set(biome.name, atlas);
     }
     return atlas;
   }
@@ -77,13 +77,13 @@ export class ChunkBaker {
     const bx = cx * CHUNK_SIZE;
     const by = cy * CHUNK_SIZE;
 
-    // チャンク中心のワールドyでバイオームを決める。1チャンク=64タイルは
-    // バイオーム帯(500タイル)に十分収まるため、境界をまたぐ1チャンクだけが
-    // 全タイルで片側のバイオーム色になるが、ライティングで視覚的に馴染むため許容する。
-    const centerY = cy * CHUNK_SIZE + CHUNK_SIZE / 2;
-    const bIdx = stratumIndexAt(centerY) % BIOMES.length;
-    const atlas = this.atlasFor(bIdx);
-    const biome = BIOMES[bIdx];
+    // チャンク中心のワールド座標が属する地域(REGION)の系統でバイオームを決める。
+    // 地域(262144タイル)に対し1チャンク=64タイルは十分小さく、地域境界をまたぐ
+    // チャンクだけが片側の系統色になるが、ライティングで視覚的に馴染むため許容する。
+    const centerX = cx * CHUNK_SIZE + CHUNK_SIZE / 2;
+    const centerYw = cy * CHUNK_SIZE + CHUNK_SIZE / 2;
+    const biome = biomeForSystem(regionAt(this.seed, centerX, centerYw).system);
+    const atlas = this.atlasFor(biome);
 
     // ベース: SOLIDタイルを8近傍から求めたブロブIDでオートタイル描画する。
     // 近傍参照はstore.tileAt(純粋)経由でチャンクをまたいでも継ぎ目なく一致する。
