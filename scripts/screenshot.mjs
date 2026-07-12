@@ -1,4 +1,4 @@
-// 使い方: node scripts/screenshot.mjs [--seed=20260711] [--out=screenshots/shot.png] [--pos=x,y] [--wait=2500]
+// 使い方: node scripts/screenshot.mjs [--seed=20260711] [--out=screenshots/shot.png] [--pos=x,y] [--wait=2500] [--debug=hierarchy]
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createServer } from 'vite';
@@ -14,6 +14,7 @@ const seed = args['--seed'] ?? '20260711';
 const out = args['--out'] ?? 'screenshots/shot.png';
 const wait = Number(args['--wait'] ?? 2500);
 const pos = args['--pos'];
+const debug = args['--debug'];
 
 const server = await createServer({ logLevel: 'silent', server: { port: 0 } });
 await server.listen();
@@ -22,6 +23,9 @@ let url = `http://localhost:${port}/?seed=${seed}`;
 if (pos) {
   const [x, y] = pos.split(',');
   url += `&x=${x}&y=${y}`;
+}
+if (debug) {
+  url += `&debug=${debug}`;
 }
 
 const browser = await chromium.launch();

@@ -8,6 +8,7 @@ import { Lighting } from './lighting';
 import { biomeBlend, mixHex } from './biome';
 import { drawPlayer } from './playerSprite';
 import { Post } from './post';
+import { drawHierarchyDebug } from './debugHierarchy';
 
 /** 画面の横幅に収めるタイル数(スケール感の基準) */
 const VIEW_TILES_X = 44;
@@ -18,14 +19,19 @@ export class Renderer {
   private post = new Post();
   private baker: ChunkBaker;
   private background: Background;
+  private debugMode: string | null = null;
 
   constructor(
     private canvas: HTMLCanvasElement,
-    seed: number,
+    private seed: number,
   ) {
     this.ctx = canvas.getContext('2d')!;
     this.baker = new ChunkBaker(seed);
     this.background = new Background(seed);
+  }
+
+  setDebug(mode: string | null): void {
+    this.debugMode = mode;
   }
 
   resize(w: number, h: number): void {
@@ -89,5 +95,9 @@ export class Renderer {
 
     // ポストプロセス(グレイン+ビネット)
     this.post.render(ctx, w, h, bb.ambientLevel);
+
+    if (this.debugMode === 'hierarchy') {
+      drawHierarchyDebug(ctx, cam, this.seed, w, h, ppt);
+    }
   }
 }

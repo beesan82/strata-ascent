@@ -32,6 +32,8 @@ const player = new Player(spawn.x, spawn.y);
 const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
 const renderer = new Renderer(canvas, seed);
+const debug = params.get('debug');
+renderer.setDebug(debug);
 
 let dpr = window.devicePixelRatio || 1;
 
