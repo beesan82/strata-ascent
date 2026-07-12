@@ -67,13 +67,30 @@ describe('conduitAt 両端一致', () => {
 });
 
 describe('networkTileAt', () => {
-  it('水系統でない region では null(段階3スコープ)', () => {
-    for (let r = 0; r < 24; r++) {
-      const wx = r * REGION_SIZE;
-      if (regionAt(42, wx, 0).system !== 'water') {
-        expect(networkTileAt(42, wx + 500, 500)).toBeNull();
-        return;
+  it('全系統でコリドー上は role に応じた TILE(段階4)', () => {
+    for (const sys of ['power', 'habitation', 'disposal', 'foundry'] as const) {
+      let origin: { rwx: number; rwy: number } | null = null;
+      for (let r = 0; r < 24 && !origin; r++) {
+        for (const [rx, ry] of [[r, 0], [0, r], [r, -1], [-1, r], [r, r]] as const) {
+          if (regionAt(42, rx * REGION_SIZE, ry * REGION_SIZE).system === sys) {
+            origin = { rwx: rx * REGION_SIZE, rwy: ry * REGION_SIZE }; break;
+          }
+        }
       }
+      if (!origin) continue;
+      const bx = Math.floor(origin.rwx / DISTRICT_SIZE), by = Math.floor(origin.rwy / DISTRICT_SIZE);
+      let sawConduit = false;
+      for (let dyi = 0; dyi < 3 && !sawConduit; dyi++) {
+        for (let dxi = 0; dxi < 3 && !sawConduit; dxi++) {
+          for (let ly = 0; ly < DISTRICT_SIZE && !sawConduit; ly += 8) {
+            for (let lx = 0; lx < DISTRICT_SIZE; lx += 8) {
+              const wx = (bx + dxi) * DISTRICT_SIZE + lx, wy = (by + dyi) * DISTRICT_SIZE + ly;
+              if (conduitAt(42, wx, wy) && networkTileAt(42, wx, wy) !== null) { sawConduit = true; break; }
+            }
+          }
+        }
+      }
+      expect(sawConduit).toBe(true);
     }
   });
 

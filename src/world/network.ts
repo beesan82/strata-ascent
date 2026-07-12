@@ -1,5 +1,5 @@
 import { hash2 } from './noise';
-import { DISTRICT_SIZE, regionAt } from './hierarchy';
+import { DISTRICT_SIZE } from './hierarchy';
 import { TILE, type Tile } from './tiles';
 
 const CONNECT = 0.5;
@@ -71,9 +71,8 @@ export function conduitAt(seed: number, x: number, y: number): Conduit | null {
   return { role: 'inside' };
 }
 
-/** コリドーのタイル化。水系統のみ。該当しなければ null */
+/** コリドーのタイル化。全系統。該当しなければ null */
 export function networkTileAt(seed: number, x: number, y: number): Tile | null {
-  if (regionAt(seed, x, y).system !== 'water') return null;
   const c = conduitAt(seed, x, y);
   if (!c) return null;
   if (c.role === 'vertical') return TILE.LADDER;
