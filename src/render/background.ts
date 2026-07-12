@@ -42,7 +42,7 @@ export function rareLandmarkAt(seed: number, slot: number): RareLandmark | null 
  *
  * 現在地バイオーム(bb.from)の bgLayers を奥→手前で描く。各層は factor で
  * カメラ追従率が変わり、構造は整数スロット番号でハッシュ配置するためパンしても
- * 継ぎ目が出ない。バイオーム遷移は短い(遷移帯60タイル)ため from の層のみ描く。
+ * 継ぎ目が出ない。バイオームは地域(系統)ごとに単色で from=to のため from の層のみ描く。
  */
 export class Background {
   constructor(private seed: number) {}

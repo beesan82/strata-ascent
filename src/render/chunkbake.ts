@@ -5,6 +5,8 @@ import type { Atlas } from './tileset/atlas';
 import { generateAtlas } from './tileset/generate';
 import { regionAt } from '../world/hierarchy';
 import { conduitAt } from '../world/network';
+import { facilityTileAt } from '../world/facility';
+import { megaFacilityAt } from '../world/megafacility';
 import { biomeForSystem, type Biome } from './biome';
 import { decorateChunk, PALETTE, type DecorOp } from './decor';
 
@@ -82,7 +84,8 @@ export class ChunkBaker {
     // チャンクだけが片側の系統色になるが、ライティングで視覚的に馴染むため許容する。
     const centerX = cx * CHUNK_SIZE + CHUNK_SIZE / 2;
     const centerYw = cy * CHUNK_SIZE + CHUNK_SIZE / 2;
-    const biome = biomeForSystem(regionAt(this.seed, centerX, centerYw).system);
+    const system = regionAt(this.seed, centerX, centerYw).system;
+    const biome = biomeForSystem(system);
     const atlas = this.atlasFor(biome);
 
     // ベース: SOLIDタイルを8近傍から求めたブロブIDでオートタイル描画する。
@@ -145,6 +148,32 @@ export class ChunkBaker {
           ctx.lineTo((tx + 1) * P, y);
         }
         ctx.stroke();
+      }
+    }
+
+    // 水系統の施設内部にだけ「たまり水の水面」を淡く描く(視覚のみ)。
+    // ゲート: 水地域 かつ そのタイルが施設/メガ施設の内部空間(=facility/megaがAIRを返す)、
+    // かつ直下1〜2タイルがSOLID(水が溜まる床/槽底)。tileAt/コリジョンには一切影響しない。
+    // 半透明の水色を水平線としてタイル中央高さに引くだけなので、固体には見えず貯水槽/水面として読める。
+    if (system === 'water') {
+      ctx.strokeStyle = 'rgba(90,150,200,0.15)';
+      ctx.lineWidth = Math.max(1, 0.12 * P);
+      for (let ty = 0; ty < CHUNK_SIZE; ty++) {
+        const wy = by + ty;
+        for (let tx = 0; tx < CHUNK_SIZE; tx++) {
+          if (chunk[ty * CHUNK_SIZE + tx] !== TILE.AIR) continue;
+          const wx = bx + tx;
+          const inFacility =
+            megaFacilityAt(this.seed, wx, wy) === TILE.AIR ||
+            facilityTileAt(this.seed, wx, wy) === TILE.AIR;
+          if (!inFacility) continue;
+          if (store.tileAt(wx, wy + 1) !== TILE.SOLID && store.tileAt(wx, wy + 2) !== TILE.SOLID) continue;
+          const y = (ty + 0.5) * P;
+          ctx.beginPath();
+          ctx.moveTo(tx * P, y);
+          ctx.lineTo((tx + 1) * P, y);
+          ctx.stroke();
+        }
       }
     }
     return canvas;

@@ -56,8 +56,8 @@ export class Renderer {
     const bb = biomeBlend(this.seed, player.centerX, player.body.y);
 
     // 背景(最初のフィル): 開放空間もバイオーム環境色でわずかに持ち上げる。
-    // ambientLevelが高いほど明るく色づき(大空洞帯は暗青の空気に)、
-    // 低いバイオーム(最下層)はほぼ暗いまま。SOLIDタイルより必ず暗くしてシルエットを保つ。
+    // ambientLevelが高いほど明るく色づき(水系統=大空洞帯は暗青の空気に)、
+    // ambientの低い系統(廃棄物層など)はほぼ暗いまま。SOLIDタイルより必ず暗くしてシルエットを保つ。
     // 上を少し明るく下を暗くする縦グラデで開放空間に奥行きを与える。
     const lit = mixHex('#05070a', mixHex(bb.ambientColor, '#000000', 0.5), bb.ambientLevel);
     const grad = ctx.createLinearGradient(0, 0, 0, h);

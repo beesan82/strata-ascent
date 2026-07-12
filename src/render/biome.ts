@@ -9,7 +9,7 @@ export interface BgLayer {
   kind: 'tower' | 'deck' | 'haze';
 }
 
-/** バイオーム: 階層帯の見た目一式 */
+/** バイオーム: 系統(地域)ごとの見た目一式 */
 export interface Biome {
   name: string;
   ambientColor: string;
@@ -20,6 +20,7 @@ export interface Biome {
 }
 
 export const BIOMES: readonly Biome[] = [
+  // BIOMES[0] (最下層) は SYSTEM_BIOME 未使用の予備パレット(参考用に温存。将来再利用可)。
   {
     name: '最下層', ambientColor: '#2e3a44', ambientLevel: 0.34,
     palette: { fillDark: '#141b1f', fillMid: '#26333a', fillLight: '#3a4a52', edge: '#5f7681', line: '#0f1418' },
