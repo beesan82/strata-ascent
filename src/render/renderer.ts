@@ -9,9 +9,21 @@ import { biomeBlend, mixHex } from './biome';
 import { drawPlayer } from './playerSprite';
 import { Post } from './post';
 import { drawHierarchyDebug } from './debugHierarchy';
+import { drawBeam, drawCharge } from './beam';
 
 /** 画面の横幅に収めるタイル数(スケール感の基準) */
 const VIEW_TILES_X = 44;
+
+/** 発射直後の画面シェイク最大振幅(px) */
+const SHAKE_MAX = 6;
+
+/** 溜め中/発射ビームの演出パラメータ(main→renderへ毎フレーム渡す) */
+export interface GravitonFx {
+  /** 溜め比率(0..1)。>0でチャージ発光を描く */
+  chargeRatio: number;
+  /** 生存中のビーム。nullなら描かない */
+  beam: { angle: number; alpha: number } | null;
+}
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
@@ -20,6 +32,11 @@ export class Renderer {
   private baker: ChunkBaker;
   private background: Background;
   private debugMode: string | null = null;
+  /**
+   * 直近フレームで算出したエイム角(ワールド空間・マウス方向)。
+   * update側(main)がビーム/ボーリング方向として読む。1フレーム遅延は許容。
+   */
+  aimAngle = 0;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -46,11 +63,28 @@ export class Renderer {
     this.baker.evictFarFrom(cx, cy, radius);
   }
 
-  render(store: ChunkStore, cam: Camera, player: Player, mouseX: number, mouseY: number, timeSec: number): void {
+  /** ChunkStore.invalidateと対で呼ぶ(ボーリングされたチャンクの焼き込み画像を破棄) */
+  invalidate(cx: number, cy: number): void {
+    this.baker.invalidate(cx, cy);
+  }
+
+  render(
+    store: ChunkStore, cam: Camera, player: Player,
+    mouseX: number, mouseY: number, timeSec: number,
+    fx: GravitonFx,
+  ): void {
     const w = this.canvas.width;
     const h = this.canvas.height;
     const ppt = w / VIEW_TILES_X;
     const ctx = this.ctx;
+
+    // 発射直後の画面シェイク: シーン全体を微小にずらす。ビームの残光(alpha)に比例。
+    // ctxを丸ごと平行移動するので各レイヤーは一貫してずれる。restoreで必ず戻す。
+    const shake = fx.beam ? fx.beam.alpha * SHAKE_MAX : 0;
+    ctx.save();
+    if (shake > 0.01) {
+      ctx.translate((Math.random() * 2 - 1) * shake, (Math.random() * 2 - 1) * shake);
+    }
 
     // バイオーム混合(背景・環境光で共有)
     const bb = biomeBlend(this.seed, player.centerX, player.body.y);
@@ -64,7 +98,8 @@ export class Renderer {
     grad.addColorStop(0, mixHex(lit, '#ffffff', 0.08 * bb.ambientLevel));
     grad.addColorStop(1, mixHex(lit, '#000000', 0.35));
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
+    // シェイクで生じる端の隙間を隠すため少し外側まで塗る(shake=0でも無害)
+    ctx.fillRect(-SHAKE_MAX, -SHAKE_MAX, w + SHAKE_MAX * 2, h + SHAKE_MAX * 2);
 
     // パララックス遠景(バイオーム配色の多層構造)
     this.background.render(ctx, cam.x, cam.y, w, h, ppt, bb);
@@ -93,6 +128,17 @@ export class Renderer {
     // バイオーム環境光+プレイヤー補助光
     this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, bb.ambientLevel);
 
+    // 重力子砲の演出: ライトの「上」に描いて発光体として読ませる。
+    // ただし post(グレイン+ビネット)の「前」に描くことで画面全体の質感と馴染ませる。
+    if (fx.chargeRatio > 0) {
+      drawCharge(ctx, px, py, fx.chargeRatio);
+    }
+    if (fx.beam) {
+      // ワールド length=300 タイルは画面外まで伸びる貫通ビーム。対角を覆う長さで十分。
+      const beamLen = Math.hypot(w, h) * 1.15;
+      drawBeam(ctx, px, py, fx.beam.angle, beamLen, fx.beam.alpha);
+    }
+
     // ポストプロセス(グレイン+ビネット)
     this.post.render(ctx, w, h, bb.ambientLevel);
 
@@ -102,5 +148,9 @@ export class Renderer {
       const tilesAcross = Number.isFinite(n) && n > 0 ? n : 40000;
       drawHierarchyDebug(ctx, cam, this.seed, w, h, tilesAcross);
     }
+
+    ctx.restore(); // シェイクの平行移動を戻す
+    // update側がボーリング/ビーム方向として読めるよう、算出したエイム角を公開する
+    this.aimAngle = angle;
   }
 }

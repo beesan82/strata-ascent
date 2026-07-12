@@ -1,8 +1,10 @@
 import { Camera } from './core/camera';
 import { Input } from './core/input';
 import { Player } from './entities/player';
+import { Graviton } from './entities/graviton';
 import { Renderer } from './render/renderer';
 import { ChunkStore } from './world/chunks';
+import { Destruction } from './world/destruction';
 import { regionAt, type System } from './world/hierarchy';
 import { CHUNK_SIZE } from './world/tiles';
 import { findSpawn } from './world/worldgen';
@@ -23,7 +25,9 @@ const seed = seedParam !== null && Number.isFinite(Number(seedParam)) ? Number(s
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 
-const store = new ChunkStore(seed);
+const destruction = new Destruction();
+const store = new ChunkStore(seed, destruction);
+const graviton = new Graviton();
 // デバッグ/スクリーンショット用: ?x=&y= でスポーン位置を上書き(埋まり座標は自己責任)
 const qx = params.get('x');
 const qy = params.get('y');
@@ -48,6 +52,24 @@ resize();
 
 const tiles = (tx: number, ty: number) => store.tileAt(tx, ty);
 
+// 重力子砲: 発射パラメータとビーム残光(演出)
+const BORE_LENGTH = 300; // タイル
+const BORE_RADIUS = 3;   // タイル(半径)
+const BEAM_TTL = 0.18;   // 秒: ビーム残光の寿命(切り札の一撃として一瞬だが読める長さ)
+let lastBeam: { angle: number; ttl: number } | null = null;
+
+/** チャージ完了→離した瞬間: エイム方向へ地形を貫通破壊し、両キャッシュを無効化する */
+function fire(): void {
+  const aim = renderer.aimAngle; // ライトコーンと同一の角度(=ビーム=破壊方向を保証)
+  const affected = destruction.bore(player.centerX, player.centerY, aim, BORE_LENGTH, BORE_RADIUS, tiles);
+  for (const key of affected) {
+    const [cx, cy] = key.split(',').map(Number);
+    store.invalidate(cx, cy);   // 生成チャンクを破棄→再生成で破壊反映
+    renderer.invalidate(cx, cy); // 焼き込み画像を破棄→クレーターが見えるよう再焼き込み
+  }
+  lastBeam = { angle: aim, ttl: BEAM_TTL };
+}
+
 let frames = 0;
 let simTime = 0;
 
@@ -55,6 +77,11 @@ function update(dt: number): void {
   simTime += dt;
   player.update(input.state, dt, tiles);
   camera.follow(player.centerX, player.centerY, dt);
+  graviton.update(dt, input.fireHeld, fire);
+  if (lastBeam) {
+    lastBeam.ttl -= dt;
+    if (lastBeam.ttl <= 0) lastBeam = null;
+  }
 
   frames++;
   if (frames % EVICT_INTERVAL_FRAMES === 0) {
@@ -77,7 +104,14 @@ const SYSTEM_LABEL: Record<System, string> = {
 function updateHud(): void {
   const altitude = Math.max(0, Math.floor(-(player.body.y + player.body.h)));
   const sys = regionAt(seed, Math.floor(player.centerX), Math.floor(player.body.y)).system;
-  hud.textContent = `高度 ${altitude}m — ${SYSTEM_LABEL[sys]} [seed:${seed}]`;
+  let cannon = `重力子砲 ${graviton.charges}/3`;
+  const r = graviton.chargeRatio;
+  if (r > 0 && r < 1) {
+    // 溜めゲージ(ASCII固定でフォント差異なく確実に表示)
+    const bars = Math.round(r * 4);
+    cannon += ` [${'#'.repeat(bars)}${'-'.repeat(4 - bars)}]`;
+  }
+  hud.textContent = `高度 ${altitude}m — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${cannon}`;
 }
 
 let last = performance.now();
@@ -90,7 +124,11 @@ function frame(now: number): void {
     update(STEP_MS / 1000);
     acc -= STEP_MS;
   }
-  renderer.render(store, camera, player, input.mouseX * dpr, input.mouseY * dpr, simTime);
+  const beam = lastBeam ? { angle: lastBeam.angle, alpha: lastBeam.ttl / BEAM_TTL } : null;
+  renderer.render(store, camera, player, input.mouseX * dpr, input.mouseY * dpr, simTime, {
+    chargeRatio: graviton.chargeRatio,
+    beam,
+  });
   updateHud();
   requestAnimationFrame(frame);
 }

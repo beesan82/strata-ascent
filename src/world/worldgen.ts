@@ -4,6 +4,7 @@ import { networkTileAt, sectorTrunkTileAt } from './network';
 import { hash2, valueNoise2 } from './noise';
 import { stratumAt } from './strata';
 import { CHUNK_SIZE, TILE, type Tile } from './tiles';
+import type { Destruction } from './destruction';
 
 /** 負数でも正しく回る剰余 */
 function mod(n: number, m: number): number {
@@ -60,6 +61,12 @@ export function tileAt(seed: number, x: number, y: number): Tile {
     ?? sectorTrunkTileAt(seed, x, y)
     ?? networkTileAt(seed, x, y);
   return overlay ?? base;
+}
+
+/** 実描画・物理が使う経路。破壊差分を最優先で反映(空なら tileAt と同値) */
+export function tileAtLive(seed: number, x: number, y: number, destruction: Destruction): Tile {
+  if (destruction.isDestroyed(x, y)) return TILE.AIR;
+  return tileAt(seed, x, y);
 }
 
 /** チャンク(64x64)のタイル配列を生成。index = ty * CHUNK_SIZE + tx */
