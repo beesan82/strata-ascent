@@ -7,8 +7,8 @@ function mod(n: number, m: number): number {
   return ((n % m) + m) % m;
 }
 
-/** シード+ワールドタイル座標 → タイル種。純粋関数(同じ入力なら常に同じ出力) */
-export function tileAt(seed: number, x: number, y: number): Tile {
+/** シード+ワールドタイル座標 → 素のノイズ躯体タイル種。純粋関数(同じ入力なら常に同じ出力) */
+export function noiseTileAt(seed: number, x: number, y: number): Tile {
   const s = stratumAt(y);
 
   // 床帯(band): floorSpacing行ごとのまとまり。床行はbandの先頭行
@@ -43,6 +43,20 @@ export function tileAt(seed: number, x: number, y: number): Tile {
   if (isFloorRow && !floorGap) return TILE.SOLID;
 
   return TILE.AIR;
+}
+
+/** 施設オーバーレイ(段階3で実データ実装に差し替え)。施設が無い座標では null */
+const facilityTileAt = (_seed: number, _x: number, _y: number): Tile | null => null;
+
+/**
+ * 最終タイル = 施設オーバーレイ + 素のノイズ躯体。
+ * 不変条件: ノイズが LADDER のタイルは施設で上書きしない(上昇路を保持し到達可能性を守る)。
+ */
+export function tileAt(seed: number, x: number, y: number): Tile {
+  const base = noiseTileAt(seed, x, y);
+  if (base === TILE.LADDER) return base;
+  const f = facilityTileAt(seed, x, y);
+  return f ?? base;
 }
 
 /** チャンク(64x64)のタイル配列を生成。index = ty * CHUNK_SIZE + tx */

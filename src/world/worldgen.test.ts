@@ -3,7 +3,7 @@ import { Player } from '../entities/player';
 import { hash2 } from './noise';
 import { stratumAt } from './strata';
 import { CHUNK_SIZE, TILE } from './tiles';
-import { findSpawn, generateChunk, tileAt } from './worldgen';
+import { findSpawn, generateChunk, noiseTileAt, tileAt } from './worldgen';
 
 describe('generateChunk', () => {
   it('同一シード・同一チャンク座標なら完全に同じ出力(決定論)', () => {
@@ -137,5 +137,26 @@ describe('findSpawn', () => {
     // 足元が最低でも1床帯分(floorSpacing)は上昇できているはず。
     // 旧・中心のみのonLadder判定では自bandの床行で頭打ちになり、これが破綻する。
     expect(maxRise).toBeGreaterThanOrEqual(floorSpacing);
+  });
+});
+
+describe('tileAt 合成(段階2)', () => {
+  it('施設が無い座標では tileAt は noiseTileAt と一致する', () => {
+    for (const [x, y] of [[0, 0], [63, -8], [200, -520], [-40, 130]] as const) {
+      expect(tileAt(42, x, y)).toBe(noiseTileAt(42, x, y));
+    }
+  });
+
+  it('ノイズが LADDER のタイルは tileAt でも必ず LADDER(上昇路保持の不変条件)', () => {
+    let checked = 0;
+    for (let y = -200; y < 0 && checked < 50; y++) {
+      for (let x = 0; x < 512 && checked < 50; x++) {
+        if (noiseTileAt(42, x, y) === TILE.LADDER) {
+          expect(tileAt(42, x, y)).toBe(TILE.LADDER);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 });
