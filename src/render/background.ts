@@ -1,5 +1,41 @@
 import { hash2 } from '../world/noise';
-import type { BiomeBlend, BgLayer } from './biome';
+import { mixHex, type BiomeBlend, type BgLayer } from './biome';
+
+export interface FarSil { kind: 'tower' | 'dome' | 'gantry' | 'ring'; x: number; w: number; h: number; color: string }
+
+const FAR_SLOT = 8000; // 遠景シルエットのスロット間隔(タイル)
+const FAR_FACTOR = 0.006; // 最遠層のカメラ追従率(ごくわずかに動く)。8000タイル級構造が画面約1幅に収まる投影スケール
+
+/** camXtiles を中心に spanTiles 幅の範囲に落ちる遠景シルエットを決定論で返す */
+export function farSilhouettes(seed: number, camXtiles: number, spanTiles: number): FarSil[] {
+  const out: FarSil[] = [];
+  const k0 = Math.floor((camXtiles - spanTiles / 2) / FAR_SLOT) - 1;
+  const k1 = Math.floor((camXtiles + spanTiles / 2) / FAR_SLOT) + 1;
+  for (let k = k0; k <= k1; k++) {
+    if (hash2(seed + 90000, k, 0) > 0.7) continue; // 一部スロットは空
+    const kindR = hash2(seed + 90001, k, 0);
+    const kind = kindR < 0.4 ? 'tower' : kindR < 0.65 ? 'gantry' : kindR < 0.85 ? 'dome' : 'ring';
+    const w = (0.3 + hash2(seed + 90002, k, 0) * 1.4) * FAR_SLOT;
+    const h = (0.5 + hash2(seed + 90003, k, 0) * 2) * FAR_SLOT;
+    const x = k * FAR_SLOT + hash2(seed + 90004, k, 0) * FAR_SLOT;
+    out.push({ kind, x, w, h, color: '#0e141b' });
+  }
+  return out;
+}
+
+export interface RareLandmark { kind: 'colossus' | 'ring' | 'spire'; w: number; h: number }
+
+const LANDMARK_SLOT = 4; // これ×FAR_SLOT ごとに稀少判定
+
+/** 粗いスロットごとに低確率で巨大ランドマークを返す */
+export function rareLandmarkAt(seed: number, slot: number): RareLandmark | null {
+  if (hash2(seed + 91000, slot, 0) > 0.12) return null; // 稀少
+  const r = hash2(seed + 91001, slot, 0);
+  const kind = r < 0.4 ? 'colossus' : r < 0.7 ? 'spire' : 'ring';
+  const w = (2 + hash2(seed + 91002, slot, 0) * 3) * FAR_SLOT;
+  const h = (3 + hash2(seed + 91003, slot, 0) * 4) * FAR_SLOT;
+  return { kind, w, h };
+}
 
 /**
  * バイオーム配色の多層パララックス遠景(決定論的・継ぎ目なし)。
@@ -20,6 +56,9 @@ export class Background {
     ppt: number,
     bb: BiomeBlend,
   ): void {
+    // 最遠層: 遠景の巨大シルエット + 稀少な巨大ランドマーク(近景層より背後)
+    this.farLayer(ctx, camX, camY, w, h, ppt, bb);
+
     const layers = bb.from.bgLayers;
     for (let li = 0; li < layers.length; li++) {
       const L = layers[li];
@@ -35,6 +74,119 @@ export class Background {
   /** 近い層ほど不透明(0.2〜0.45に収める) */
   private alphaFor(base: number, factor: number): number {
     return Math.min(0.45, base * (0.7 + factor));
+  }
+
+  /**
+   * 最遠層。8000タイル級の巨大構造シルエットを極小スケール(≒0.006)で投影する。
+   * 巨大ゆえ画面上でも大きく、しかし距離ゆえパンにほぼ追従しない(圧倒的スケール)。
+   * alphaは0.06〜0.10と非常に淡く、前景の可読性を損なわない。
+   */
+  private farLayer(ctx: CanvasRenderingContext2D, camX: number, camY: number, w: number, h: number, ppt: number, bb: BiomeBlend): void {
+    const scale = FAR_FACTOR * ppt;            // far-tile → px
+    const horizon = h * 0.9;                    // 巨大構造の基部(地平)を画面下寄りに
+    const camYoff = camY * FAR_FACTOR * 0.25 * ppt; // 垂直パララックスはさらに鈍い
+    const tint = mixHex('#0e141b', bb.from.ambientColor, 0.35);
+    ctx.strokeStyle = tint;
+    ctx.fillStyle = tint;
+
+    // --- 稀少な巨大ランドマーク(最背面) ---
+    const coarse = LANDMARK_SLOT * FAR_SLOT;
+    const halfSpan = (w / 2) / scale;           // 画面に載る far-tile 半幅
+    const cs0 = Math.floor((camX - halfSpan) / coarse) - 1;
+    const cs1 = Math.floor((camX + halfSpan) / coarse) + 1;
+    for (let cs = cs0; cs <= cs1; cs++) {
+      const lm = rareLandmarkAt(this.seed, cs);
+      if (!lm) continue;
+      const wx = cs * coarse + coarse / 2;
+      const sx = (wx - camX) * scale + w / 2;
+      const lw = lm.w * scale;
+      const lh = lm.h * scale;
+      ctx.globalAlpha = 0.07;
+      const baseY = horizon - camYoff;
+      const topY = baseY - lh;
+      switch (lm.kind) {
+        case 'colossus': {
+          // 太い基部から細くなる超巨大な塊(台形風)
+          const bw = lw, tw = lw * 0.55;
+          ctx.beginPath();
+          ctx.moveTo(sx - bw / 2, baseY);
+          ctx.lineTo(sx - tw / 2, topY);
+          ctx.lineTo(sx + tw / 2, topY);
+          ctx.lineTo(sx + bw / 2, baseY);
+          ctx.closePath();
+          ctx.fill();
+          break;
+        }
+        case 'spire':
+          // 画面高を大きく越える尖塔
+          ctx.beginPath();
+          ctx.moveTo(sx - lw / 2, baseY);
+          ctx.lineTo(sx, topY);
+          ctx.lineTo(sx + lw / 2, baseY);
+          ctx.closePath();
+          ctx.fill();
+          break;
+        case 'ring': {
+          // 空に浮かぶ巨大環(ストローク)
+          const r = Math.min(lw, lh) / 2;
+          const cy = baseY - lh * 0.45;
+          ctx.lineWidth = Math.max(2, r * 0.08);
+          ctx.beginPath();
+          ctx.arc(sx, cy, r, 0, Math.PI * 2);
+          ctx.stroke();
+          break;
+        }
+      }
+    }
+
+    // --- 遠景の巨大シルエット群 ---
+    const span = w / ppt / FAR_FACTOR + FAR_SLOT * 2;
+    for (const s of farSilhouettes(this.seed, camX, span)) {
+      const sx = (s.x - camX) * scale + w / 2;
+      const sw = s.w * scale;
+      const sh = s.h * scale;
+      if (sx + sw / 2 < -sw || sx - sw / 2 > w + sw) continue; // 画面外は捨てる
+      const baseY = horizon - camYoff;
+      const topY = baseY - sh;
+      ctx.globalAlpha = 0.09;
+      switch (s.kind) {
+        case 'tower':
+          ctx.fillRect(sx - sw / 2, topY, sw, baseY - topY);
+          break;
+        case 'gantry': {
+          // 縦材2本 + 横梁(骨組み塔)
+          const leg = Math.max(2, sw * 0.12);
+          ctx.fillRect(sx - sw / 2, topY, leg, baseY - topY);
+          ctx.fillRect(sx + sw / 2 - leg, topY, leg, baseY - topY);
+          const beams = 6;
+          for (let b = 1; b < beams; b++) {
+            const by = topY + (baseY - topY) * (b / beams);
+            ctx.fillRect(sx - sw / 2, by, sw, leg * 0.6);
+          }
+          break;
+        }
+        case 'dome': {
+          // 半円ドーム(基部から立ち上がる丸い塊)
+          const r = sw / 2;
+          const cy = baseY;
+          ctx.beginPath();
+          ctx.arc(sx, cy, r, Math.PI, Math.PI * 2);
+          ctx.closePath();
+          ctx.fill();
+          break;
+        }
+        case 'ring': {
+          const r = Math.min(sw, sh) / 2;
+          const cy = baseY - sh * 0.4;
+          ctx.lineWidth = Math.max(2, r * 0.1);
+          ctx.beginPath();
+          ctx.arc(sx, cy, r, 0, Math.PI * 2);
+          ctx.stroke();
+          break;
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
   }
 
   /** 縦の巨大塔: 画面全高のバーをスロット単位で配置し水平パララックス */
