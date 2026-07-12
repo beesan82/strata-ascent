@@ -3,7 +3,7 @@ import { Input } from './core/input';
 import { Player } from './entities/player';
 import { Renderer } from './render/renderer';
 import { ChunkStore } from './world/chunks';
-import { stratumAt } from './world/strata';
+import { regionAt, type System } from './world/hierarchy';
 import { CHUNK_SIZE } from './world/tiles';
 import { findSpawn } from './world/worldgen';
 
@@ -65,10 +65,19 @@ function update(dt: number): void {
   }
 }
 
+/** 系統 → 日本語ラベル(配色と同じ地域系統で表示) */
+const SYSTEM_LABEL: Record<System, string> = {
+  water: '水系',
+  power: '電力系',
+  habitation: '居住区',
+  disposal: '廃棄区',
+  foundry: '精錬区',
+};
+
 function updateHud(): void {
   const altitude = Math.max(0, Math.floor(-(player.body.y + player.body.h)));
-  const stratum = stratumAt(player.body.y);
-  hud.textContent = `高度 ${altitude}m — ${stratum.name} [seed:${seed}]`;
+  const sys = regionAt(seed, Math.floor(player.centerX), Math.floor(player.body.y)).system;
+  hud.textContent = `高度 ${altitude}m — ${SYSTEM_LABEL[sys]} [seed:${seed}]`;
 }
 
 let last = performance.now();
