@@ -21,17 +21,21 @@ export class Post {
     this.vignette = v;
   }
 
-  render(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  /** ambientLevel(0..1): 明るいバイオームほどビネットを弱め、グレインは常に控えめ */
+  render(ctx: CanvasRenderingContext2D, w: number, h: number, ambientLevel: number): void {
     this.frame++;
     const grain = this.grains[this.frame % this.grains.length];
-    ctx.globalAlpha = 0.05;
+    // グレインは明るい画面で目立つので従来の半分に抑える。
+    ctx.globalAlpha = 0.025;
     for (let y = 0; y < h; y += grain.height) {
       for (let x = 0; x < w; x += grain.width) {
         ctx.drawImage(grain, x, y);
       }
     }
-    ctx.globalAlpha = 1;
+    // ビネットは暗いバイオームほど強く、明るい帯(大空洞帯 .72)ではほぼ消す。
+    ctx.globalAlpha = Math.max(0, Math.min(1, 1 - ambientLevel));
     if (this.vignette) ctx.drawImage(this.vignette, 0, 0);
+    ctx.globalAlpha = 1;
   }
 }
 

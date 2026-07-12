@@ -74,12 +74,12 @@ export class Renderer {
     const px = (player.centerX - cam.x) * ppt + w / 2;
     const py = (player.centerY - cam.y) * ppt + h / 2;
     const angle = Math.atan2(mouseY - py, mouseX - px);
-    drawPlayer(ctx, px, py, ppt, player.facing, player.walkPhase, angle);
+    drawPlayer(ctx, px, py, ppt, player.facing, player.walkPhase, angle, bb.ambientColor);
 
     // バイオーム環境光+プレイヤー補助光
     this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, bb.ambientLevel);
 
     // ポストプロセス(グレイン+ビネット)
-    this.post.render(ctx, w, h);
+    this.post.render(ctx, w, h, bb.ambientLevel);
   }
 }
