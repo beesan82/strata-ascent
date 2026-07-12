@@ -4,7 +4,6 @@ import type { ChunkStore } from '../world/chunks';
 import { CHUNK_SIZE } from '../world/tiles';
 import { Background } from './background';
 import { ChunkBaker } from './chunkbake';
-import { generateAtlas } from './tileset/generate';
 import { Lighting } from './lighting';
 import { biomeBlend } from './biome';
 import { drawPlayer } from './playerSprite';
@@ -25,11 +24,7 @@ export class Renderer {
     seed: number,
   ) {
     this.ctx = canvas.getContext('2d')!;
-    const atlas = generateAtlas({
-      fillDark: '#1a2026', fillMid: '#2b343d', fillLight: '#3d4a55',
-      edge: '#5b6b78', line: '#12171b',
-    });
-    this.baker = new ChunkBaker(seed, atlas);
+    this.baker = new ChunkBaker(seed);
     this.background = new Background(seed);
   }
 
@@ -54,8 +49,11 @@ export class Renderer {
     ctx.fillStyle = '#050607';
     ctx.fillRect(0, 0, w, h);
 
-    // パララックス遠景(闇の奥の巨大構造)
-    this.background.render(ctx, cam.x, cam.y, w, h, ppt);
+    // バイオーム混合(背景・環境光で共有)
+    const bb = biomeBlend(player.body.y);
+
+    // パララックス遠景(バイオーム配色の多層構造)
+    this.background.render(ctx, cam.x, cam.y, w, h, ppt, bb);
 
     // 可視チャンクの焼き込み画像を貼る
     const chunkPx = CHUNK_SIZE * ppt;
@@ -79,7 +77,6 @@ export class Renderer {
     drawPlayer(ctx, px, py, ppt, player.facing, player.walkPhase, angle);
 
     // バイオーム環境光+プレイヤー補助光
-    const bb = biomeBlend(player.body.y);
     this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, bb.ambientLevel);
 
     // ポストプロセス(グレイン+ビネット)

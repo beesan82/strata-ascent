@@ -2,17 +2,42 @@ import type { ChunkStore } from '../world/chunks';
 import { CHUNK_SIZE, TILE } from '../world/tiles';
 import { blobId } from './tileset/autotile';
 import type { Atlas } from './tileset/atlas';
-import { decorateChunk, type DecorOp } from './decor';
+import { generateAtlas } from './tileset/generate';
+import { stratumIndexAt } from '../world/strata';
+import { BIOMES } from './biome';
+import { decorateChunk, PALETTE, type DecorOp } from './decor';
 
 /** 焼き込み解像度(px/タイル)。表示は拡縮されるが16pxあれば線は読める */
 export const BAKE_PPT = 16;
+
+/**
+ * 物理装飾(surface以外)の元色となるPALETTE値の集合。
+ * これらの色で描かれる装飾はチャンクのバイオームaccent色へ置換して塗り分ける。
+ */
+const ACCENT_SOURCE_COLORS: ReadonlySet<string> = new Set([
+  PALETTE.rail, PALETTE.rung, PALETTE.hoop, PALETTE.pipe, PALETTE.pipeThin,
+  PALETTE.bracket, PALETTE.cable, PALETTE.wire, PALETTE.grill,
+  PALETTE.debris, PALETTE.debrisLine,
+]);
 
 /** チャンク1枚を一度だけオフスクリーンCanvasへ焼き込み、以後はdrawImageで貼る */
 export class ChunkBaker {
   private cache = new Map<string, HTMLCanvasElement>();
   private patterns = new Map<string, CanvasPattern>();
+  /** バイオームindex → タイルアトラス(生成は高価なのでキャッシュ) */
+  private atlasByBiome = new Map<number, Atlas>();
 
-  constructor(private seed: number, private atlas: Atlas) {}
+  constructor(private seed: number) {}
+
+  /** バイオームindexに対応する色付きアトラスを取得(なければ生成してキャッシュ) */
+  private atlasFor(biomeIdx: number): Atlas {
+    let atlas = this.atlasByBiome.get(biomeIdx);
+    if (!atlas) {
+      atlas = generateAtlas(BIOMES[biomeIdx].palette);
+      this.atlasByBiome.set(biomeIdx, atlas);
+    }
+    return atlas;
+  }
 
   get size(): number {
     return this.cache.size;
@@ -51,6 +76,14 @@ export class ChunkBaker {
     const bx = cx * CHUNK_SIZE;
     const by = cy * CHUNK_SIZE;
 
+    // チャンク中心のワールドyでバイオームを決める。1チャンク=64タイルは
+    // バイオーム帯(500タイル)に十分収まるため、境界をまたぐ1チャンクだけが
+    // 全タイルで片側のバイオーム色になるが、ライティングで視覚的に馴染むため許容する。
+    const centerY = cy * CHUNK_SIZE + CHUNK_SIZE / 2;
+    const bIdx = stratumIndexAt(centerY) % BIOMES.length;
+    const atlas = this.atlasFor(bIdx);
+    const biome = BIOMES[bIdx];
+
     // ベース: SOLIDタイルを8近傍から求めたブロブIDでオートタイル描画する。
     // 近傍参照はstore.tileAt(純粋)経由でチャンクをまたいでも継ぎ目なく一致する。
     for (let ty = 0; ty < CHUNK_SIZE; ty++) {
@@ -68,20 +101,22 @@ export class ChunkBaker {
           sw: store.tileAt(wx - 1, wy + 1) === TILE.SOLID,
           nw: store.tileAt(wx - 1, wy - 1) === TILE.SOLID,
         };
-        const r = this.atlas.rect(blobId(nb));
+        const r = atlas.rect(blobId(nb));
         ctx.drawImage(
-          this.atlas.source,
+          atlas.source,
           r.sx, r.sy, r.sw, r.sh,
           tx * BAKE_PPT, ty * BAKE_PPT, BAKE_PPT + 1, BAKE_PPT + 1,
         );
       }
     }
 
-    // 装飾(アトラスが描く表面線画=surfaceタグ付きはスキップ、物理装飾は残す)
+    // 装飾(アトラスが描く表面線画=surfaceタグ付きはスキップ、物理装飾は残す)。
+    // 物理装飾のうちPALETTEのaccent系色で描かれるものはバイオームaccentへ置換し、
+    // 配管・レール・瓦礫などの物理ディテールを階層ごとの色調に統一する。
     ctx.lineCap = 'round';
     for (const op of decorateChunk(this.seed, cx, cy)) {
       if (op.surface) continue;
-      this.draw(ctx, op);
+      this.draw(ctx, ACCENT_SOURCE_COLORS.has(op.color) ? { ...op, color: biome.accent } : op);
     }
     return canvas;
   }
