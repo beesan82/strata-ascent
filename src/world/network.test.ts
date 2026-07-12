@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { conduitAt, districtHub, hasConduit, networkTileAt } from './network';
-import { regionAt, DISTRICT_SIZE, REGION_SIZE } from './hierarchy';
+import { conduitAt, districtHub, hasConduit, networkTileAt, sectorTrunkAt, hasTrunk } from './network';
+import { regionAt, sectorAt, DISTRICT_SIZE, REGION_SIZE, SECTOR_SIZE } from './hierarchy';
 import { TILE } from './tiles';
 
 function waterRegionOrigin(seed: number): { rwx: number; rwy: number } {
@@ -118,5 +118,46 @@ describe('networkTileAt', () => {
     expect(kinds.has(TILE.SOLID)).toBe(true);
     expect(kinds.has(TILE.LADDER)).toBe(true);
     expect(kinds.has(TILE.AIR)).toBe(true);
+  });
+});
+
+describe('hasTrunk(順不同ペア対称)', () => {
+  it('A↔B と B↔A で同じ', () => {
+    expect(hasTrunk(42, 3, 4, 4, 4)).toBe(hasTrunk(42, 4, 4, 3, 4));
+  });
+  it('接続あり/なしが両方出る', () => {
+    let yes = 0, no = 0;
+    for (let i = 0; i < 60; i++) { if (hasTrunk(42, i, 0, i + 1, 0)) yes++; else no++; }
+    expect(yes).toBeGreaterThan(0); expect(no).toBeGreaterThan(0);
+  });
+});
+
+describe('sectorTrunkAt', () => {
+  it('決定論', () => {
+    expect(sectorTrunkAt(42, 50000, -30000)).toEqual(sectorTrunkAt(42, 50000, -30000));
+  });
+  it('接続を持つセクターのハブ付近は幹線が通る', () => {
+    for (let s = 0; s < 20; s++) {
+      const hasAny = hasTrunk(42, s, 0, s + 1, 0) || hasTrunk(42, s, 0, s - 1, 0) ||
+                     hasTrunk(42, s, 0, s, 1) || hasTrunk(42, s, 0, s, -1);
+      if (!hasAny) continue;
+      const sec = sectorAt(42, s * SECTOR_SIZE, 0);
+      expect(sectorTrunkAt(42, s * SECTOR_SIZE + sec.hubX, sec.hubY)).not.toBeNull();
+      return;
+    }
+    throw new Error('接続を持つセクターが見つからない');
+  });
+  it('幹線の両端一致(セクター境界を跨いで連続する点が存在)', () => {
+    for (let s = 0; s < 20; s++) {
+      if (!hasTrunk(42, s, 0, s + 1, 0)) continue;
+      const edgeX = (s + 1) * SECTOR_SIZE;
+      let meet = 0;
+      for (let y = 0; y < SECTOR_SIZE; y += 4) {
+        if (sectorTrunkAt(42, edgeX - 1, y) && sectorTrunkAt(42, edgeX, y)) meet++;
+      }
+      expect(meet).toBeGreaterThan(0);
+      return;
+    }
+    throw new Error('東接続を持つセクターが見つからない');
   });
 });
