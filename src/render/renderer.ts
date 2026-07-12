@@ -5,7 +5,7 @@ import { CHUNK_SIZE } from '../world/tiles';
 import { Background } from './background';
 import { ChunkBaker } from './chunkbake';
 import { Lighting } from './lighting';
-import { biomeBlend } from './biome';
+import { biomeBlend, mixHex } from './biome';
 import { drawPlayer } from './playerSprite';
 import { Post } from './post';
 
@@ -46,11 +46,19 @@ export class Renderer {
     const ppt = w / VIEW_TILES_X;
     const ctx = this.ctx;
 
-    ctx.fillStyle = '#050607';
-    ctx.fillRect(0, 0, w, h);
-
     // バイオーム混合(背景・環境光で共有)
     const bb = biomeBlend(player.body.y);
+
+    // 背景(最初のフィル): 開放空間もバイオーム環境色でわずかに持ち上げる。
+    // ambientLevelが高いほど明るく色づき(大空洞帯は暗青の空気に)、
+    // 低いバイオーム(最下層)はほぼ暗いまま。SOLIDタイルより必ず暗くしてシルエットを保つ。
+    // 上を少し明るく下を暗くする縦グラデで開放空間に奥行きを与える。
+    const lit = mixHex('#05070a', mixHex(bb.ambientColor, '#000000', 0.5), bb.ambientLevel);
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, mixHex(lit, '#ffffff', 0.08 * bb.ambientLevel));
+    grad.addColorStop(1, mixHex(lit, '#000000', 0.35));
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
 
     // パララックス遠景(バイオーム配色の多層構造)
     this.background.render(ctx, cam.x, cam.y, w, h, ppt, bb);
