@@ -62,18 +62,39 @@ describe('facilityTileAt', () => {
     expect(maxRun).toBeGreaterThan(ROOM_SIZE * 0.3);
   });
 
-  it('水系統でない present room セルは null を返す(段階2は水のみ実タイル化)', () => {
-    const { rmx, rmy } = findRoomOfSystem(42, 'power');
-    for (const [ox, oy] of [[64, 64], [20, 100], [100, 20]] as const) {
-      expect(facilityTileAt(42, rmx * ROOM_SIZE + ox, rmy * ROOM_SIZE + oy)).toBeNull();
-    }
-  });
-
   it('決定論(再現): room内の複数点が毎回同じ', () => {
     const { rmx, rmy } = findWaterRoom(42);
     for (const [ox, oy] of [[70, 70], [10, 10]] as const) {
       const x = rmx * ROOM_SIZE + ox, y = rmy * ROOM_SIZE + oy;
       expect(facilityTileAt(42, x, y)).toBe(facilityTileAt(42, x, y));
     }
+  });
+});
+
+describe('facilityTileAt 全系統(段階4)', () => {
+  it('どの系統の present room でもチャンバーが生成される(SOLID/AIR/LADDER/null が出る)', () => {
+    for (const sys of ['water', 'power', 'habitation', 'disposal', 'foundry'] as const) {
+      const { rmx, rmy } = findRoomOfSystem(42, sys);
+      const kinds = new Set<number | null>();
+      for (let ly = 0; ly < ROOM_SIZE; ly += 2) {
+        for (let lx = 0; lx < ROOM_SIZE; lx += 2) {
+          kinds.add(facilityTileAt(42, rmx * ROOM_SIZE + lx, rmy * ROOM_SIZE + ly));
+        }
+      }
+      expect(kinds.has(TILE.SOLID)).toBe(true);
+      expect(kinds.has(TILE.AIR)).toBe(true);
+      expect(kinds.has(TILE.LADDER)).toBe(true);
+      expect(kinds.has(null)).toBe(true);
+    }
+  });
+
+  it('不在(present=false)の room は null', () => {
+    for (let rmx = 0; rmx < 2000; rmx++) {
+      if (!roomAt(42, rmx * ROOM_SIZE, 0).present) {
+        expect(facilityTileAt(42, rmx * ROOM_SIZE + 64, 64)).toBeNull();
+        return;
+      }
+    }
+    throw new Error('present=false の room が見つからない');
   });
 });

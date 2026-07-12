@@ -1,13 +1,12 @@
 import { hash2 } from './noise';
-import { regionAt, roomAt, ROOM_SIZE } from './hierarchy';
+import { roomAt, ROOM_SIZE } from './hierarchy';
 import { TILE, type Tile } from './tiles';
 
 /**
- * 施設タイル(段階2: 水系統の貯水池チャンバーのみ実タイル化)。
+ * 施設タイル(段階4: 全系統の present room をチャンバー化)。
  * 該当しなければ null(呼び出し側=tileAtがノイズ躯体にフォールバック)。純粋関数。
  */
 export function facilityTileAt(seed: number, x: number, y: number): Tile | null {
-  if (regionAt(seed, x, y).system !== 'water') return null;
   const room = roomAt(seed, x, y);
   if (!room.present) return null;
 
@@ -28,8 +27,10 @@ export function facilityTileAt(seed: number, x: number, y: number): Tile | null 
   const WALL = 2;
   const onWall = lx < x0 + WALL || lx >= x1 - WALL || ly < y0 + WALL || ly >= y1 - WALL;
 
-  const ladderX = x0 + WALL + 1 + Math.floor(hash2(vs, 5, 0) * (x1 - x0 - 2 * WALL - 2));
-  if (lx === ladderX && ly >= y0 + WALL && ly < y1 - WALL) {
+  // 内部の垂直ラダーシャフトは2列幅。単一列だと粗いサンプリング(偶数列のみ走査等)で
+  // 取りこぼしうるため、連続2列にして必ず偶奇どちらの列も含むようにする(縦移動保証)。
+  const ladderX = x0 + WALL + 1 + Math.floor(hash2(vs, 5, 0) * (x1 - x0 - 2 * WALL - 3));
+  if ((lx === ladderX || lx === ladderX + 1) && ly >= y0 + WALL && ly < y1 - WALL) {
     return TILE.LADDER;
   }
 
