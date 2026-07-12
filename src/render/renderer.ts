@@ -96,8 +96,11 @@ export class Renderer {
     // ポストプロセス(グレイン+ビネット)
     this.post.render(ctx, w, h, bb.ambientLevel);
 
-    if (this.debugMode === 'hierarchy') {
-      drawHierarchyDebug(ctx, cam, this.seed, w, h, ppt);
+    if (this.debugMode && this.debugMode.startsWith('hierarchy')) {
+      // 'hierarchy' または 'hierarchy:<tilesAcross>'。既定は広域俯瞰(40000タイル)。
+      const n = Number(this.debugMode.split(':')[1]);
+      const tilesAcross = Number.isFinite(n) && n > 0 ? n : 40000;
+      drawHierarchyDebug(ctx, cam, this.seed, w, h, tilesAcross);
     }
   }
 }
