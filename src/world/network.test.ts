@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { conduitAt, districtHub, hasConduit } from './network';
+import { conduitAt, districtHub, hasConduit, networkTileAt } from './network';
 import { regionAt, DISTRICT_SIZE, REGION_SIZE } from './hierarchy';
+import { TILE } from './tiles';
 
 function waterRegionOrigin(seed: number): { rwx: number; rwy: number } {
   for (let r = 0; r < 24; r++) {
@@ -63,4 +64,42 @@ describe('conduitAt 両端一致', () => {
   it('決定論', () => {
     expect(conduitAt(42, 5000, -3000)).toEqual(conduitAt(42, 5000, -3000));
   });
+});
+
+describe('networkTileAt', () => {
+  it('水系統でない region では null(段階3スコープ)', () => {
+    for (let r = 0; r < 24; r++) {
+      const wx = r * REGION_SIZE;
+      if (regionAt(42, wx, 0).system !== 'water') {
+        expect(networkTileAt(42, wx + 500, 500)).toBeNull();
+        return;
+      }
+    }
+  });
+
+  it('水系統のコリドー上は role に応じた TILE、外は null', () => {
+    const { rwx, rwy } = waterRegionOrigin(42);
+    const kinds = new Set<number | null>();
+    const bx = Math.floor(rwx / DISTRICT_SIZE), by = Math.floor(rwy / DISTRICT_SIZE);
+    for (let dyi = 0; dyi < 8; dyi++) {
+      for (let dxi = 0; dxi < 8; dxi++) {
+        const dx = bx + dxi, dy = by + dyi;
+        for (let ly = 0; ly < DISTRICT_SIZE; ly += 3) {
+          for (let lx = 0; lx < DISTRICT_SIZE; lx += 3) {
+            const wx = dx * DISTRICT_SIZE + lx, wy = dy * DISTRICT_SIZE + ly;
+            const c = conduitAt(42, wx, wy);
+            const t = networkTileAt(42, wx, wy);
+            if (!c) continue;
+            if (c.role === 'floor') expect(t).toBe(TILE.SOLID);
+            if (c.role === 'vertical') expect(t).toBe(TILE.LADDER);
+            if (c.role === 'inside') expect(t).toBe(TILE.AIR);
+            if (t !== null) kinds.add(t);
+          }
+        }
+      }
+    }
+    expect(kinds.has(TILE.SOLID)).toBe(true);
+    expect(kinds.has(TILE.LADDER)).toBe(true);
+    expect(kinds.has(TILE.AIR)).toBe(true);
+  }, 60000);
 });

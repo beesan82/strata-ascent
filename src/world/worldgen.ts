@@ -1,4 +1,5 @@
 import { facilityTileAt } from './facility';
+import { networkTileAt } from './network';
 import { hash2, valueNoise2 } from './noise';
 import { stratumAt } from './strata';
 import { CHUNK_SIZE, TILE, type Tile } from './tiles';
@@ -53,8 +54,8 @@ export function noiseTileAt(seed: number, x: number, y: number): Tile {
 export function tileAt(seed: number, x: number, y: number): Tile {
   const base = noiseTileAt(seed, x, y);
   if (base === TILE.LADDER) return base;
-  const f = facilityTileAt(seed, x, y);
-  return f ?? base;
+  const overlay = facilityTileAt(seed, x, y) ?? networkTileAt(seed, x, y);
+  return overlay ?? base;
 }
 
 /** チャンク(64x64)のタイル配列を生成。index = ty * CHUNK_SIZE + tx */
