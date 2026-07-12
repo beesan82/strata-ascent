@@ -3,7 +3,8 @@ import { Player } from '../entities/player';
 import { hash2 } from './noise';
 import { stratumAt } from './strata';
 import { CHUNK_SIZE, TILE } from './tiles';
-import { findSpawn, generateChunk, noiseTileAt, tileAt } from './worldgen';
+import { findSpawn, generateChunk, noiseTileAt, tileAt, tileAtLive } from './worldgen';
+import { Destruction } from './destruction';
 
 describe('generateChunk', () => {
   it('同一シード・同一チャンク座標なら完全に同じ出力(決定論)', () => {
@@ -196,5 +197,24 @@ describe('段階4b 統合', () => {
       const { x, y } = findSpawn(seed);
       expect(tileAt(seed, Math.floor(x), Math.floor(y))).not.toBe(TILE.SOLID);
     }
+  });
+});
+
+describe('tileAtLive(破壊差分込み)', () => {
+  it('破壊ストアが空なら tileAt と完全一致(回帰なし)', () => {
+    const d = new Destruction();
+    for (const [x, y] of [[0, 0], [63, -8], [200, -520], [-40, 130]] as const) {
+      expect(tileAtLive(42, x, y, d)).toBe(tileAt(42, x, y));
+    }
+  });
+  it('破壊された座標は必ず AIR(生成が何であれ)', () => {
+    const d = new Destruction();
+    // SOLID なタイルを探して破壊
+    let found = false;
+    for (let y = -50; y < 0 && !found; y++)
+      for (let x = 0; x < 200 && !found; x++)
+        if (tileAt(42, x, y) === TILE.SOLID) { d.bore(x, y, 0, 0, 0, (ax, ay) => tileAt(42, ax, ay)); found = true;
+          expect(tileAtLive(42, x, y, d)).toBe(TILE.AIR); }
+    expect(found).toBe(true);
   });
 });

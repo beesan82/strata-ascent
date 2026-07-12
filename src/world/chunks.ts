@@ -1,11 +1,12 @@
-import { CHUNK_SIZE, type Tile } from './tiles';
+import { CHUNK_SIZE, TILE, type Tile } from './tiles';
+import type { Destruction } from './destruction';
 import { generateChunk } from './worldgen';
 
 /** チャンクの遅延生成・キャッシュ・破棄。ワールドへの唯一のアクセス窓口 */
 export class ChunkStore {
   private chunks = new Map<string, Uint8Array>();
 
-  constructor(readonly seed: number) {}
+  constructor(readonly seed: number, private destruction?: Destruction) {}
 
   get size(): number {
     return this.chunks.size;
@@ -16,9 +17,23 @@ export class ChunkStore {
     let chunk = this.chunks.get(key);
     if (!chunk) {
       chunk = generateChunk(this.seed, cx, cy);
+      if (this.destruction) this.applyDestruction(chunk, cx, cy);
       this.chunks.set(key, chunk);
     }
     return chunk;
+  }
+
+  private applyDestruction(chunk: Uint8Array, cx: number, cy: number): void {
+    const base = cx * CHUNK_SIZE;
+    const baseY = cy * CHUNK_SIZE;
+    for (let ty = 0; ty < CHUNK_SIZE; ty++)
+      for (let tx = 0; tx < CHUNK_SIZE; tx++)
+        if (this.destruction!.isDestroyed(base + tx, baseY + ty)) chunk[ty * CHUNK_SIZE + tx] = TILE.AIR;
+  }
+
+  /** キャッシュから該当チャンクを削除(次回getChunkで再生成→破壊適用) */
+  invalidate(cx: number, cy: number): void {
+    this.chunks.delete(`${cx},${cy}`);
   }
 
   /** ワールドタイル座標でタイルを引く(必要なチャンクは自動生成) */
