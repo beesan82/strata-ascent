@@ -10,6 +10,7 @@ const GAME_KEYS = new Set([
   'KeyW',
   'KeyS',
   'Space',
+  'KeyF',
 ]);
 
 /** キーボード・マウス状態の集約。updateループから同期的に読む */
@@ -40,5 +41,9 @@ export class Input {
       up: this.keys.has('ArrowUp') || this.keys.has('KeyW'),
       down: this.keys.has('ArrowDown') || this.keys.has('KeyS'),
     };
+  }
+
+  get fireHeld(): boolean {
+    return this.keys.has('KeyF');
   }
 }
