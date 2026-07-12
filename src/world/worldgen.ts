@@ -1,3 +1,4 @@
+import { facilityTileAt } from './facility';
 import { hash2, valueNoise2 } from './noise';
 import { stratumAt } from './strata';
 import { CHUNK_SIZE, TILE, type Tile } from './tiles';
@@ -44,9 +45,6 @@ export function noiseTileAt(seed: number, x: number, y: number): Tile {
 
   return TILE.AIR;
 }
-
-/** 施設オーバーレイ(段階3で実データ実装に差し替え)。施設が無い座標では null */
-const facilityTileAt = (_seed: number, _x: number, _y: number): Tile | null => null;
 
 /**
  * 最終タイル = 施設オーバーレイ + 素のノイズ躯体。

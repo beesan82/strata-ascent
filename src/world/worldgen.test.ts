@@ -160,3 +160,25 @@ describe('tileAt 合成(段階2)', () => {
     expect(checked).toBeGreaterThan(0);
   });
 });
+
+describe('施設統合後の到達可能性', () => {
+  it('ノイズLADDER保持: 施設領域でもノイズの梯子は残る(既存の上昇保証)', () => {
+    let checked = 0;
+    for (let y = -400; y < 0 && checked < 80; y++) {
+      for (let x = 0; x < 1024 && checked < 80; x++) {
+        if (noiseTileAt(42, x, y) === TILE.LADDER) {
+          expect(tileAt(42, x, y)).toBe(TILE.LADDER);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it('findSpawn はSOLIDの中ではない(施設統合後も安全)', () => {
+    for (const seed of [1, 42, 20260711]) {
+      const { x, y } = findSpawn(seed);
+      expect(tileAt(seed, Math.floor(x), Math.floor(y))).not.toBe(TILE.SOLID);
+    }
+  });
+});
