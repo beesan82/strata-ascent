@@ -56,6 +56,11 @@ export class ChunkBaker {
     return canvas;
   }
 
+  /** 指定チャンクの焼き込み画像を破棄(次回getで再焼き込み)。ChunkStore.invalidateと対で呼ぶ */
+  invalidate(cx: number, cy: number): void {
+    this.cache.delete(`${cx},${cy}`);
+  }
+
   /** ChunkStoreのevictFarFromと同じ規則でキャッシュを破棄する(main側で対で呼ぶ) */
   evictFarFrom(cx: number, cy: number, radius: number): void {
     for (const key of this.cache.keys()) {
