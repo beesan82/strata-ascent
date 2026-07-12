@@ -76,3 +76,49 @@ describe('regionAt', () => {
     expect(seen.size).toBeGreaterThan(1);
   });
 });
+
+import { sectorAt, districtAt, roomAt, FACILITY_BY_SYSTEM } from './hierarchy';
+
+describe('sectorAt', () => {
+  it('決定論、セル一貫性、地域の system を継承', () => {
+    const s = sectorAt(42, 5000, -3000);
+    expect(sectorAt(42, 5000, -3000)).toEqual(s);
+    expect(s.system).toBe(regionAt(42, 5000, -3000).system);
+    expect(s.hubX).toBeGreaterThanOrEqual(0);
+    expect(s.hubX).toBeLessThan(SECTOR_SIZE);
+    expect(s.hubY).toBeGreaterThanOrEqual(0);
+    expect(s.hubY).toBeLessThan(SECTOR_SIZE);
+  });
+});
+
+describe('districtAt', () => {
+  it('決定論、facilityType はセクター系統の施設集合のいずれか', () => {
+    const d = districtAt(42, 5000, -3000);
+    expect(districtAt(42, 5000, -3000)).toEqual(d);
+    const sys = regionAt(42, 5000, -3000).system;
+    expect(FACILITY_BY_SYSTEM[sys]).toContain(d.facilityType);
+    expect(['active', 'ruined', 'sealed']).toContain(d.state);
+  });
+});
+
+describe('roomAt', () => {
+  it('決定論、present は真偽、present時は type と variantSeed と decay を持つ', () => {
+    const r = roomAt(42, 5000, -3000);
+    expect(roomAt(42, 5000, -3000)).toEqual(r);
+    expect(typeof r.present).toBe('boolean');
+    if (r.present) {
+      expect(typeof r.type).toBe('string');
+      expect(r.decay).toBeGreaterThanOrEqual(0);
+      expect(r.decay).toBeLessThanOrEqual(1);
+    }
+  });
+  it('広域で present の部屋が一定割合存在する(全部空でも全部埋めでもない)', () => {
+    let present = 0;
+    const N = 400;
+    for (let i = 0; i < N; i++) {
+      if (roomAt(42, i * ROOM_SIZE, (i % 7) * ROOM_SIZE).present) present++;
+    }
+    expect(present).toBeGreaterThan(N * 0.1);
+    expect(present).toBeLessThan(N * 0.9);
+  });
+});

@@ -52,3 +52,102 @@ export function regionAt(seed: number, x: number, y: number): Region {
   }
   return r;
 }
+
+/** 系統ごとの施設タイプ集合 */
+export const FACILITY_BY_SYSTEM: Record<System, string[]> = {
+  water: ['pump', 'filter', 'tank'],
+  power: ['substation', 'battery', 'control'],
+  habitation: ['dwelling', 'corridor', 'hall'],
+  disposal: ['compactor', 'silo'],
+  foundry: ['smelter', 'caster'],
+};
+
+export interface Sector {
+  sx: number;
+  sy: number;
+  system: System;
+  hubX: number; // セクター内相対 [0,SECTOR_SIZE)
+  hubY: number;
+}
+
+const sectorCache = new Map<string, Sector>();
+
+export function sectorAt(seed: number, x: number, y: number): Sector {
+  const sx = cellOf(x, SECTOR_SIZE);
+  const sy = cellOf(y, SECTOR_SIZE);
+  const key = `${seed},${sx},${sy}`;
+  let s = sectorCache.get(key);
+  if (!s) {
+    const system = regionAt(seed, x, y).system;
+    const hubX = Math.floor(cellHash(seed, sx, sy, 21) * SECTOR_SIZE);
+    const hubY = Math.floor(cellHash(seed, sx, sy, 22) * SECTOR_SIZE);
+    s = { sx, sy, system, hubX, hubY };
+    sectorCache.set(key, s);
+  }
+  return s;
+}
+
+export interface District {
+  dx: number;
+  dy: number;
+  facilityType: string;
+  state: 'active' | 'ruined' | 'sealed';
+}
+
+const STATE_TABLE = [
+  { v: 'active' as const, w: 5 },
+  { v: 'ruined' as const, w: 3 },
+  { v: 'sealed' as const, w: 1 },
+];
+
+const districtCache = new Map<string, District>();
+
+export function districtAt(seed: number, x: number, y: number): District {
+  const dx = cellOf(x, DISTRICT_SIZE);
+  const dy = cellOf(y, DISTRICT_SIZE);
+  const key = `${seed},${dx},${dy}`;
+  let d = districtCache.get(key);
+  if (!d) {
+    const system = regionAt(seed, x, y).system;
+    const facilities = FACILITY_BY_SYSTEM[system];
+    const facilityType =
+      facilities[Math.min(facilities.length - 1, Math.floor(cellHash(seed, dx, dy, 31) * facilities.length))];
+    const state = weighted(STATE_TABLE, cellHash(seed, dx, dy, 32));
+    d = { dx, dy, facilityType, state };
+    districtCache.set(key, d);
+  }
+  return d;
+}
+
+export interface Room {
+  rmx: number;
+  rmy: number;
+  present: boolean;
+  type: string;
+  variantSeed: number;
+  decay: number;
+}
+
+const roomCache = new Map<string, Room>();
+
+export function roomAt(seed: number, x: number, y: number): Room {
+  const rmx = cellOf(x, ROOM_SIZE);
+  const rmy = cellOf(y, ROOM_SIZE);
+  const key = `${seed},${rmx},${rmy}`;
+  let r = roomCache.get(key);
+  if (!r) {
+    const d = districtAt(seed, x, y);
+    const density = d.state === 'active' ? 0.6 : d.state === 'ruined' ? 0.4 : 0.2;
+    const present = cellHash(seed, rmx, rmy, 41) < density;
+    const type = present ? d.facilityType : '';
+    const variantSeed = Math.floor(cellHash(seed, rmx, rmy, 42) * 0xffffff);
+    const decay = present ? clamp01(cellHash(seed, rmx, rmy, 43) + (d.state === 'ruined' ? 0.3 : 0)) : 0;
+    r = { rmx, rmy, present, type, variantSeed, decay };
+    roomCache.set(key, r);
+  }
+  return r;
+}
+
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
