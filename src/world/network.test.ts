@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conduitAt, districtHub, hasConduit, networkTileAt, sectorTrunkAt, hasTrunk } from './network';
+import { conduitAt, districtHub, hasConduit, networkTileAt, sectorTrunkAt, sectorTrunkTileAt, hasTrunk } from './network';
 import { regionAt, sectorAt, DISTRICT_SIZE, REGION_SIZE, SECTOR_SIZE } from './hierarchy';
 import { TILE } from './tiles';
 
@@ -159,5 +159,22 @@ describe('sectorTrunkAt', () => {
       return;
     }
     throw new Error('東接続を持つセクターが見つからない');
+  });
+});
+
+describe('sectorTrunkTileAt', () => {
+  it('決定論、幹線上は role に応じた TILE、外は null', () => {
+    // 接続を持つセクターのハブで幹線タイルが出る
+    for (let s = 0; s < 20; s++) {
+      const hasAny = hasTrunk(42, s, 0, s + 1, 0) || hasTrunk(42, s, 0, s - 1, 0) ||
+                     hasTrunk(42, s, 0, s, 1) || hasTrunk(42, s, 0, s, -1);
+      if (!hasAny) continue;
+      const sec = sectorAt(42, s * SECTOR_SIZE, 0);
+      const t = sectorTrunkTileAt(42, s * SECTOR_SIZE + sec.hubX, sec.hubY);
+      expect([TILE.SOLID, TILE.AIR, TILE.LADDER]).toContain(t);
+      expect(sectorTrunkTileAt(42, s * SECTOR_SIZE + sec.hubX, sec.hubY)).toBe(t);
+      return;
+    }
+    throw new Error('接続セクターなし');
   });
 });

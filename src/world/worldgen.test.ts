@@ -182,3 +182,19 @@ describe('施設統合後の到達可能性', () => {
     }
   });
 });
+
+describe('段階4b 統合', () => {
+  it('ノイズLADDER保持は維持', () => {
+    let checked = 0;
+    for (let y = -400; y < 0 && checked < 60; y++)
+      for (let x = 0; x < 1024 && checked < 60; x++)
+        if (noiseTileAt(42, x, y) === TILE.LADDER) { expect(tileAt(42, x, y)).toBe(TILE.LADDER); checked++; }
+    expect(checked).toBeGreaterThan(0);
+  });
+  it('findSpawn は SOLID の中でない', () => {
+    for (const seed of [1, 42, 20260711]) {
+      const { x, y } = findSpawn(seed);
+      expect(tileAt(seed, Math.floor(x), Math.floor(y))).not.toBe(TILE.SOLID);
+    }
+  });
+});

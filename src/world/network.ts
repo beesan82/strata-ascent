@@ -140,6 +140,15 @@ export function sectorTrunkAt(seed: number, x: number, y: number): Conduit | nul
   return corridorAt(seed, x, y, SECTOR_SPEC);
 }
 
+/** セクター幹線のタイル化。該当しなければ null(networkTileAt を鏡写し) */
+export function sectorTrunkTileAt(seed: number, x: number, y: number): Tile | null {
+  const c = sectorTrunkAt(seed, x, y);
+  if (!c) return null;
+  if (c.role === 'vertical') return TILE.LADDER;
+  if (c.role === 'floor') return TILE.SOLID;
+  return TILE.AIR;
+}
+
 /** コリドーのタイル化。全系統。該当しなければ null */
 export function networkTileAt(seed: number, x: number, y: number): Tile | null {
   const c = conduitAt(seed, x, y);

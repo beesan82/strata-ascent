@@ -1,5 +1,6 @@
 import { facilityTileAt } from './facility';
-import { networkTileAt } from './network';
+import { megaFacilityAt } from './megafacility';
+import { networkTileAt, sectorTrunkTileAt } from './network';
 import { hash2, valueNoise2 } from './noise';
 import { stratumAt } from './strata';
 import { CHUNK_SIZE, TILE, type Tile } from './tiles';
@@ -54,7 +55,10 @@ export function noiseTileAt(seed: number, x: number, y: number): Tile {
 export function tileAt(seed: number, x: number, y: number): Tile {
   const base = noiseTileAt(seed, x, y);
   if (base === TILE.LADDER) return base;
-  const overlay = facilityTileAt(seed, x, y) ?? networkTileAt(seed, x, y);
+  const overlay = megaFacilityAt(seed, x, y)
+    ?? facilityTileAt(seed, x, y)
+    ?? sectorTrunkTileAt(seed, x, y)
+    ?? networkTileAt(seed, x, y);
   return overlay ?? base;
 }
 
