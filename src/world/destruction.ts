@@ -30,9 +30,9 @@ export class Destruction {
       for (let r = -radius; r <= radius; r += 0.5) {
         const wx = Math.round(cxx + px * r);
         const wy = Math.round(cyy + py * r);
-        if (tiles(wx, wy) === TILE.AIR) continue;
         const key = `${wx},${wy}`;
         if (this.cells.has(key)) continue;
+        if (tiles(wx, wy) === TILE.AIR) continue;
         this.cells.add(key);
         const cx = Math.floor(wx / CHUNK_SIZE);
         const cy = Math.floor(wy / CHUNK_SIZE);
