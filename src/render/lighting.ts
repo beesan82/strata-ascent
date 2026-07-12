@@ -1,6 +1,6 @@
 /**
- * 闇レイヤー。オフスクリーンCanvasを闇で塗り、光源部分をdestination-outで
- * 切り抜いてからメイン画面に重ねる。
+ * バイオーム環境光+プレイヤー補助光。
+ * 旧「闇を敷いて光で切り抜く」方式を廃止し、全体が見える明るい画面にする。
  */
 export class Lighting {
   private canvas = document.createElement('canvas');
@@ -11,67 +11,67 @@ export class Lighting {
   resize(w: number, h: number): void {
     this.outW = w;
     this.outH = h;
-    // 内部マスクは半解像度(拡大時のにじみでソフトエッジ、処理負荷も半減)
     this.canvas.width = Math.ceil(w / 2);
     this.canvas.height = Math.ceil(h / 2);
   }
 
   /**
-   * px/py: プレイヤーの画面座標(ピクセル)、angle: ライト方向(ラジアン)、
-   * ppt: 1タイルあたりのピクセル数(光の半径をタイル数で指定するため)、
-   * timeSec: 経過秒(ライトの揺らぎ用)
+   * ambientColor/ambientLevel: バイオーム環境光(levelが高いほど明るい=減光が薄い)。
+   * px,py: プレイヤー画面座標、angle: 補助光の向き、ppt: 1タイルpx、timeSec: 揺らぎ。
+   * 1) 画面全体を「(1-ambientLevel)に比例する薄いバイオーム色の暗幕」で覆う(全体は必ず見える)
+   * 2) プレイヤー周囲と前方の暗幕を destination-out で消して局所的に明るく
    */
   render(
     mainCtx: CanvasRenderingContext2D,
-    px: number,
-    py: number,
-    angle: number,
-    ppt: number,
-    timeSec: number,
+    px: number, py: number, angle: number, ppt: number, timeSec: number,
+    ambientColor: string, ambientLevel: number,
   ): void {
-    const { width: w, height: h } = this.canvas;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
     const ctx = this.ctx;
+    const hx = px / 2, hy = py / 2, hp = ppt / 2;
 
-    // 半解像度の内部座標系
-    const hx = px / 2;
-    const hy = py / 2;
-    const hp = ppt / 2;
-    // 微かな揺らぎ(携行ライトの息遣い)
-    const flicker = 1 + 0.025 * Math.sin(timeSec * 6.3) + 0.015 * Math.sin(timeSec * 17.1);
-
-    // ほぼ完全な闇を敷く
+    // 1) 環境減光: (1-level) を上限0.62に抑える → 最も暗いバイオームでも世界は見える
+    const dark = Math.min(0.62, (1 - ambientLevel) * 0.72);
     ctx.globalCompositeOperation = 'source-over';
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.965)';
+    ctx.fillStyle = withAlpha(darken(ambientColor, 0.4), dark);
     ctx.fillRect(0, 0, w, h);
 
+    // 2) プレイヤー補助光: 暗幕を局所的に消す
     ctx.globalCompositeOperation = 'destination-out';
+    const flicker = 1 + 0.02 * Math.sin(timeSec * 6.3) + 0.012 * Math.sin(timeSec * 17.1);
 
-    // プレイヤー周囲の環境光(半径6タイル)
-    const ambientR = 6 * hp * flicker;
-    const ambient = ctx.createRadialGradient(hx, hy, 0, hx, hy, ambientR);
-    ambient.addColorStop(0, 'rgba(0, 0, 0, 0.85)');
-    ambient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = ambient;
-    ctx.beginPath();
-    ctx.arc(hx, hy, ambientR, 0, Math.PI * 2);
-    ctx.fill();
+    const ambientR = 9 * hp;
+    const amb = ctx.createRadialGradient(hx, hy, 0, hx, hy, ambientR);
+    amb.addColorStop(0, 'rgba(0,0,0,0.85)');
+    amb.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = amb;
+    ctx.beginPath(); ctx.arc(hx, hy, ambientR, 0, Math.PI * 2); ctx.fill();
 
-    // ライトの円錐(半径22タイル、半角0.32rad)
     const coneR = 22 * hp * flicker;
-    const halfAngle = 0.32;
+    const half = 0.34;
     const cone = ctx.createRadialGradient(hx, hy, 0, hx, hy, coneR);
-    cone.addColorStop(0, 'rgba(0, 0, 0, 0.95)');
-    cone.addColorStop(0.7, 'rgba(0, 0, 0, 0.5)');
-    cone.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    cone.addColorStop(0, 'rgba(0,0,0,0.8)');
+    cone.addColorStop(0.7, 'rgba(0,0,0,0.35)');
+    cone.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = cone;
-    ctx.beginPath();
-    ctx.moveTo(hx, hy);
-    ctx.arc(hx, hy, coneR, angle - halfAngle, angle + halfAngle);
-    ctx.closePath();
-    ctx.fill();
+    ctx.beginPath(); ctx.moveTo(hx, hy);
+    ctx.arc(hx, hy, coneR, angle - half, angle + half); ctx.closePath(); ctx.fill();
 
-    // 半解像度マスクを全体へ拡大してブリット
+    ctx.globalCompositeOperation = 'source-over';
     mainCtx.drawImage(this.canvas, 0, 0, this.outW, this.outH);
   }
+}
+
+function darken(hex: string, f: number): string {
+  const p = parseInt(hex.slice(1), 16);
+  const r = Math.round(((p >> 16) & 255) * f);
+  const g = Math.round(((p >> 8) & 255) * f);
+  const b = Math.round((p & 255) * f);
+  return `#${((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1)}`;
+}
+function withAlpha(hex: string, a: number): string {
+  const p = parseInt(hex.slice(1), 16);
+  return `rgba(${(p >> 16) & 255},${(p >> 8) & 255},${p & 255},${a})`;
 }

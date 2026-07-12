@@ -6,6 +6,7 @@ import { Background } from './background';
 import { ChunkBaker } from './chunkbake';
 import { generateAtlas } from './tileset/generate';
 import { Lighting } from './lighting';
+import { biomeBlend } from './biome';
 import { drawPlayer } from './playerSprite';
 import { Post } from './post';
 
@@ -77,8 +78,9 @@ export class Renderer {
     const angle = Math.atan2(mouseY - py, mouseX - px);
     drawPlayer(ctx, px, py, ppt, player.facing, player.walkPhase, angle);
 
-    // 闇+ライト
-    this.lighting.render(ctx, px, py, angle, ppt, timeSec);
+    // バイオーム環境光+プレイヤー補助光
+    const bb = biomeBlend(player.body.y);
+    this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, bb.ambientLevel);
 
     // ポストプロセス(グレイン+ビネット)
     this.post.render(ctx, w, h);
