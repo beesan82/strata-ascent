@@ -104,6 +104,7 @@ export class Background {
       ctx.globalAlpha = 0.07;
       const baseY = horizon - camYoff;
       const topY = baseY - lh;
+      ctx.globalAlpha = 0.14;
       switch (lm.kind) {
         case 'colossus': {
           // 太い基部から細くなる超巨大な塊(台形風)
@@ -148,7 +149,7 @@ export class Background {
       if (sx + sw / 2 < -sw || sx - sw / 2 > w + sw) continue; // 画面外は捨てる
       const baseY = horizon - camYoff;
       const topY = baseY - sh;
-      ctx.globalAlpha = 0.09;
+      ctx.globalAlpha = 0.12;
       switch (s.kind) {
         case 'tower':
           ctx.fillRect(sx - sw / 2, topY, sw, baseY - topY);
