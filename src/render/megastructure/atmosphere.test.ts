@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hazeFactor, hazeColor } from './atmosphere';
+import { mixHex } from '../biome';
 
 describe('hazeFactor', () => {
   it('遠い(depth=0)ほどかすみが強く、近い(depth=1)ほど弱い(単調減少)', () => {
@@ -17,7 +18,8 @@ describe('hazeFactor', () => {
 });
 
 describe('hazeColor', () => {
-  it('#rrggbb を返す', () => {
+  it('環境色を霞色(#3a4653)へ半分混ぜた色を返す', () => {
+    expect(hazeColor('#000000')).toBe(mixHex('#000000', '#3a4653', 0.5));
     expect(hazeColor('#3a588a')).toMatch(/^#[0-9a-f]{6}$/);
   });
 });

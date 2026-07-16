@@ -8,7 +8,7 @@ function clamp01(v: number): number {
 }
 
 /**
- * 深度(0=最遠..1=最近) → かすみ係数(0..1)。
+ * 深度(0=最遠..1=最近) → かすみ係数(0..HAZE_MAX)。
  * 遠いほど大きい(構造を灰へ持ち上げ低コントラスト化)。線形・クランプ。
  */
 export function hazeFactor(depth: number): number {
