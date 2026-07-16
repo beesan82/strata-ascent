@@ -2,10 +2,10 @@ import type { System } from '../../world/hierarchy';
 import type { DrawOp, StructureSpec } from './spec';
 import type { Rng } from './rng';
 
-/** 構造の型。5系統 + 将来の拡張(段階E: biomech)を見越したユニオン */
+/** 構造の型。今は System のエイリアス。段階Eで biomech を加える際に union 化する。 */
 export type StructureType = System;
 
-/** テスト用: 損傷オペ(gap/frame)の数 */
+/** 損傷オペ(gap/frame)の数を数える。損傷度の検証・デバッグ用ユーティリティ。 */
 export function damageOpCount(spec: StructureSpec): number {
   return spec.ops.filter((o) => o.t === 'gap' || o.t === 'frame').length;
 }
@@ -22,7 +22,7 @@ function panelBay(ops: DrawOp[], x: number, y: number, w: number, h: number, dam
       const gy = y + rng() * h * 0.8;
       const gw = w * 0.12;
       const gh = h * 0.12;
-      // 高損傷では抜け穴、中損傷では露出フレーム
+      // 高損傷ほど露出フレーム(骨組み)が優勢、低〜中損傷では抜け穴(パネル欠損)
       ops.push(rng() < damage ? { t: 'frame', x: gx, y: gy, w: gw, h: gh } : { t: 'gap', x: gx, y: gy, w: gw, h: gh });
     }
   }
