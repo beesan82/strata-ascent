@@ -8,6 +8,7 @@ import { Destruction } from './world/destruction';
 import { regionAt, type System } from './world/hierarchy';
 import { CHUNK_SIZE } from './world/tiles';
 import { findSpawn } from './world/worldgen';
+import { sampleOpenness, targetZoomForOpenness } from './core/zoom';
 
 const DEFAULT_SEED = 20260711;
 const STEP_MS = 1000 / 60;
@@ -72,11 +73,20 @@ function fire(): void {
 
 let frames = 0;
 let simTime = 0;
+// カメラの目標ズーム。開放度から毎数フレーム更新し、camera.zoomToで平滑追従する
+let zoomTarget = 1;
 
 function update(dt: number): void {
   simTime += dt;
   player.update(input.state, dt, tiles);
   camera.follow(player.centerX, player.centerY, dt);
+  // 開放度は毎フレームだと重い(tileAt多数)ので6フレームごとに測る。
+  // 求めた目標ズームへは毎フレーム平滑追従する。
+  if (frames % 6 === 0) {
+    const openness = sampleOpenness(tiles, player.centerX, player.centerY);
+    zoomTarget = targetZoomForOpenness(openness);
+  }
+  camera.zoomTo(zoomTarget, dt);
   graviton.update(dt, input.fireHeld, fire);
   if (lastBeam) {
     lastBeam.ttl -= dt;
