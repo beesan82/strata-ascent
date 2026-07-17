@@ -7,7 +7,8 @@ import { regionAt } from '../world/hierarchy';
 import { conduitAt } from '../world/network';
 import { facilityTileAt } from '../world/facility';
 import { megaFacilityAt } from '../world/megafacility';
-import { biomeForSystem, type Biome } from './biome';
+import { biomeForSystem, mixHex, type Biome } from './biome';
+import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
 import { decorateChunk, PALETTE, type DecorOp } from './decor';
 
 /** 焼き込み解像度(px/タイル)。表示は拡縮されるが16pxあれば線は読める */
@@ -119,6 +120,47 @@ export class ChunkBaker {
       }
     }
 
+    // 後退内面(厚み)＋上端リムライト。空気に面したSOLIDエッジに、露出面から内側へ純黒へ
+    // 後退する暗帯を敷き、歩ける上端に明るいリム線を引く(可読性)。焼き込みのみ・当たり無改修。
+    // 濃さ/深さは ambientLevel 連動で、明バイオームでは控えめにして足場を読める範囲に保つ。
+    const P = BAKE_PPT;
+    const reliefDepth = 0.24 + (1 - biome.ambientLevel) * 0.12; // 0.24〜0.36 タイル
+    const bandAlpha = 0.32 + (1 - biome.ambientLevel) * 0.34;   // 0.32〜0.66
+    const rimTopColor = mixHex(biome.palette.edge, '#ffffff', 0.4);
+    for (let ty = 0; ty < CHUNK_SIZE; ty++) {
+      const wy = by + ty;
+      for (let tx = 0; tx < CHUNK_SIZE; tx++) {
+        if (chunk[ty * CHUNK_SIZE + tx] !== TILE.SOLID) continue;
+        const wx = bx + tx;
+        const edges = reliefEdges(
+          store.tileAt(wx, wy - 1) === TILE.SOLID,
+          store.tileAt(wx + 1, wy) === TILE.SOLID,
+          store.tileAt(wx, wy + 1) === TILE.SOLID,
+          store.tileAt(wx - 1, wy) === TILE.SOLID,
+        );
+        for (const b of reliefBands(edges, reliefDepth)) {
+          const grad = ctx.createLinearGradient(
+            (tx + b.from[0]) * P, (ty + b.from[1]) * P,
+            (tx + b.to[0]) * P, (ty + b.to[1]) * P,
+          );
+          grad.addColorStop(0, `rgba(2,4,10,${bandAlpha})`);
+          grad.addColorStop(1, 'rgba(2,4,10,0)');
+          ctx.fillStyle = grad;
+          ctx.fillRect((tx + b.x) * P, (ty + b.y) * P, b.w * P, b.h * P);
+        }
+        for (const s of rimSegments(edges)) {
+          ctx.strokeStyle = s.top ? rimTopColor : biome.palette.edge;
+          ctx.globalAlpha = s.top ? 0.9 : 0.4;
+          ctx.lineWidth = Math.max(1, (s.top ? 0.12 : 0.07) * P);
+          ctx.beginPath();
+          ctx.moveTo((tx + s.x1) * P, (ty + s.y1) * P);
+          ctx.lineTo((tx + s.x2) * P, (ty + s.y2) * P);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+
     // 装飾(アトラスが描く表面線画=surfaceタグ付きはスキップ、物理装飾は残す)。
     // 物理装飾のうちPALETTEのaccent系色で描かれるものはバイオームaccentへ置換し、
     // 配管・レール・瓦礫などの物理ディテールを階層ごとの色調に統一する。
@@ -131,7 +173,6 @@ export class ChunkBaker {
     // 配管コリドー: 全系統のconduitに配管ラインを重ね、通路が「配管」として読めるようにする。
     // networkTileAtと同じ条件なので、conduitが歩けるタイルを生む場所と正確に一致する。
     // 装飾は焼き込みキャンバスへの描画のみ。tileAt/ゲームプレイには一切影響しない。
-    const P = BAKE_PPT;
     ctx.strokeStyle = biome.accent;
     ctx.lineWidth = Math.max(1, 0.14 * P);
     for (let ty = 0; ty < CHUNK_SIZE; ty++) {
