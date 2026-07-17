@@ -10,6 +10,7 @@ import { megaFacilityAt } from '../world/megafacility';
 import { biomeForSystem, mixHex, type Biome } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
 import { decorateChunk, PALETTE, type DecorOp } from './decor';
+import { traceAt, type Trace } from './traces';
 
 /** 焼き込み解像度(px/タイル)。表示は拡縮されるが16pxあれば線は読める */
 export const BAKE_PPT = 16;
@@ -223,7 +224,119 @@ export class ChunkBaker {
         }
       }
     }
+
+    // 人の痕跡(環境ストーリーテリング)。床の縁(AIRかつ直下SOLID)と壁面(SOLIDかつ左右空気)に
+    // 決定論的に散らす。焼き込みのみ・非衝突。ライトに照らされて初めて読める暗い色調。
+    for (let ty = 0; ty < CHUNK_SIZE; ty++) {
+      const wy = by + ty;
+      for (let tx = 0; tx < CHUNK_SIZE; tx++) {
+        const wx = bx + tx;
+        const here = chunk[ty * CHUNK_SIZE + tx];
+        if (here === TILE.AIR) {
+          if (store.tileAt(wx, wy + 1) !== TILE.SOLID) continue;
+          const tr = traceAt(this.seed, wx, wy, 'floor');
+          if (tr) this.drawFloorTrace(ctx, tr, tx, ty);
+        } else if (here === TILE.SOLID) {
+          const faceLeft = store.tileAt(wx - 1, wy) !== TILE.SOLID;
+          const faceRight = store.tileAt(wx + 1, wy) !== TILE.SOLID;
+          if (!faceLeft && !faceRight) continue;
+          const tr = traceAt(this.seed, wx, wy, 'wall');
+          if (tr) this.drawWallTrace(ctx, tr, tx, ty, faceLeft ? -1 : 1);
+        }
+      }
+    }
     return canvas;
+  }
+
+  /** 床の縁の痕跡。タイル(tx,ty)内の正規化座標で描く(y=1が床面)。暗い色調。 */
+  private drawFloorTrace(ctx: CanvasRenderingContext2D, tr: Trace, tx: number, ty: number): void {
+    const P = BAKE_PPT;
+    const X = (x: number) => (tx + x) * P;
+    const Y = (y: number) => (ty + y) * P;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    switch (tr.type) {
+      case 'corpse': {
+        ctx.strokeStyle = '#8f8a7e';
+        ctx.fillStyle = '#12100c';
+        ctx.lineWidth = Math.max(1, 0.05 * P);
+        ctx.globalAlpha = 0.8;
+        ctx.beginPath(); ctx.arc(X(0.5), Y(0.6), 0.11 * P, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(X(0.5), Y(0.71)); ctx.lineTo(X(0.55), Y(0.95));
+        ctx.moveTo(X(0.44), Y(0.78)); ctx.lineTo(X(0.6), Y(0.78));
+        ctx.moveTo(X(0.45), Y(0.84)); ctx.lineTo(X(0.6), Y(0.84));
+        ctx.moveTo(X(0.55), Y(0.95)); ctx.lineTo(X(0.3), Y(0.93));
+        ctx.moveTo(X(0.55), Y(0.95)); ctx.lineTo(X(0.82), Y(0.9));
+        ctx.stroke();
+        break;
+      }
+      case 'lamp': {
+        const gx = X(0.5), gy = Y(0.9);
+        const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, 0.6 * P);
+        g.addColorStop(0, 'rgba(202,166,74,0.35)');
+        g.addColorStop(1, 'rgba(202,166,74,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(gx, gy, 0.6 * P, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#141d27';
+        ctx.strokeStyle = '#33506a';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.rect(X(0.4), Y(0.88), 0.24 * P, 0.08 * P); ctx.fill(); ctx.stroke();
+        break;
+      }
+      case 'pack': {
+        ctx.fillStyle = '#12161b';
+        ctx.strokeStyle = '#3a4a3a';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(X(0.36), Y(0.98)); ctx.lineTo(X(0.4), Y(0.82));
+        ctx.lineTo(X(0.6), Y(0.82)); ctx.lineTo(X(0.64), Y(0.98));
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+        break;
+      }
+      case 'shells': {
+        ctx.fillStyle = '#7a6a3a';
+        ctx.globalAlpha = 0.75;
+        for (const [ox, oy] of [[0.32, 0.96], [0.46, 0.98], [0.6, 0.95], [0.7, 0.98]] as const) {
+          ctx.fillRect(X(ox), Y(oy), 0.08 * P, 0.03 * P);
+        }
+        break;
+      }
+    }
+    ctx.restore();
+  }
+
+  /** 壁面の痕跡。露出面側(dir: -1=左,1=右)寄りに描く。 */
+  private drawWallTrace(ctx: CanvasRenderingContext2D, tr: Trace, tx: number, ty: number, dir: -1 | 1): void {
+    const P = BAKE_PPT;
+    const base = dir === -1 ? 0.12 : 0.62;
+    const X = (x: number) => (tx + base + x) * P;
+    const Y = (y: number) => (ty + y) * P;
+    ctx.save();
+    ctx.lineCap = 'round';
+    switch (tr.type) {
+      case 'tally': {
+        ctx.strokeStyle = '#5a6a70';
+        ctx.globalAlpha = 0.8;
+        ctx.lineWidth = Math.max(1, 0.04 * P);
+        for (let i = 0; i < 4; i++) {
+          ctx.beginPath(); ctx.moveTo(X(0.02 + i * 0.07), Y(0.35)); ctx.lineTo(X(0.02 + i * 0.07), Y(0.6)); ctx.stroke();
+        }
+        ctx.beginPath(); ctx.moveTo(X(-0.02), Y(0.48)); ctx.lineTo(X(0.24), Y(0.47)); ctx.stroke();
+        break;
+      }
+      case 'warning': {
+        ctx.fillStyle = '#3a4658';
+        ctx.globalAlpha = 0.55;
+        ctx.beginPath();
+        ctx.moveTo(X(0), Y(0.42)); ctx.lineTo(X(0.16), Y(0.42)); ctx.lineTo(X(0.14), Y(0.36));
+        ctx.lineTo(X(0.26), Y(0.5)); ctx.lineTo(X(0.14), Y(0.64)); ctx.lineTo(X(0.16), Y(0.58));
+        ctx.lineTo(X(0), Y(0.58)); ctx.closePath(); ctx.fill();
+        break;
+      }
+    }
+    ctx.restore();
   }
 
   private draw(ctx: CanvasRenderingContext2D, op: DecorOp): void {
