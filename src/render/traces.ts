@@ -45,6 +45,7 @@ export function traceAt(seed: number, wx: number, wy: number, kind: 'floor' | 'w
   if (gate >= rate) return null;
   const pick = hash2(seed + (kind === 'floor' ? 8110 : 8210), wx, wy);
   const type = kind === 'floor' ? weighted(FLOOR_TABLE, pick) : weighted(WALL_TABLE, pick);
-  const id = Math.floor(hash2(seed + 8300, wx, wy) * 0x7fffffff);
+  // id は将来の断章lookupキー。kind を混ぜて、同座標の床/壁で衝突しないようにする。
+  const id = Math.floor(hash2(seed + 8300 + (kind === 'floor' ? 0 : 1), wx, wy) * 0x7fffffff);
   return { type, id };
 }
