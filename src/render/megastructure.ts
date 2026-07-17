@@ -7,8 +7,8 @@ import { makeRng } from './megastructure/rng';
 import { hazeFactor, hazeColor } from './megastructure/atmosphere';
 import type { DrawOp, StructureSpec, Tone } from './megastructure/spec';
 
-/** 明度段 → 基準色への混合率(遠=暗, 近=明) */
-const TONE_MIX: Record<Tone, number> = { far: 0.12, mid: 0.3, near: 0.5 };
+/** 明度段 → 基準色への混合率(遠=暗, 近=明)。闇の中で構造が読めるようやや強め */
+const TONE_MIX: Record<Tone, number> = { far: 0.18, mid: 0.4, near: 0.62 };
 
 export class MegaStructure {
   /** スロットキー → 生成済みスペック(損傷を量子化してキャッシュ) */
@@ -37,15 +37,16 @@ export class MegaStructure {
 
     ctx.save();
     for (const s of slots) {
-      // スロットの画面矩形。深度 factor で水平パララックス、基部は画面下 85% に接地。
+      // スロットの画面矩形。深度 factor で水平パララックス、基部は画面下 90% の地平に接地。
+      // 縦は遠背景として地平固定(絶対高度で飛ばないよう縦パララックスは持たない)。
       const scale = s.factor;
       const sw = s.span * ppt;
-      const sh = sw * 1.1; // 構造の見かけ縦横比
+      const sh = sw * 1.25; // 塔状に縦長。基部から立ち上がり空洞を埋める
       const sx = (s.worldX - cam.x * scale) * ppt + w / 2 - sw / 2;
       if (sx + sw < 0 || sx > w) continue; // 画面外は spec 生成前に捨てる
 
       const spec = this.specFor(s);
-      const baseY = h * 0.85 + cam.y * scale * 0.15 * ppt;
+      const baseY = h * 0.9;
       const sy = baseY - sh;
       const hf = hazeFactor(s.depth);
       this.drawSpec(ctx, spec, sx, sy, sw, sh, baseDark, haze, hf);
@@ -82,8 +83,8 @@ export class MegaStructure {
   ): void {
     const X = (x: number) => ox + x * sw;
     const Y = (y: number) => oy + y * sh;
-    // 遠いほど全体を淡く(かすみで沈む)
-    const alpha = 0.5 + (1 - hf) * 0.45;
+    // 遠いほど全体を淡く(かすみで沈む)。闇に埋もれないよう下限を高めに。
+    const alpha = 0.6 + (1 - hf) * 0.35;
     for (const op of spec.ops) {
       this.drawOp(ctx, op, X, Y, sw, sh, base, haze, hf, alpha);
     }

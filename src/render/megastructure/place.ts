@@ -10,11 +10,15 @@ export interface Band {
   density: number; // スロットに構造が立つ確率
 }
 
-/** 遠→近の3バンド。近バンドでも焼き込みチャンクより背後(すべて背景) */
+/**
+ * 遠→近の3バンド。近バンドでも焼き込みチャンクより背後(すべて背景)。
+ * slot/span は「視野幅(≒44タイル)」を基準に選ぶ: 画面内に各バンド2〜4基が並び、
+ * span>slot で水平に重なり合って闇を充満させる(スカスカを防ぐ)。
+ */
 export const BANDS: readonly Band[] = [
-  { depth: 0.0, factor: 0.12, slot: 220, span: 170, density: 0.55 },
-  { depth: 0.5, factor: 0.30, slot: 140, span: 110, density: 0.5 },
-  { depth: 1.0, factor: 0.55, slot: 90,  span: 70,  density: 0.42 },
+  { depth: 0.0, factor: 0.10, slot: 24, span: 34, density: 0.8 },
+  { depth: 0.5, factor: 0.20, slot: 18, span: 24, density: 0.7 },
+  { depth: 1.0, factor: 0.34, slot: 13, span: 17, density: 0.6 },
 ];
 
 function clamp01(v: number): number {
