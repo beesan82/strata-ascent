@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeRng } from './rng';
 import { buildStructure, damageOpCount } from './catalog';
+import { SYSTEMS } from '../../world/hierarchy';
 
 const rng = () => makeRng(20260711, 3, 7);
 
@@ -29,4 +30,20 @@ describe('buildStructure(power)', () => {
     expect(low).toBe(true);
     expect(high).toBe(false);
   });
+});
+
+describe('buildStructure(全系統)', () => {
+  for (const sys of SYSTEMS) {
+    it(`${sys}: 非空・決定論・損傷単調・低損傷のみglow`, () => {
+      const mk = () => makeRng(42, 9, 1);
+      const a = buildStructure(sys, 0.5, mk());
+      const b = buildStructure(sys, 0.5, mk());
+      expect(a).toEqual(b);
+      expect(a.ops.length).toBeGreaterThan(0);
+      const low = damageOpCount(buildStructure(sys, 0.1, mk()));
+      const high = damageOpCount(buildStructure(sys, 0.9, mk()));
+      expect(high).toBeGreaterThanOrEqual(low);
+      expect(buildStructure(sys, 0.9, mk()).ops.some((o) => o.t === 'glow')).toBe(false);
+    });
+  }
 });
