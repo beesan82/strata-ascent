@@ -36,6 +36,11 @@ describe('reliefBands', () => {
     const [b] = reliefBands({ top: false, right: false, bottom: true, left: false }, 0.2);
     expect(b).toEqual({ x: 0, y: 0.8, w: 1, h: 0.2, from: [0, 1], to: [0, 0.8] });
   });
+
+  it('left帯は左端から内側(x=depth)へ', () => {
+    const [b] = reliefBands({ top: false, right: false, bottom: false, left: true }, 0.3);
+    expect(b).toEqual({ x: 0, y: 0, w: 0.3, h: 1, from: [0, 0], to: [0.3, 0] });
+  });
 });
 
 describe('rimSegments', () => {
@@ -46,6 +51,13 @@ describe('rimSegments', () => {
     expect(top).toEqual({ x1: 0, y1: 0, x2: 1, y2: 0, top: true });
     const right = segs.find((s) => !s.top);
     expect(right).toEqual({ x1: 1, y1: 0, x2: 1, y2: 1, top: false });
+  });
+
+  it('bottom/left線分の座標', () => {
+    const bottom = rimSegments({ top: false, right: false, bottom: true, left: false });
+    expect(bottom).toEqual([{ x1: 0, y1: 1, x2: 1, y2: 1, top: false }]);
+    const left = rimSegments({ top: false, right: false, bottom: false, left: true });
+    expect(left).toEqual([{ x1: 0, y1: 0, x2: 0, y2: 1, top: false }]);
   });
 
   it('露出辺なしなら空', () => {
