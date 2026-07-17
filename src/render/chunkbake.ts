@@ -138,6 +138,7 @@ export class ChunkBaker {
           store.tileAt(wx, wy + 1) === TILE.SOLID,
           store.tileAt(wx - 1, wy) === TILE.SOLID,
         );
+        ctx.globalAlpha = 1; // 前タイルのリムで変えたalphaを帯描画前にリセット
         for (const b of reliefBands(edges, reliefDepth)) {
           const grad = ctx.createLinearGradient(
             (tx + b.from[0]) * P, (ty + b.from[1]) * P,
