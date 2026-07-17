@@ -41,14 +41,15 @@ export interface Slot {
   depth: number;    // 所属バンドの depth
   factor: number;   // バンドの追従率
   span: number;     // 見かけ幅(タイル)
-  type: System;     // 系統(その座標の regionAt)
+  type: System;     // 系統(プレイヤーの実座標 camXtiles,camYtiles の regionAt。可視分は統一)
   damage: number;   // 0..1
   variantSeed: number;
 }
 
 /**
  * camXtiles 中心・spanTiles 幅の可視範囲に落ちる各バンドの構造スロットを決定論で列挙。
- * type はスロット中心・camYtiles の regionAt().system(プレイヤーがいる系統と一致させる)。
+ * type はプレイヤーの実座標(camXtiles,camYtiles)の regionAt().system で、可視構造は
+ * 「今いる系統」に統一する(背景がプレイヤーの系統を追従する設計)。
  * camYtiles は符号付きワールドY(上=負)。高度バイアス altitude は max(0,-camYtiles)。
  */
 export function slotsInView(
@@ -60,6 +61,10 @@ export function slotsInView(
   const out: Slot[] = [];
   const altitudeTiles = Math.max(0, -camYtiles);
   const rowY = Math.floor(camYtiles);
+  // 系統はプレイヤーの実ワールド座標(camXtiles)で判定する。worldX はパララックス圧縮
+  // 空間の値なので regionAt に渡すと実系統とずれる。可視構造は「今いる系統」で統一する
+  // (REGION_SIZE=262144 に対し視野は数十タイルなので、元々スロット毎の系統差は生じない)。
+  const system = regionAt(seed, Math.floor(camXtiles), rowY).system;
   for (let bi = 0; bi < BANDS.length; bi++) {
     const B = BANDS[bi];
     // 追従率ぶんだけスロット原点をずらす(パンで継ぎ目が出ない整数スロット配置)
@@ -70,14 +75,13 @@ export function slotsInView(
       if (hash2(seed + 52000 + bi, k, 0) > B.density) continue; // 空スロット
       const jitter = (hash2(seed + 52100 + bi, k, 0) - 0.5) * B.slot * 0.4;
       const worldX = k * B.slot + jitter;
-      const type = regionAt(seed, Math.floor(worldX), rowY).system;
       out.push({
         key: `${bi}:${k}`,
         worldX,
         depth: B.depth,
         factor: B.factor,
         span: B.span,
-        type,
+        type: system,
         damage: damageFor(seed, k, bi, altitudeTiles),
         variantSeed: Math.floor(hash2(seed + 52200 + bi, k, 0) * 0xffffff),
       });
