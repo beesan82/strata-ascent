@@ -13,6 +13,8 @@ const TONE_MIX: Record<Tone, number> = { far: 0.12, mid: 0.3, near: 0.5 };
 export class MegaStructure {
   /** スロットキー → 生成済みスペック(損傷を量子化してキャッシュ) */
   private cache = new Map<string, StructureSpec>();
+  /** キャッシュ上限。超えたら最古から捨てる(可視は数十なので実害なし。specは再生成が安価) */
+  private static readonly CACHE_CAP = 600;
 
   constructor(private seed: number) {}
 
@@ -33,21 +35,22 @@ export class MegaStructure {
     // 構造の基準色(黒に近い青灰。tone/かすみで持ち上げる)
     const baseDark = mixHex('#05090e', bb.ambientColor, 0.25);
 
+    ctx.save();
     for (const s of slots) {
-      const spec = this.specFor(s);
       // スロットの画面矩形。深度 factor で水平パララックス、基部は画面下 85% に接地。
       const scale = s.factor;
       const sw = s.span * ppt;
       const sh = sw * 1.1; // 構造の見かけ縦横比
       const sx = (s.worldX - cam.x * scale) * ppt + w / 2 - sw / 2;
+      if (sx + sw < 0 || sx > w) continue; // 画面外は spec 生成前に捨てる
+
+      const spec = this.specFor(s);
       const baseY = h * 0.85 + cam.y * scale * 0.15 * ppt;
       const sy = baseY - sh;
-      if (sx + sw < 0 || sx > w) continue;
-
       const hf = hazeFactor(s.depth);
       this.drawSpec(ctx, spec, sx, sy, sw, sh, baseDark, haze, hf);
     }
-    ctx.globalAlpha = 1;
+    ctx.restore();
   }
 
   private specFor(s: Slot): StructureSpec {
@@ -57,6 +60,10 @@ export class MegaStructure {
     if (!spec) {
       spec = buildStructure(s.type, s.damage, makeRng(this.seed, s.variantSeed, Math.round(q * 100)));
       this.cache.set(key, spec);
+      if (this.cache.size > MegaStructure.CACHE_CAP) {
+        const oldest = this.cache.keys().next().value;
+        if (oldest !== undefined) this.cache.delete(oldest);
+      }
     }
     return spec;
   }
@@ -161,6 +168,11 @@ export class MegaStructure {
         ctx.arc(X(op.x), Y(op.y), r * 3, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = alpha;
+        break;
+      }
+      default: {
+        const _exhaustive: never = op;
+        void _exhaustive;
         break;
       }
     }
