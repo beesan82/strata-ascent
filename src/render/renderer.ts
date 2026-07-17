@@ -10,6 +10,7 @@ import { drawPlayer } from './playerSprite';
 import { Post } from './post';
 import { drawHierarchyDebug } from './debugHierarchy';
 import { drawBeam, drawCharge } from './beam';
+import { MegaStructure } from './megastructure';
 
 /** 画面の横幅に収めるタイル数(スケール感の基準) */
 const VIEW_TILES_X = 44;
@@ -31,6 +32,7 @@ export class Renderer {
   private post = new Post();
   private baker: ChunkBaker;
   private background: Background;
+  private megastructure: MegaStructure;
   private debugMode: string | null = null;
   /**
    * 直近フレームで算出したエイム角(ワールド空間・マウス方向)。
@@ -45,6 +47,7 @@ export class Renderer {
     this.ctx = canvas.getContext('2d')!;
     this.baker = new ChunkBaker(seed);
     this.background = new Background(seed);
+    this.megastructure = new MegaStructure(seed);
   }
 
   setDebug(mode: string | null): void {
@@ -103,6 +106,9 @@ export class Renderer {
 
     // パララックス遠景(バイオーム配色の多層構造)
     this.background.render(ctx, cam.x, cam.y, w, h, ppt, bb);
+
+    // 意味を持つ超構造(遠→中→近の深度＋かすみ)。焼き込みチャンクより背後、遠景パララックスより手前。
+    this.megastructure.render(ctx, cam, w, h, ppt, bb);
 
     // 可視チャンクの焼き込み画像を貼る
     const chunkPx = CHUNK_SIZE * ppt;
