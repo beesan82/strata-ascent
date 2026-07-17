@@ -78,7 +78,8 @@ export class Renderer {
   ): void {
     const w = this.canvas.width;
     const h = this.canvas.height;
-    const ppt = w / VIEW_TILES_X;
+    // cam.zoom<1 で ppt が縮み、画面に入るタイル数が増える(開放空間の豆粒化)
+    const ppt = (w / VIEW_TILES_X) * cam.zoom;
     const ctx = this.ctx;
 
     // 発射直後の画面シェイク: シーン全体を微小にずらす。ビームの残光(alpha)に比例。

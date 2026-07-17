@@ -8,11 +8,14 @@ import { Destruction } from './world/destruction';
 import { regionAt, type System } from './world/hierarchy';
 import { CHUNK_SIZE } from './world/tiles';
 import { findSpawn } from './world/worldgen';
+import { sampleOpenness, targetZoomForOpenness } from './core/zoom';
 
 const DEFAULT_SEED = 20260711;
 const STEP_MS = 1000 / 60;
 const EVICT_INTERVAL_FRAMES = 120;
 const EVICT_RADIUS = 4;
+// 開放度サンプリング間隔(フレーム)。6=約100ms。tileAt多数のため毎フレームは避ける。
+const OPENNESS_SAMPLE_INTERVAL_FRAMES = 6;
 // 焼き込みキャッシュは1枚1024×1024(~4MB)と重いので、衝突ストアより狭い半径で破棄する。
 // 半径2=5チャンク幅=320タイル > ビューポート44タイルなので視界は常にカバーされる。
 const BAKE_EVICT_RADIUS = 2;
@@ -72,11 +75,20 @@ function fire(): void {
 
 let frames = 0;
 let simTime = 0;
+// カメラの目標ズーム。開放度から毎数フレーム更新し、camera.zoomToで平滑追従する
+let zoomTarget = 1;
 
 function update(dt: number): void {
   simTime += dt;
   player.update(input.state, dt, tiles);
   camera.follow(player.centerX, player.centerY, dt);
+  // 開放度は毎フレームだと重い(tileAt多数)ので6フレームごとに測る。
+  // 求めた目標ズームへは毎フレーム平滑追従する。
+  if (frames % OPENNESS_SAMPLE_INTERVAL_FRAMES === 0) {
+    const openness = sampleOpenness(tiles, player.centerX, player.centerY);
+    zoomTarget = targetZoomForOpenness(openness);
+  }
+  camera.zoomTo(zoomTarget, dt);
   graviton.update(dt, input.fireHeld, fire);
   if (lastBeam) {
     lastBeam.ttl -= dt;
