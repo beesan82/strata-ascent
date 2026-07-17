@@ -46,4 +46,9 @@ describe('buildStructure(全系統)', () => {
       expect(buildStructure(sys, 0.9, mk()).ops.some((o) => o.t === 'glow')).toBe(false);
     });
   }
+
+  it('各系統は異なるオペ列を生む(全委譲バグの防止)', () => {
+    const specs = SYSTEMS.map((sys) => JSON.stringify(buildStructure(sys, 0.5, makeRng(1, 2, 3))));
+    expect(new Set(specs).size).toBe(SYSTEMS.length);
+  });
 });

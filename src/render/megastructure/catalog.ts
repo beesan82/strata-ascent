@@ -33,6 +33,16 @@ function rimTop(ops: DrawOp[], x: number, y: number, w: number): void {
   ops.push({ t: 'rim', pts: [[x, y], [x + w, y]] });
 }
 
+/** 低損傷(damage < threshold)のときだけ稼働灯/熱光を点ける */
+function addWorkingLights(ops: DrawOp[], damage: number, threshold: number, glows: { x: number; y: number; r: number; kind: 'work' | 'heat' }[]): void {
+  if (damage < threshold) for (const g of glows) ops.push({ t: 'glow', x: g.x, y: g.y, r: g.r, kind: g.kind });
+}
+
+/** 高損傷(damage > threshold)のとき露出フレームを1つ足す */
+function addExposedFrame(ops: DrawOp[], damage: number, threshold: number, x: number, y: number, w: number, h: number): void {
+  if (damage > threshold) ops.push({ t: 'frame', x, y, w, h });
+}
+
 // ---- 系統別ビルダー ----
 
 /** 電力系: 球形格納容器(mass) + タービンホール(縦配管束) + 変圧器バンク */
@@ -51,13 +61,9 @@ function buildPower(damage: number, rng: Rng): StructureSpec {
   // 変圧器バンク + 母線
   for (let i = 0; i < 3; i++) ops.push({ t: 'mass', x: 0.78 + i * 0.07, y: 0.5, w: 0.05, h: 0.5, tone: 'near' });
   ops.push({ t: 'pipe', pts: [[0.78, 0.46], [0.99, 0.46]], width: 0.008 });
-  // 稼働灯(低損傷のみ)
-  if (damage < 0.35) {
-    ops.push({ t: 'glow', x: 0.5, y: 0.5, r: 0.02, kind: 'work' });
-    ops.push({ t: 'glow', x: 0.19, y: 0.6, r: 0.02, kind: 'work' });
-  }
-  // 高損傷: 露出フレームを追加
-  if (damage > 0.6) ops.push({ t: 'frame', x: 0.05, y: 0.35, w: 0.3, h: 0.2 });
+  // 稼働灯(低損傷のみ) / 高損傷: 露出フレームを追加
+  addWorkingLights(ops, damage, 0.35, [{ x: 0.5, y: 0.5, r: 0.02, kind: 'work' }, { x: 0.19, y: 0.6, r: 0.02, kind: 'work' }]);
+  addExposedFrame(ops, damage, 0.6, 0.05, 0.35, 0.3, 0.2);
   return { ops };
 }
 
@@ -75,8 +81,8 @@ function buildWater(damage: number, rng: Rng): StructureSpec {
   // 水管橋(奥へ伸びる太パイプ2本)
   ops.push({ t: 'pipe', pts: [[0.66, 0.5], [0.85, 0.46], [1, 0.5]], width: 0.03 });
   ops.push({ t: 'pipe', pts: [[0.66, 0.62], [0.85, 0.6], [1, 0.64]], width: 0.03 });
-  if (damage < 0.35) ops.push({ t: 'glow', x: 0.47, y: 0.5, r: 0.018, kind: 'work' });
-  if (damage > 0.6) ops.push({ t: 'frame', x: 0.05, y: 0.15, w: 0.16, h: 0.2 });
+  addWorkingLights(ops, damage, 0.35, [{ x: 0.47, y: 0.5, r: 0.018, kind: 'work' }]);
+  addExposedFrame(ops, damage, 0.6, 0.05, 0.15, 0.16, 0.2);
   return { ops };
 }
 
@@ -93,12 +99,9 @@ function buildFoundry(damage: number, rng: Rng): StructureSpec {
   ops.push({ t: 'mass', x: 0.78, y: 0.05, w: 0.07, h: 0.95, tone: 'mid' });
   ops.push({ t: 'mass', x: 0.88, y: 0.2, w: 0.06, h: 0.8, tone: 'far' });
   rimTop(ops, 0.78, 0.05, 0.07);
-  // 溶鉱の熱光は損傷に関わらず稀に残るが、glow('heat')は低〜中損傷のみ(稼働の名残)
-  if (damage < 0.5) {
-    ops.push({ t: 'glow', x: 0.19, y: 0.85, r: 0.05, kind: 'heat' });
-    ops.push({ t: 'glow', x: 0.55, y: 0.38, r: 0.03, kind: 'heat' });
-  }
-  if (damage > 0.6) ops.push({ t: 'frame', x: 0.07, y: 0.35, w: 0.24, h: 0.2 });
+  // 溶鉱の熱光は低〜中損傷(damage<0.5)でのみ残す(稼働の名残)
+  addWorkingLights(ops, damage, 0.5, [{ x: 0.19, y: 0.85, r: 0.05, kind: 'heat' }, { x: 0.55, y: 0.38, r: 0.03, kind: 'heat' }]);
+  addExposedFrame(ops, damage, 0.6, 0.07, 0.35, 0.24, 0.2);
   return { ops };
 }
 
@@ -112,8 +115,8 @@ function buildDisposal(damage: number, rng: Rng): StructureSpec {
   ops.push({ t: 'pipe', pts: [[0.37, 0.4], [0.55, 0.35], [0.62, 0.6], [0.82, 0.5], [1, 0.55]], width: 0.05 });
   // 廃棄ピット(手前の暗い落ち込み)
   ops.push({ t: 'gap', x: 0.4, y: 0.85, w: 0.4, h: 0.15 });
-  if (damage < 0.35) ops.push({ t: 'glow', x: 0.2, y: 0.75, r: 0.035, kind: 'heat' });
-  if (damage > 0.6) ops.push({ t: 'frame', x: 0.06, y: 0.3, w: 0.28, h: 0.2 });
+  addWorkingLights(ops, damage, 0.35, [{ x: 0.2, y: 0.75, r: 0.035, kind: 'heat' }]);
+  addExposedFrame(ops, damage, 0.6, 0.06, 0.3, 0.28, 0.2);
   return { ops };
 }
 
@@ -123,11 +126,12 @@ function buildHabitation(damage: number, rng: Rng): StructureSpec {
   ops.push({ t: 'mass', x: 0.05, y: 0.2, w: 0.9, h: 0.8, tone: 'mid' });
   // 居室セルをパネルとして敷き、損傷で崩す
   panelBay(ops, 0.08, 0.24, 0.84, 0.72, damage, rng);
-  panelBay(ops, 0.08, 0.24, 0.84, 0.72, damage * 0.7, rng); // 二世代の継ぎ目で単一格子感を壊す
+  // 二世代の継ぎ目で単一格子感を壊す(注: 同一rng列を共有するため統計的独立ではないが、決定論的で見た目の目的は満たす)
+  panelBay(ops, 0.08, 0.24, 0.84, 0.72, damage * 0.7, rng);
   rimTop(ops, 0.05, 0.2, 0.9);
   // 露出鉄筋(損傷側=右へ行くほど)
-  if (damage > 0.4) ops.push({ t: 'frame', x: 0.6, y: 0.5, w: 0.3, h: 0.3 });
-  if (damage < 0.35) ops.push({ t: 'glow', x: 0.3, y: 0.4, r: 0.012, kind: 'work' });
+  addExposedFrame(ops, damage, 0.4, 0.6, 0.5, 0.3, 0.3);
+  addWorkingLights(ops, damage, 0.35, [{ x: 0.3, y: 0.4, r: 0.012, kind: 'work' }]);
   return { ops };
 }
 
