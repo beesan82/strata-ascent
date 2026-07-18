@@ -11,6 +11,7 @@ import { Post } from './post';
 import { drawHierarchyDebug } from './debugHierarchy';
 import { drawBeam, drawCharge } from './beam';
 import { MegaStructure } from './megastructure';
+import { LightShafts } from './lightshaft';
 
 /** 画面の横幅に収めるタイル数(スケール感の基準) */
 const VIEW_TILES_X = 44;
@@ -33,6 +34,7 @@ export class Renderer {
   private baker: ChunkBaker;
   private background: Background;
   private megastructure: MegaStructure;
+  private lightShafts: LightShafts;
   private debugMode: string | null = null;
   /**
    * 直近フレームで算出したエイム角(ワールド空間・マウス方向)。
@@ -48,6 +50,7 @@ export class Renderer {
     this.baker = new ChunkBaker(seed);
     this.background = new Background(seed);
     this.megastructure = new MegaStructure(seed);
+    this.lightShafts = new LightShafts(seed);
   }
 
   setDebug(mode: string | null): void {
@@ -134,6 +137,9 @@ export class Renderer {
 
     // バイオーム環境光+プレイヤー補助光
     this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, bb.ambientLevel);
+
+    // 光条(場所依存の体積光)。ライトの後・FX/postの前。暗く開けた空間だけに硬い光条が差す。
+    this.lightShafts.render(ctx, cam, w, h, ppt, bb.ambientLevel);
 
     // 重力子砲の演出: ライトの「上」に描いて発光体として読ませる。
     // ただし post(グレイン+ビネット)の「前」に描くことで画面全体の質感と馴染ませる。
