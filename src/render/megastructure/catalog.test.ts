@@ -52,3 +52,23 @@ describe('buildStructure(全系統)', () => {
     expect(new Set(specs).size).toBe(SYSTEMS.length);
   });
 });
+
+describe('buildStructure(biomech)', () => {
+  it('決定論・非空', () => {
+    const a = buildStructure('biomech', 0.5, makeRng(7, 1, 2));
+    const b = buildStructure('biomech', 0.5, makeRng(7, 1, 2));
+    expect(a).toEqual(b);
+    expect(a.ops.length).toBeGreaterThan(0);
+  });
+
+  it('損傷が上がるほど損傷オペ(gap+frame)は増える(単調非減少)', () => {
+    const low = damageOpCount(buildStructure('biomech', 0.1, makeRng(7, 1, 2)));
+    const high = damageOpCount(buildStructure('biomech', 0.9, makeRng(7, 1, 2)));
+    expect(high).toBeGreaterThanOrEqual(low);
+  });
+
+  it('脈光(glow)は損傷に関わらず残る(まだ生きている不気味さ)', () => {
+    expect(buildStructure('biomech', 0.1, makeRng(7, 1, 2)).ops.some((o) => o.t === 'glow')).toBe(true);
+    expect(buildStructure('biomech', 0.9, makeRng(7, 1, 2)).ops.some((o) => o.t === 'glow')).toBe(true);
+  });
+});

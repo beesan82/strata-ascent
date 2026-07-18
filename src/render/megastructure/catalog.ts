@@ -2,8 +2,8 @@ import type { System } from '../../world/hierarchy';
 import type { DrawOp, StructureSpec } from './spec';
 import type { Rng } from './rng';
 
-/** 構造の型。今は System のエイリアス。段階Eで biomech を加える際に union 化する。 */
-export type StructureType = System;
+/** 構造の型。System 系統に加え、段階Eのバイオメカ異物 biomech を union で加える。 */
+export type StructureType = System | 'biomech';
 
 /** 損傷オペ(gap/frame)の数を数える。損傷度の検証・デバッグ用ユーティリティ。 */
 export function damageOpCount(spec: StructureSpec): number {
@@ -135,12 +135,43 @@ function buildHabitation(damage: number, rng: Rng): StructureSpec {
   return { ops };
 }
 
+/** バイオメカ異物: 椎骨状の柱 + 肋のように伸びる管 + 内部の脈光(まだ生きている不気味さ) */
+function buildBiomech(damage: number, rng: Rng): StructureSpec {
+  const ops: DrawOp[] = [];
+  // 中央の椎骨状コラム(縦円筒 + 節のふくらみを mass で重ねる)
+  ops.push({ t: 'cyl', x: 0.4, y: 0.05, w: 0.2, h: 0.92, tone: 'mid' });
+  for (let i = 0; i < 6; i++) {
+    const y = 0.1 + i * 0.14;
+    ops.push({ t: 'mass', x: 0.36, y, w: 0.28, h: 0.06, tone: 'near' });
+  }
+  // 肋のように左右へ湾曲して伸びる管(高さ違いで数本)
+  for (let i = 0; i < 4; i++) {
+    const y = 0.18 + i * 0.2;
+    const dir = i % 2 === 0 ? -1 : 1;
+    const xEnd = dir < 0 ? 0.05 : 0.95;
+    const xMid = 0.5 + dir * 0.28;
+    ops.push({ t: 'pipe', pts: [[0.5, y], [xMid, y - 0.05], [xEnd, y + 0.02]], width: 0.02 });
+  }
+  // 脈光(中心の不穏な発光。損傷に関わらず残す=まだ生きている)
+  ops.push({ t: 'glow', x: 0.5, y: 0.45, r: 0.05, kind: 'work' });
+  ops.push({ t: 'glow', x: 0.5, y: 0.7, r: 0.03, kind: 'work' });
+  // 損傷: 節が剥がれ骨組み/裂けが露出
+  const rips = Math.floor(damage * 4);
+  for (let i = 0; i < rips; i++) {
+    const y = 0.15 + rng() * 0.7;
+    ops.push({ t: 'frame', x: 0.36, y, w: 0.28, h: 0.06 });
+  }
+  if (damage > 0.7) ops.push({ t: 'gap', x: 0.42, y: 0.5, w: 0.16, h: 0.12 });
+  return { ops };
+}
+
 const BUILDERS: Record<StructureType, (damage: number, rng: Rng) => StructureSpec> = {
   power: buildPower,
   water: buildWater,
   foundry: buildFoundry,
   disposal: buildDisposal,
   habitation: buildHabitation,
+  biomech: buildBiomech,
 };
 
 /** 型・損傷度・乱数列 → 描画オペ列(純粋: rng が決定論なら出力も決定論) */
