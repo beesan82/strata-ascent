@@ -1,8 +1,12 @@
 import type { Camera } from '../core/camera';
 import { hash2 } from '../world/noise';
 
-/** これ以上明るいバイオームでは光条を出さない(暗所限定) */
-export const AMBIENT_MAX = 0.5;
+/**
+ * これ以上明るいバイオームでは光条を出さない上限。現行バイオームの最大ambient(0.72)より上に
+ * 置き、開けた空洞ならどの系統でも光条が差すようにする(暗さは intensity の darkF で反映)。
+ * 主ゲートは開放度(zoom)側。暗∧開放だけに絞ると実世界では両立が稀で発動しないため。
+ */
+export const AMBIENT_MAX = 0.8;
 /** これ以上ズームインした(閉塞)状態では光条を出さない(開放限定)。zoomは小さいほど開放。 */
 export const ZOOM_OPEN = 0.85;
 /** 光条候補スロット間隔(タイル) */

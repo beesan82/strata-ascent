@@ -10,9 +10,24 @@ describe('shaftsInView', () => {
     expect(a).toEqual(b);
   });
 
-  it('明るいバイオーム(ambient>=AMBIENT_MAX)では光条なし', () => {
+  it('上限以上に明るい(ambient>=AMBIENT_MAX)なら光条なし', () => {
     expect(shaftsInView(SEED, 500, 90, AMBIENT_MAX, 0.6)).toEqual([]);
-    expect(shaftsInView(SEED, 500, 90, 0.72, 0.6)).toEqual([]);
+    expect(shaftsInView(SEED, 500, 90, 0.9, 0.6)).toEqual([]);
+  });
+
+  it('開放空間なら明るいバイオーム(ambient<AMBIENT_MAX)でも光条は出る', () => {
+    // 現行バイオームの最大 ambient(0.72)でも AMBIENT_MAX(0.8)未満なので出る
+    expect(shaftsInView(SEED, 0, 400, 0.72, 0.55).length).toBeGreaterThan(0);
+  });
+
+  it('presenceはambient非依存で、暗いほど光条は強い(intensity)', () => {
+    const dark = shaftsInView(SEED, 0, 400, 0.36, 0.55);
+    const bright = shaftsInView(SEED, 0, 400, 0.72, 0.55);
+    expect(dark.length).toBe(bright.length); // 出現はハッシュ依存でambient不変
+    expect(dark.length).toBeGreaterThan(0);
+    for (let i = 0; i < dark.length; i++) {
+      expect(dark[i].intensity).toBeGreaterThanOrEqual(bright[i].intensity);
+    }
   });
 
   it('閉塞(zoom>=ZOOM_OPEN)では光条なし', () => {
