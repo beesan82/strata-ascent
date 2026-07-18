@@ -15,10 +15,12 @@ export interface Shaft {
   worldX: number;
   /** 幅(タイル) */
   width: number;
-  /** 傾き(下端の水平ずれ、画面幅比 -0.2..0.2) */
+  /** 傾き(下端の水平ずれ、画面幅比 -0.18..0.18) */
   lean: number;
   /** 強度(0..1) */
   intensity: number;
+  /** スロット整数index。埃など二次ハッシュの衝突しないキーに使う。 */
+  id: number;
 }
 
 /**
@@ -45,7 +47,7 @@ export function shaftsInView(
     const darkF = 1 - ambientLevel / AMBIENT_MAX;
     const openF = 1 - zoom / ZOOM_OPEN;
     const intensity = Math.max(0, Math.min(1, (0.4 + 0.6 * hash2(seed + 8704, k, 0)) * (0.5 + 0.5 * darkF) * (0.5 + 0.5 * openF)));
-    out.push({ worldX, width, lean, intensity });
+    out.push({ worldX, width, lean, intensity, id: k });
   }
   return out;
 }
@@ -102,9 +104,9 @@ export class LightShafts {
 
       ctx.fillStyle = `rgba(238,244,251,${Math.min(0.5, a * 4)})`;
       for (let i = 0; i < 7; i++) {
-        const u = hash2(this.seed + 8710, Math.round(s.worldX), i);
+        const u = hash2(this.seed + 8710, s.id, i);
         const dy = u * floorY;
-        const dx = sx + leanPx * u + (hash2(this.seed + 8711, Math.round(s.worldX), i) - 0.5) * (topW + (botW - topW) * u);
+        const dx = sx + leanPx * u + (hash2(this.seed + 8711, s.id, i) - 0.5) * (topW + (botW - topW) * u);
         const r = Math.max(0.6, ppt * 0.03);
         ctx.beginPath();
         ctx.arc(dx, dy, r, 0, Math.PI * 2);
