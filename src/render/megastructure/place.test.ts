@@ -56,4 +56,24 @@ describe('slotsInView', () => {
     const wide = slotsInView(SEED, 0, 5000, 0).length;
     expect(wide).toBeGreaterThanOrEqual(narrow);
   });
+
+  it('biomechフラグは稀(全スロットの15%未満)だが皆無ではない', () => {
+    let total = 0;
+    let bio = 0;
+    for (let cx = 0; cx < 3000; cx += 400) {
+      for (const s of slotsInView(SEED, cx, 2000, 0)) {
+        total++;
+        if (s.biomech) bio++;
+      }
+    }
+    expect(total).toBeGreaterThan(0);
+    expect(bio).toBeGreaterThan(0);
+    expect(bio / total).toBeLessThan(0.15);
+  });
+
+  it('biomechフラグも決定論', () => {
+    const a = slotsInView(SEED, 1000, 800, -3000).map((s) => s.biomech);
+    const b = slotsInView(SEED, 1000, 800, -3000).map((s) => s.biomech);
+    expect(a).toEqual(b);
+  });
 });

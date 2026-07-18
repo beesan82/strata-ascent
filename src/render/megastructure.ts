@@ -2,7 +2,7 @@ import type { BiomeBlend } from './biome';
 import { mixHex } from './biome';
 import type { Camera } from '../core/camera';
 import { slotsInView, type Slot } from './megastructure/place';
-import { buildStructure } from './megastructure/catalog';
+import { buildStructure, type StructureType } from './megastructure/catalog';
 import { makeRng } from './megastructure/rng';
 import { hazeFactor, hazeColor } from './megastructure/atmosphere';
 import type { DrawOp, StructureSpec, Tone } from './megastructure/spec';
@@ -56,10 +56,11 @@ export class MegaStructure {
 
   private specFor(s: Slot): StructureSpec {
     const q = Math.round(s.damage * 4) / 4; // 損傷を1/4刻みに量子化
-    const key = `${s.key}:${s.type}:${q}`;
+    const type: StructureType = s.biomech ? 'biomech' : s.type;
+    const key = `${s.key}:${type}:${q}`;
     let spec = this.cache.get(key);
     if (!spec) {
-      spec = buildStructure(s.type, s.damage, makeRng(this.seed, s.variantSeed, Math.round(q * 100)));
+      spec = buildStructure(type, s.damage, makeRng(this.seed, s.variantSeed, Math.round(q * 100)));
       this.cache.set(key, spec);
       if (this.cache.size > MegaStructure.CACHE_CAP) {
         const oldest = this.cache.keys().next().value;
