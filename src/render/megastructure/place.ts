@@ -44,6 +44,8 @@ export interface Slot {
   type: System;     // 系統(プレイヤーの実座標 camXtiles,camYtiles の regionAt。可視分は統一)
   damage: number;   // 0..1
   variantSeed: number;
+  /** 稀に立つ異物フラグ。true のとき描画側は系統機械でなくバイオメカ異物を出す。 */
+  biomech: boolean;
 }
 
 /**
@@ -84,6 +86,7 @@ export function slotsInView(
         type: system,
         damage: damageFor(seed, k, bi, altitudeTiles),
         variantSeed: Math.floor(hash2(seed + 52200 + bi, k, 0) * 0xffffff),
+        biomech: hash2(seed + 52300 + bi, k, 0) < 0.08,
       });
     }
   }
