@@ -147,6 +147,8 @@ describe('壁の弐瓶化(段階F)', () => {
         for (const op of decorateChunk(42, cx, cy)) {
           if (op.kind !== 'grad') continue;
           found++;
+          expect(op.dir).toBe('v');
+          expect(op.h).toBeGreaterThan(0);
           expect(op.stops.length).toBeGreaterThanOrEqual(2);
           for (const [off] of op.stops) {
             expect(off).toBeGreaterThanOrEqual(0);
@@ -158,17 +160,33 @@ describe('壁の弐瓶化(段階F)', () => {
     expect(found).toBeGreaterThan(0);
   });
 
-  it('凹ベイの判定はチャンク境界の両側で一致する(継ぎ目なし)', () => {
-    const collect = (cx: number) => {
-      const set = new Set<string>();
-      for (const op of decorateChunk(42, cx, 1)) {
-        if (op.kind !== 'rect' || op.color !== PALETTE.bay) continue;
-        const wx = cx * CH + op.x;
-        if (wx > CH - 10 && wx < CH + 10) set.add(`${wx.toFixed(2)}:${(CH + op.y).toFixed(2)}`);
+  it('凹ベイの判定はチャンク水平境界の両側で一致する(継ぎ目なし)', () => {
+    // ベイは x方向8整列・幅7 なので垂直境界(x=64整列)は原理的にまたがない。
+    // 水平境界(y=cy*64。64は7の倍数でないため境界をまたぐベイ行が存在しうる)で、
+    // 境界を実際にまたぐベイ(y0∈[境界-6,境界-1])だけを比較する。この範囲は
+    // 上下両チャンクの走査範囲(bt0..bt1)とバッファで完全計算できる。
+    let found = 0;
+    for (let cy = 0; cy < 3; cy++) {
+      const boundary = (cy + 1) * CH;
+      for (let cx = 0; cx < 8; cx++) {
+        const collect = (ccy: number) => {
+          const set = new Set<string>();
+          for (const op of decorateChunk(42, cx, ccy)) {
+            if (op.kind !== 'rect' || op.color !== PALETTE.bay) continue;
+            const wy = ccy * CH + op.y;
+            if (wy < boundary && wy + op.h > boundary) {
+              set.add(`${(cx * CH + op.x).toFixed(2)}:${wy.toFixed(2)}`);
+            }
+          }
+          return set;
+        };
+        const above = collect(cy);
+        expect(above).toEqual(collect(cy + 1));
+        found += above.size;
       }
-      return set;
-    };
-    expect(collect(0)).toEqual(collect(1));
+    }
+    // 恒真の排除: 境界をまたぐベイが少なくとも1つは実在すること(決定論なので安定)
+    expect(found).toBeGreaterThan(0);
   });
 
   it('決定論: 同一入力なら同一出力(拡張後も)', () => {
