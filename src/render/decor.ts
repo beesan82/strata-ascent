@@ -2,6 +2,7 @@ import { hash2 } from '../world/noise';
 import { stratumIndexAt } from '../world/strata';
 import { CHUNK_SIZE, TILE } from '../world/tiles';
 import { tileAt } from '../world/worldgen';
+import { STEEL, mixHex } from './steel';
 
 /**
  * 装飾の描画命令。座標はチャンクローカルのタイル単位(浮動小数)。
@@ -13,28 +14,50 @@ export type DecorOp =
   | { kind: 'line'; x1: number; y1: number; x2: number; y2: number; w: number; color: string; surface?: boolean }
   | { kind: 'dot'; x: number; y: number; r: number; color: string; surface?: boolean }
   | { kind: 'poly'; pts: number[]; w: number; color: string; fill?: boolean; surface?: boolean }
-  | { kind: 'hatch'; x: number; y: number; w: number; h: number; spacing: number; color: string; cross?: boolean; surface?: boolean };
+  | { kind: 'hatch'; x: number; y: number; w: number; h: number; spacing: number; color: string; cross?: boolean; surface?: boolean }
+  | { kind: 'rect'; x: number; y: number; w: number; h: number; color: string; alpha?: number; surface?: boolean }
+  | { kind: 'grad'; x: number; y: number; w: number; h: number; dir: 'h' | 'v'; stops: ReadonlyArray<readonly [number, string]>; alpha?: number; surface?: boolean };
 
-/** 装飾の色パレット(すべて暗色。ライトに照らされて初めて質感として読める) */
+/** 装飾の色パレット(realismモックの鋼ランプSTEELから導出。暖色は錆のみリテラル) */
 export const PALETTE = {
-  edgeTop: '#4a545e',
-  edgeSide: '#39424b',
-  seam: '#0a0d10',
-  rivet: '#3b434b',
-  bolt: '#333b43',
-  hatch: '#313a42',
-  hatchFaint: '#232a30',
-  pipe: '#252c33',
-  pipeThin: '#1f262c',
-  bracket: '#30383f',
-  cable: '#20262c',
-  wire: '#191f24',
-  grill: '#39424b',
-  debris: '#1a2026',
-  debrisLine: '#39424b',
-  rail: '#39424b',
-  rung: '#2c343b',
-  hoop: '#242b31',
+  edgeTop: STEEL.railTop,
+  edgeSide: STEEL.bayEdge,
+  seam: STEEL.shadow,
+  rivet: STEEL.post,
+  bolt: STEEL.post,
+  hatch: STEEL.grate,
+  hatchFaint: STEEL.stringer,
+  pipe: STEEL.rib,
+  pipeThin: STEEL.grate,
+  bracket: STEEL.trayEdge,
+  cable: STEEL.stringer,
+  wire: STEEL.shadow,
+  grill: STEEL.trayEdge,
+  debris: STEEL.base,
+  debrisLine: STEEL.bayEdge,
+  rail: STEEL.post,
+  rung: STEEL.bayEdge,
+  hoop: STEEL.hanger,
+  // ── 段階F: 壁・歩廊・配管の接合ディテール ──
+  bay: STEEL.far,           // 凹ベイの暗面
+  bayEdge: STEEL.bayEdge,   // ベイ上縁の受け光
+  rib: STEEL.rib,           // リブ柱・ガセット
+  ribLight: STEEL.flange,   // リブ柱の受け光エッジ
+  stringer: STEEL.stringer, // H鋼ストリンガー
+  web: STEEL.rib,           // H鋼ウェブ
+  flange: STEEL.flange,     // 上フランジ受け光
+  shadow: STEEL.shadow,     // 落ち影・ジョイスト
+  grateLine: STEEL.shadow,  // グレーチングの目
+  railPost: STEEL.post,     // 手すり支柱
+  railTop: STEEL.railTop,   // 手すり上桟
+  railMid: STEEL.bayEdge,   // 手すり中桟
+  pipeHi: STEEL.post, pipeMid: STEEL.rib, pipeLo: STEEL.far, // 大径配管の円筒グラデ
+  clamp: STEEL.flange,      // バンドクランプ
+  hanger: STEEL.hanger,     // 吊り金具
+  tray: STEEL.base, trayEdge: STEEL.trayEdge, trayCable: STEEL.hanger, // ケーブルトレイ
+  rust: '#5a3a24', rust0: 'rgba(90,58,36,0)', // 錆筋(形に沿った風化。フェード終端)
+  rebar: STEEL.bayEdge,     // 露出鉄筋
+  hole: mixHex(STEEL.black, STEEL.far, 0.35), // 抜け区画
 } as const;
 
 function mod(n: number, m: number): number {
@@ -120,12 +143,20 @@ export function decorateChunk(seed: number, cx: number, cy: number): DecorOp[] {
         }
       }
 
-      // 内部ハッチング(露出面のないタイルのみ。階層で密度・向きが変わる)
+      // 内部: モックの壁はフラットな暗面が基調。ハッチは一部タイルだけ淡く残し、
+      // 世界座標整列のリブ柱(11タイル周期)が垂直リズムを作る。
       if (!upAir && !downAir && !leftAir && !rightAir) {
-        const si = stratumIndexAt(wy) % 3;
-        const spacing = 0.22 + 0.07 * si;
-        // 一部の階層はクロスハッチで密度を上げる(決定論的に階層で切替)
-        ops.push({ kind: 'hatch', x: lx, y: ly, w: 1, h: 1, spacing, color: PALETTE.hatch, cross: si !== 1, surface: true });
+        if (hash2(seed + 604, wx, wy) < 0.22) {
+          const si = stratumIndexAt(wy) % 3;
+          const spacing = 0.26 + 0.07 * si;
+          ops.push({ kind: 'hatch', x: lx, y: ly, w: 1, h: 1, spacing, color: PALETTE.hatchFaint, cross: false, surface: true });
+        }
+        // リブ柱(右側に受け光・2タイルごとにボルト)。列単位のhashで7割の柱が現存
+        if (mod(wx, 11) === 0 && hash2(seed + 726, Math.floor(wx / 11), 0) < 0.7) {
+          ops.push({ kind: 'rect', x: lx + 0.3, y: ly, w: 0.5, h: 1, color: PALETTE.rib });
+          ops.push({ kind: 'line', x1: lx + 0.8, y1: ly, x2: lx + 0.8, y2: ly + 1, w: 0.07, color: PALETTE.ribLight });
+          if (mod(wy, 2) === 0) ops.push({ kind: 'dot', x: lx + 0.55, y: ly + 0.5, r: 0.06, color: PALETTE.bolt });
+        }
       }
     }
   }
@@ -277,6 +308,49 @@ function segmentOps(
           ops.push({ kind: 'line', x1: face, y1: ly0, x2: face, y2: ly0 + 4, w: 0.14, color: PALETTE.pipe });
           ops.push({ kind: 'dot', x: face, y: ly0 + 2, r: 0.12, color: PALETTE.bracket });
         }
+      }
+    }
+  }
+
+  // ── 凹ベイ: 8x7 の世界座標整列ブロックが周囲1タイル込みで完全SOLIDなら、
+  // 後退した暗い区画を彫る(内側上端の落ち影+上縁の受け光+損傷+錆筋)。
+  // モックの「凹ベイ+抜け区画+露出鉄筋+錆の筋」に対応する。
+  const bs0 = Math.floor((bx - 16) / 8);
+  const bs1 = Math.floor((bx + CHUNK_SIZE) / 8);
+  const bt0 = Math.floor((by - 16) / 7);
+  const bt1 = Math.floor((by + CHUNK_SIZE) / 7);
+  for (let sy = bt0; sy <= bt1; sy++) {
+    for (let sx = bs0; sx <= bs1; sx++) {
+      if (hash2(seed + 721, sx, sy) > 0.6) continue; // 全面ベイだと壁が虚ろになるので6割
+      const x0 = sx * 8;
+      const y0 = sy * 7;
+      let ok = true;
+      for (let iy = -1; iy <= 7 && ok; iy++)
+        for (let ix = -1; ix <= 8 && ok; ix++)
+          ok = t(x0 + ix, y0 + iy) === TILE.SOLID;
+      if (!ok) continue;
+      const lx0 = x0 - bx;
+      const ly0 = y0 - by;
+      ops.push({ kind: 'rect', x: lx0 + 0.5, y: ly0 + 0.5, w: 7, h: 6, color: PALETTE.bay });
+      ops.push({ kind: 'rect', x: lx0 + 0.5, y: ly0 + 0.5, w: 7, h: 0.5, color: STEEL.black, alpha: 0.6 });
+      ops.push({ kind: 'line', x1: lx0 + 0.5, y1: ly0 + 0.5, x2: lx0 + 7.5, y2: ly0 + 0.5, w: 0.08, color: PALETTE.bayEdge });
+      // 損傷: 抜け区画+露出鉄筋(35%)
+      if (hash2(seed + 722, sx, sy) < 0.35) {
+        const hx = lx0 + 1 + Math.floor(hash2(seed + 723, sx, sy) * 4);
+        const hy = ly0 + 3.5;
+        ops.push({ kind: 'rect', x: hx, y: hy, w: 2.4, h: 2.4, color: PALETTE.hole });
+        for (let i = 0; i < 3; i++) {
+          const rx = hx + 0.3 + i * 0.8;
+          ops.push({ kind: 'line', x1: rx, y1: hy + 2.4, x2: rx + 0.5, y2: hy + 1.2, w: 0.05, color: PALETTE.rebar });
+        }
+      }
+      // 錆筋: 上縁から下へフェード(50%)
+      if (hash2(seed + 724, sx, sy) < 0.5) {
+        const rx = lx0 + 1 + hash2(seed + 725, sx, sy) * 5.5;
+        ops.push({
+          kind: 'grad', x: rx, y: ly0 + 0.6, w: 0.28, h: 2.6, dir: 'v',
+          stops: [[0, PALETTE.rust], [1, PALETTE.rust0]], alpha: 0.45,
+        });
       }
     }
   }

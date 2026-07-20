@@ -169,7 +169,7 @@ export class ChunkBaker {
     ctx.lineCap = 'round';
     for (const op of decorateChunk(this.seed, cx, cy)) {
       if (op.surface) continue;
-      this.draw(ctx, ACCENT_SOURCE_COLORS.has(op.color) ? { ...op, color: biome.accent } : op);
+      this.draw(ctx, 'color' in op && ACCENT_SOURCE_COLORS.has(op.color) ? { ...op, color: biome.accent } : op);
     }
 
     // 配管コリドー: 全系統のconduitに配管ラインを重ね、通路が「配管」として読めるようにする。
@@ -379,6 +379,23 @@ export class ChunkBaker {
         ctx.fillStyle = this.hatchPattern(op.spacing, op.color, !!op.cross);
         ctx.fillRect(op.x * P, op.y * P, op.w * P, op.h * P);
         ctx.restore();
+        break;
+      }
+      case 'rect':
+        ctx.globalAlpha = op.alpha ?? 1;
+        ctx.fillStyle = op.color;
+        ctx.fillRect(op.x * P, op.y * P, op.w * P, op.h * P);
+        ctx.globalAlpha = 1;
+        break;
+      case 'grad': {
+        const g = op.dir === 'v'
+          ? ctx.createLinearGradient(op.x * P, op.y * P, op.x * P, (op.y + op.h) * P)
+          : ctx.createLinearGradient(op.x * P, op.y * P, (op.x + op.w) * P, op.y * P);
+        for (const [off, color] of op.stops) g.addColorStop(off, color);
+        ctx.globalAlpha = op.alpha ?? 1;
+        ctx.fillStyle = g;
+        ctx.fillRect(op.x * P, op.y * P, op.w * P, op.h * P);
+        ctx.globalAlpha = 1;
         break;
       }
     }

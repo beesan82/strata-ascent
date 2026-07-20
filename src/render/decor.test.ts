@@ -117,3 +117,61 @@ describe('decorateChunk セグメント装飾', () => {
     expect(collect(0)).toEqual(collect(1));
   });
 });
+
+describe('壁の弐瓶化(段階F)', () => {
+  const CH = 64;
+  it('凹ベイ(bay色のrect)は完全内部領域にのみ彫られる', () => {
+    let found = 0;
+    for (let cx = 0; cx < 6; cx++) {
+      for (let cy = -3; cy < 3; cy++) {
+        for (const op of decorateChunk(42, cx, cy)) {
+          if (op.kind !== 'rect' || op.color !== PALETTE.bay) continue;
+          found++;
+          for (const [fx, fy] of [
+            [op.x, op.y], [op.x + op.w - 0.01, op.y],
+            [op.x, op.y + op.h - 0.01], [op.x + op.w - 0.01, op.y + op.h - 0.01],
+            [op.x + op.w / 2, op.y + op.h / 2],
+          ] as const) {
+            expect(tileAt(42, cx * CH + Math.floor(fx), cy * CH + Math.floor(fy))).toBe(TILE.SOLID);
+          }
+        }
+      }
+    }
+    expect(found).toBeGreaterThan(0);
+  });
+
+  it('錆筋は grad(縦方向・stops 0..1)で表現される', () => {
+    let found = 0;
+    for (let cx = 0; cx < 6; cx++) {
+      for (let cy = -3; cy < 3; cy++) {
+        for (const op of decorateChunk(42, cx, cy)) {
+          if (op.kind !== 'grad') continue;
+          found++;
+          expect(op.stops.length).toBeGreaterThanOrEqual(2);
+          for (const [off] of op.stops) {
+            expect(off).toBeGreaterThanOrEqual(0);
+            expect(off).toBeLessThanOrEqual(1);
+          }
+        }
+      }
+    }
+    expect(found).toBeGreaterThan(0);
+  });
+
+  it('凹ベイの判定はチャンク境界の両側で一致する(継ぎ目なし)', () => {
+    const collect = (cx: number) => {
+      const set = new Set<string>();
+      for (const op of decorateChunk(42, cx, 1)) {
+        if (op.kind !== 'rect' || op.color !== PALETTE.bay) continue;
+        const wx = cx * CH + op.x;
+        if (wx > CH - 10 && wx < CH + 10) set.add(`${wx.toFixed(2)}:${(CH + op.y).toFixed(2)}`);
+      }
+      return set;
+    };
+    expect(collect(0)).toEqual(collect(1));
+  });
+
+  it('決定論: 同一入力なら同一出力(拡張後も)', () => {
+    expect(decorateChunk(42, 2, -1)).toEqual(decorateChunk(42, 2, -1));
+  });
+});
