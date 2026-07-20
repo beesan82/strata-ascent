@@ -9,21 +9,12 @@ import { facilityTileAt } from '../world/facility';
 import { megaFacilityAt } from '../world/megafacility';
 import { biomeForSystem, mixHex, type Biome } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
-import { decorateChunk, PALETTE, type DecorOp } from './decor';
+import { decorateChunk, type DecorOp } from './decor';
 import { traceAt, type Trace } from './traces';
+import { STEEL } from './steel';
 
 /** 焼き込み解像度(px/タイル)。表示は拡縮されるが16pxあれば線は読める */
 export const BAKE_PPT = 16;
-
-/**
- * 物理装飾(surface以外)の元色となるPALETTE値の集合。
- * これらの色で描かれる装飾はチャンクのバイオームaccent色へ置換して塗り分ける。
- */
-const ACCENT_SOURCE_COLORS: ReadonlySet<string> = new Set([
-  PALETTE.rail, PALETTE.rung, PALETTE.hoop, PALETTE.pipe, PALETTE.pipeThin,
-  PALETTE.bracket, PALETTE.cable, PALETTE.wire, PALETTE.grill,
-  PALETTE.debris, PALETTE.debrisLine,
-]);
 
 /** チャンク1枚を一度だけオフスクリーンCanvasへ焼き込み、以後はdrawImageで貼る */
 export class ChunkBaker {
@@ -164,18 +155,19 @@ export class ChunkBaker {
     ctx.globalAlpha = 1;
 
     // 装飾(アトラスが描く表面線画=surfaceタグ付きはスキップ、物理装飾は残す)。
-    // 物理装飾のうちPALETTEのaccent系色で描かれるものはバイオームaccentへ置換し、
-    // 配管・レール・瓦礫などの物理ディテールを階層ごとの色調に統一する。
+    // モックの色構成に合わせ、物理装飾は鋼ランプ由来のPALETTE色のまま焼く
+    // (旧accent置換は廃止。暖色は錆・灯のみに限定する)。
     ctx.lineCap = 'round';
     for (const op of decorateChunk(this.seed, cx, cy)) {
       if (op.surface) continue;
-      this.draw(ctx, 'color' in op && ACCENT_SOURCE_COLORS.has(op.color) ? { ...op, color: biome.accent } : op);
+      this.draw(ctx, op);
     }
 
     // 配管コリドー: 全系統のconduitに配管ラインを重ね、通路が「配管」として読めるようにする。
     // networkTileAtと同じ条件なので、conduitが歩けるタイルを生む場所と正確に一致する。
     // 装飾は焼き込みキャンバスへの描画のみ。tileAt/ゲームプレイには一切影響しない。
-    ctx.strokeStyle = biome.accent;
+    // 配管コリドーの線は鋼基調+系統accentを微量ティント(暖色の氾濫を防ぐ。系統識別は残す)
+    ctx.strokeStyle = mixHex(STEEL.post, biome.accent, 0.25);
     ctx.lineWidth = Math.max(1, 0.14 * P);
     for (let ty = 0; ty < CHUNK_SIZE; ty++) {
       const wy = by + ty;
