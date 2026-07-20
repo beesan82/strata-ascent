@@ -197,9 +197,11 @@ function segmentOps(
   t: (wx: number, wy: number) => number,
 ): void {
   // ── 床: 16タイルセグメント。全タイルが「上面が空気のSOLID」なら配管か瓦礫 ──
+  // 歩廊装飾は床から下へ最大3.2タイル伸びるため、上のチャンクにはみ出す床(ローカル負側)も
+  // 走査する(ly=-4 から)。バッファ読みは最悪 ly-1=-5 で MARGIN=17 内。
   const fs0 = Math.floor((bx - 16) / 16);
   const fs1 = Math.floor((bx + CHUNK_SIZE) / 16);
-  for (let ly = -1; ly <= CHUNK_SIZE; ly++) {
+  for (let ly = -4; ly <= CHUNK_SIZE; ly++) {
     const wy = by + ly;
     for (let s = fs0; s <= fs1; s++) {
       const x0 = s * 16;
@@ -240,6 +242,10 @@ function segmentOps(
         // ガセット: セグメント端の外側が壁(当該行と直下がSOLID)なら三角ブレースを壁へ噛ませる
         for (const [ex, dir] of [[x0 - 1, 1], [x0 + 16, -1]] as const) {
           if (t(ex, wy) !== TILE.SOLID || t(ex, wy + 1) !== TILE.SOLID) continue;
+          // 三角が占める3列の2タイル下が塞がっていたら描かない(下の歩行面の上端リムを覆わない)
+          let clear = true;
+          for (let i = 0; i < 3 && clear; i++) clear = t(ex + dir * (1 + i), wy + 2) !== TILE.SOLID;
+          if (!clear) continue;
           const gx = ex - bx + (dir === 1 ? 1 : 0);
           const tri = [gx, yb, gx + dir * 3, yb, gx, yb + 2];
           ops.push({ kind: 'poly', pts: tri, w: 0, color: PALETTE.rib, fill: true });

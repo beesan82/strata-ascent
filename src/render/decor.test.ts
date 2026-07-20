@@ -249,4 +249,39 @@ describe('歩廊の弐瓶化(段階F)', () => {
     }
     expect(found).toBeGreaterThan(0);
   });
+
+  it('歩廊装飾(H鋼・錆筋)は水平チャンク境界の両側で一致する(継ぎ目なし)', () => {
+    // 歩廊装飾は床行から下へ最大3.2タイル伸びるため、床行が境界-4..-1 にあると
+    // 下側チャンクのピクセルにも描かれる。その床から出る stringer rect / 錆筋grad を
+    // 上下両チャンクからワールド座標キーで収集し、一致することを検証する。
+    // cy はワールド走査(seed=42)で「境界直上に薄い床がある」ことを確認済みの行(決定論なので安定)。
+    let found = 0;
+    for (const cy of [-57, -55, -53, -50, -48]) {
+      const boundary = (cy + 1) * CH;
+      for (let cx = 0; cx < 8; cx++) {
+        const collect = (ccy: number) => {
+          const set = new Set<string>();
+          for (const op of decorateChunk(42, cx, ccy)) {
+            let wyFloor: number;
+            if (op.kind === 'rect' && op.color === PALETTE.stringer) {
+              wyFloor = ccy * CH + op.y - 0.5; // op.y = 床行 + 0.5
+            } else if (op.kind === 'grad' && op.h === 2.2) {
+              wyFloor = ccy * CH + op.y - 1; // op.y = 床行 + 1(歩廊の錆筋。凹ベイの錆筋は h=2.6)
+            } else {
+              continue;
+            }
+            if (wyFloor >= boundary - 4 && wyFloor <= boundary - 1) {
+              set.add(`${op.kind}:${(cx * CH + op.x).toFixed(2)}:${wyFloor.toFixed(2)}`);
+            }
+          }
+          return set;
+        };
+        const above = collect(cy);
+        expect(above).toEqual(collect(cy + 1));
+        found += above.size;
+      }
+    }
+    // 恒真の排除: 境界近傍の歩廊装飾が少なくとも1つは実在すること(決定論なので安定)
+    expect(found).toBeGreaterThan(0);
+  });
 });
