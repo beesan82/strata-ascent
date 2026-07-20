@@ -193,3 +193,60 @@ describe('壁の弐瓶化(段階F)', () => {
     expect(decorateChunk(42, 2, -1)).toEqual(decorateChunk(42, 2, -1));
   });
 });
+
+describe('歩廊の弐瓶化(段階F)', () => {
+  const CH = 64;
+  it('H鋼ストリンガー(stringer色のrect)は薄い床(直下が非SOLID)にのみ付く', () => {
+    let found = 0;
+    for (let cx = 0; cx < 8; cx++) {
+      for (let cy = -4; cy < 4; cy++) {
+        for (const op of decorateChunk(42, cx, cy)) {
+          if (op.kind !== 'rect' || op.color !== PALETTE.stringer) continue;
+          found++;
+          const wx = cx * CH + Math.floor(op.x + op.w / 2);
+          const wyFloor = cy * CH + Math.floor(op.y - 0.25); // rect上辺=床タイル内
+          expect(tileAt(42, wx, wyFloor)).toBe(TILE.SOLID);
+          expect(tileAt(42, wx, wyFloor + 1)).not.toBe(TILE.SOLID);
+          expect(tileAt(42, wx, wyFloor - 1)).not.toBe(TILE.SOLID);
+        }
+      }
+    }
+    expect(found).toBeGreaterThan(0);
+  });
+
+  it('手すり上桟(railTop色・非surfaceの水平line)の直下は歩ける床', () => {
+    let found = 0;
+    for (let cx = 0; cx < 8; cx++) {
+      for (let cy = -4; cy < 4; cy++) {
+        for (const op of decorateChunk(42, cx, cy)) {
+          if (op.kind !== 'line' || op.color !== PALETTE.railTop || op.surface || op.y1 !== op.y2) continue;
+          found++;
+          const wx = cx * CH + Math.floor((op.x1 + op.x2) / 2);
+          const wyFloor = cy * CH + Math.floor(op.y1 + 0.9);
+          expect(tileAt(42, wx, wyFloor)).toBe(TILE.SOLID);
+          expect(tileAt(42, wx, wyFloor - 1)).not.toBe(TILE.SOLID);
+        }
+      }
+    }
+    expect(found).toBeGreaterThan(0);
+  });
+
+  it('ガセット(rib色fillのpoly)は必ず壁(SOLID)に接する', () => {
+    let found = 0;
+    for (let cx = 0; cx < 8; cx++) {
+      for (let cy = -4; cy < 4; cy++) {
+        for (const op of decorateChunk(42, cx, cy)) {
+          if (op.kind !== 'poly' || op.color !== PALETTE.rib || !op.fill) continue;
+          found++;
+          // pts[0],pts[1] = 壁側の付け根(タイル境界上)。左右どちらかの隣接タイルが壁
+          const wx = cx * CH + op.pts[0];
+          const wy = cy * CH + Math.floor(op.pts[1]);
+          const leftWall = tileAt(42, Math.floor(wx) - 1, wy) === TILE.SOLID;
+          const rightWall = tileAt(42, Math.floor(wx), wy) === TILE.SOLID;
+          expect(leftWall || rightWall).toBe(true);
+        }
+      }
+    }
+    expect(found).toBeGreaterThan(0);
+  });
+});

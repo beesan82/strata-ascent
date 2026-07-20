@@ -209,6 +209,53 @@ function segmentOps(
       }
       if (!ok) continue;
       const lx0 = x0 - bx;
+      // ── 段階F: 歩廊/床の接合ディテール(モックの片持ち歩廊。既存の這う配管・瓦礫とは独立) ──
+      // グレーチングの目(歩ける上面のすぐ下に短い縦目。上端リムはrelief側が引く)
+      for (let i = 0; i < 32; i++) {
+        const gx = lx0 + i * 0.5 + 0.25;
+        ops.push({ kind: 'line', x1: gx, y1: ly + 0.12, x2: gx, y2: ly + 0.42, w: 0.05, color: PALETTE.grateLine });
+      }
+      // 薄い床(全16タイルの直下が非SOLID)= 歩廊: H鋼+ジョイスト+落ち影+錆筋+ガセット
+      let thin = true;
+      for (let i = 0; i < 16 && thin; i++) thin = t(x0 + i, wy + 1) !== TILE.SOLID;
+      if (thin) {
+        const yb = ly + 1; // 床タイル下端
+        ops.push({ kind: 'rect', x: lx0, y: yb, w: 16, h: 0.38, color: PALETTE.shadow, alpha: 0.8 }); // 落ち影
+        ops.push({ kind: 'rect', x: lx0, y: yb - 0.5, w: 16, h: 0.5, color: PALETTE.stringer });      // H鋼側面
+        ops.push({ kind: 'line', x1: lx0, y1: yb - 0.5, x2: lx0 + 16, y2: yb - 0.5, w: 0.07, color: PALETTE.flange }); // 上フランジ受け光
+        ops.push({ kind: 'rect', x: lx0, y: yb - 0.32, w: 16, h: 0.14, color: PALETTE.web });         // ウェブ帯
+        for (let i = 1; i < 16; i += 2) {
+          ops.push({ kind: 'dot', x: lx0 + i, y: yb - 0.25, r: 0.05, color: PALETTE.bolt });
+        }
+        for (let i = 2; i < 16; i += 4) {
+          ops.push({ kind: 'line', x1: lx0 + i, y1: yb, x2: lx0 + i, y2: yb + 0.9, w: 0.1, color: PALETTE.shadow }); // 下面ジョイスト
+        }
+        if (hash2(seed + 727, s, wy) < 0.6) {
+          const rx = lx0 + 2 + hash2(seed + 728, s, wy) * 12;
+          ops.push({
+            kind: 'grad', x: rx, y: yb, w: 0.2, h: 2.2, dir: 'v',
+            stops: [[0, PALETTE.rust], [1, PALETTE.rust0]], alpha: 0.4,
+          }); // 錆筋(エッジから下へ)
+        }
+        // ガセット: セグメント端の外側が壁(当該行と直下がSOLID)なら三角ブレースを壁へ噛ませる
+        for (const [ex, dir] of [[x0 - 1, 1], [x0 + 16, -1]] as const) {
+          if (t(ex, wy) !== TILE.SOLID || t(ex, wy + 1) !== TILE.SOLID) continue;
+          const gx = ex - bx + (dir === 1 ? 1 : 0);
+          const tri = [gx, yb, gx + dir * 3, yb, gx, yb + 2];
+          ops.push({ kind: 'poly', pts: tri, w: 0, color: PALETTE.rib, fill: true });
+          ops.push({ kind: 'poly', pts: [...tri, gx, yb], w: 0.07, color: PALETTE.ribLight });
+          ops.push({ kind: 'dot', x: gx + dir * 0.8, y: yb + 0.4, r: 0.06, color: PALETTE.bolt });
+          ops.push({ kind: 'dot', x: gx + dir * 1.8, y: yb + 0.3, r: 0.06, color: PALETTE.bolt });
+        }
+      }
+      // 手すり(55%・非衝突の見た目のみ): 支柱+上桟+中桟。上面空気は床判定で保証済み
+      if (hash2(seed + 729, s, wy) < 0.55) {
+        for (let i = 0; i < 16; i += 2) {
+          ops.push({ kind: 'line', x1: lx0 + i + 0.5, y1: ly, x2: lx0 + i + 0.5, y2: ly - 0.9, w: 0.07, color: PALETTE.railPost });
+        }
+        ops.push({ kind: 'line', x1: lx0, y1: ly - 0.9, x2: lx0 + 16, y2: ly - 0.9, w: 0.09, color: PALETTE.railTop });
+        ops.push({ kind: 'line', x1: lx0, y1: ly - 0.45, x2: lx0 + 16, y2: ly - 0.45, w: 0.06, color: PALETTE.railMid });
+      }
       const r = hash2(seed + 701, s, wy);
       if (r < 0.52) {
         // 這う配管(太)+ときどき細い並走管、4タイルごとにブラケット
