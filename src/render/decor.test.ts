@@ -146,6 +146,8 @@ describe('壁の弐瓶化(段階F)', () => {
       for (let cy = -3; cy < 3; cy++) {
         for (const op of decorateChunk(42, cx, cy)) {
           if (op.kind !== 'grad') continue;
+          // 大径配管(pipeHi起点の横グラデ)は対象外。錆筋(rust起点)のみ検査する
+          if (op.stops[0][1] !== PALETTE.rust) continue;
           found++;
           expect(op.dir).toBe('v');
           expect(op.h).toBeGreaterThan(0);
@@ -191,6 +193,75 @@ describe('壁の弐瓶化(段階F)', () => {
 
   it('決定論: 同一入力なら同一出力(拡張後も)', () => {
     expect(decorateChunk(42, 2, -1)).toEqual(decorateChunk(42, 2, -1));
+  });
+});
+
+describe('大径配管とケーブルトレイ(段階F)', () => {
+  const CH = 64;
+  it('大径配管(pipeHi起点の横グラデ)は縦壁面の空気側に立つ', () => {
+    let found = 0;
+    for (let cx = 0; cx < 10; cx++) {
+      for (let cy = -5; cy < 5; cy++) {
+        for (const op of decorateChunk(42, cx, cy)) {
+          if (op.kind !== 'grad' || op.dir !== 'h') continue;
+          if (op.stops[0][1] !== PALETTE.pipeHi) continue;
+          found++;
+          expect(op.h).toBe(8); // 8タイル分の縦管
+          // 管の中心は空気(壁のそば・非衝突)
+          const wx = cx * CH + Math.floor(op.x + op.w / 2);
+          const wy = cy * CH + Math.floor(op.y + 4);
+          expect(tileAt(42, wx, wy)).not.toBe(TILE.SOLID);
+        }
+      }
+    }
+    expect(found).toBeGreaterThan(0);
+  });
+
+  it('ケーブルトレイ(tray色rect)は天井から吊られ、吊り下げ空間は空気', () => {
+    let found = 0;
+    for (let cx = 0; cx < 10; cx++) {
+      for (let cy = -5; cy < 5; cy++) {
+        for (const op of decorateChunk(42, cx, cy)) {
+          if (op.kind !== 'rect' || op.color !== PALETTE.tray) continue;
+          found++;
+          const wx = cx * CH + Math.floor(op.x + op.w / 2);
+          const wyTray = cy * CH + Math.floor(op.y);
+          expect(tileAt(42, wx, wyTray - 3)).toBe(TILE.SOLID); // 2.2上に天井面
+          expect(tileAt(42, wx, wyTray)).not.toBe(TILE.SOLID);
+        }
+      }
+    }
+    expect(found).toBeGreaterThan(0);
+  });
+
+  it('ケーブルトレイは水平チャンク境界の両側で一致する(継ぎ目なし)', () => {
+    // 天井装飾は天井行から下へ最大3.6タイル伸びるため、天井行が境界-4..-1 にあると
+    // 下側チャンクのピクセルにも描かれる。そのトレイ rect を上下両チャンクから
+    // ワールド座標キーで収集し、一致することを検証する。
+    // cy はワールド走査(seed=42)で「境界直上の天井行にトレイがある」ことを確認済みの行
+    // (決定論なので安定)。
+    let found = 0;
+    for (const cy of [-57, -55, -48, -25, -10]) {
+      const boundary = (cy + 1) * CH;
+      for (let cx = 0; cx < 8; cx++) {
+        const collect = (ccy: number) => {
+          const set = new Set<string>();
+          for (const op of decorateChunk(42, cx, ccy)) {
+            if (op.kind !== 'rect' || op.color !== PALETTE.tray) continue;
+            const wyCeil = ccy * CH + op.y - 3.2; // op.y = 天井行 + 3.2
+            if (wyCeil >= boundary - 4 && wyCeil <= boundary - 1) {
+              set.add(`${(cx * CH + op.x).toFixed(2)}:${wyCeil.toFixed(2)}`);
+            }
+          }
+          return set;
+        };
+        const above = collect(cy);
+        expect(above).toEqual(collect(cy + 1));
+        found += above.size;
+      }
+    }
+    // 恒真の排除: 境界をまたぐトレイが少なくとも1つは実在すること(決定論なので安定)
+    expect(found).toBeGreaterThan(0);
   });
 });
 

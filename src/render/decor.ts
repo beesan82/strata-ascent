@@ -293,10 +293,13 @@ function segmentOps(
     }
   }
 
-  // ── 天井: 8タイルセグメント。全タイルが「下面が空気のSOLID」ならケーブル ──
+  // ── 天井: 8タイルセグメント。全タイルが「下面が空気のSOLID」ならケーブル/トレイ ──
+  // 天井装飾は下へ最大3.6タイル伸びる(トレイ ty+0.28=ly+3.48、カテナリー sag最大 ly+2.6)。
+  // 天井行が上のチャンクにあっても下のチャンクのピクセルに描かれるため、ly=-4 から走査する
+  // (歩廊装飾の境界切断と同型の対策)。バッファ読みは最悪 wy+3 → ローカル 67 で MARGIN=17 内。
   const cs0 = Math.floor((bx - 16) / 8);
   const cs1 = Math.floor((bx + CHUNK_SIZE) / 8);
-  for (let ly = -1; ly <= CHUNK_SIZE; ly++) {
+  for (let ly = -4; ly <= CHUNK_SIZE; ly++) {
     const wy = by + ly;
     for (let s = cs0; s <= cs1; s++) {
       const x0 = s * 8;
@@ -318,7 +321,22 @@ function segmentOps(
           pts.push(x, y);
         }
         ops.push({ kind: 'poly', pts, w: 0.09, color: PALETTE.cable });
-      } else if (r < 0.62) {
+      } else if (r < 0.56) {
+        // ケーブルトレイ(吊り金具2本+トレイ+内部ケーブル線)。
+        // 吊り下げ先2.2タイルまで空気が続く場合のみ(狭い通路には出さない)
+        let clear = true;
+        for (let i = 0; i < 8 && clear; i++) {
+          clear = t(x0 + i, wy + 2) !== TILE.SOLID && t(x0 + i, wy + 3) !== TILE.SOLID;
+        }
+        if (clear) {
+          const ty = ly + 1 + 2.2;
+          ops.push({ kind: 'line', x1: lx0 + 1, y1: ly + 1, x2: lx0 + 1, y2: ty, w: 0.07, color: PALETTE.hanger });
+          ops.push({ kind: 'line', x1: lx0 + 7, y1: ly + 1, x2: lx0 + 7, y2: ty, w: 0.07, color: PALETTE.hanger });
+          ops.push({ kind: 'rect', x: lx0, y: ty, w: 8, h: 0.4, color: PALETTE.tray });
+          ops.push({ kind: 'line', x1: lx0, y1: ty, x2: lx0 + 8, y2: ty, w: 0.05, color: PALETTE.trayEdge });
+          ops.push({ kind: 'line', x1: lx0 + 0.2, y1: ty + 0.28, x2: lx0 + 7.8, y2: ty + 0.28, w: 0.05, color: PALETTE.trayCable });
+        }
+      } else if (r < 0.68) {
         // 切れて垂れる短いワイヤー
         const wx0 = lx0 + 1 + Math.floor(hash2(seed + 705, s, wy) * 6);
         const len = 0.8 + hash2(seed + 706, s, wy) * 1.2;
@@ -360,6 +378,45 @@ function segmentOps(
           // 壁面を走る縦配管
           ops.push({ kind: 'line', x1: face, y1: ly0, x2: face, y2: ly0 + 4, w: 0.14, color: PALETTE.pipe });
           ops.push({ kind: 'dot', x: face, y: ly0 + 2, r: 0.12, color: PALETTE.bracket });
+        }
+      }
+    }
+  }
+
+  // ── 大径配管: 縦8タイルすべて「SOLIDで空気側に露出」の壁面に、少し離して円筒管を立てる ──
+  // モックの「大径配管(円筒グラデ+クランプ+ハンガー)」。管は空気側(非衝突・見た目のみ)。
+  // 境界整合: 管は縦8タイル・8整列(y0=s*8)なので水平チャンク境界(64=8の倍数)を横切らない。
+  // 横方向は lx=-1..CHUNK_SIZE を走査し、垂直境界の両側チャンクが同一の wx を評価して一致する
+  // (管の描画は最大 lx±1.75 だが焼き込みクリップで整合)。t 読みは wx±1 → ローカル [-2,65] でバッファ内。
+  const ps0 = Math.floor((by - 16) / 8);
+  const ps1 = Math.floor((by + CHUNK_SIZE) / 8);
+  for (let lx = -1; lx <= CHUNK_SIZE; lx++) {
+    const wx = bx + lx;
+    for (let s = ps0; s <= ps1; s++) {
+      const y0 = s * 8;
+      for (const dir of [-1, 1] as const) {
+        let ok = true;
+        for (let i = 0; i < 8 && ok; i++) {
+          ok = t(wx, y0 + i) === TILE.SOLID && t(wx + dir, y0 + i) === TILE.AIR;
+        }
+        if (!ok || hash2(seed + 730, wx, s * 2 + (dir < 0 ? 0 : 1)) > 0.16) continue;
+        const ly0 = y0 - by;
+        const px0 = dir === -1 ? lx - 0.75 : lx + 1.2; // 壁面から0.2離す
+        ops.push({
+          kind: 'grad', x: px0, y: ly0, w: 0.55, h: 8, dir: 'h',
+          stops: [[0, PALETTE.pipeHi], [0.35, PALETTE.pipeMid], [1, PALETTE.pipeLo]],
+        });
+        // バンドクランプ(リング)
+        for (const cy2 of [ly0 + 1.5, ly0 + 4.5, ly0 + 7]) {
+          ops.push({ kind: 'line', x1: px0, y1: cy2, x2: px0 + 0.55, y2: cy2, w: 0.12, color: PALETTE.clamp });
+        }
+        // サポートハンガー(壁面→管)
+        const wallX = dir === -1 ? lx : lx + 1;
+        for (const hy of [ly0 + 2.5, ly0 + 6]) {
+          ops.push({
+            kind: 'line', x1: wallX, y1: hy,
+            x2: dir === -1 ? px0 + 0.55 : px0, y2: hy, w: 0.08, color: PALETTE.hanger,
+          });
         }
       }
     }
