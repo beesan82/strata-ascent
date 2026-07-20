@@ -1,6 +1,6 @@
 import type { TilePalette } from './tileset/generate';
 import { regionAt, type System } from '../world/hierarchy';
-import { mixHex } from './steel';
+import { mixHex, steelPalette } from './steel';
 export { mixHex };
 
 /** パララックス背景1層の定義 */
@@ -21,66 +21,50 @@ export interface Biome {
   bgLayers: BgLayer[];
 }
 
+/** 背景レイヤー色: 奥(添字小)ほど暗い鋼ランプ+微量ティント */
+const bgColor = (tint: string, i: number): string =>
+  mixHex(['#05080d', '#070c12', '#0a1017'][Math.min(i, 2)], tint, 0.05);
+
+const bg = (
+  tint: string,
+  defs: ReadonlyArray<readonly [number, number, BgLayer['kind']]>,
+): BgLayer[] =>
+  defs.map(([factor, density, kind], i) => ({ factor, density, kind, color: bgColor(tint, i) }));
+
 export const BIOMES: readonly Biome[] = [
-  // BIOMES[0] (最下層) は SYSTEM_BIOME 未使用の予備パレット(参考用に温存。将来再利用可)。
+  // BIOMES[0] (最下層) は SYSTEM_BIOME 未使用の予備パレット(温存)。
   {
-    name: '最下層', ambientColor: '#2e3a44', ambientLevel: 0.34,
-    palette: { fillDark: '#141b1f', fillMid: '#26333a', fillLight: '#3a4a52', edge: '#5f7681', line: '#0f1418' },
-    accent: '#6f8794',
-    bgLayers: [
-      { factor: 0.2, color: '#1b2830', density: 0.5, kind: 'tower' },
-      { factor: 0.4, color: '#24343d', density: 0.4, kind: 'deck' },
-    ],
+    name: '最下層', ambientColor: mixHex('#2e3a44', '#020408', 0.72), ambientLevel: 0.34,
+    palette: steelPalette('#6f8794'), accent: '#6f8794',
+    bgLayers: bg('#6f8794', [[0.2, 0.5, 'tower'], [0.4, 0.4, 'deck']]),
   },
   {
-    name: '居住区跡', ambientColor: '#2c4a4a', ambientLevel: 0.5,
-    palette: { fillDark: '#17272a', fillMid: '#2c4747', fillLight: '#436a63', edge: '#7fc0ac', line: '#101f1f' },
-    accent: '#9fd8c2',
-    bgLayers: [
-      { factor: 0.18, color: '#1c3232', density: 0.55, kind: 'tower' },
-      { factor: 0.35, color: '#274444', density: 0.5, kind: 'deck' },
-      { factor: 0.5, color: '#2f5050', density: 0.3, kind: 'haze' },
-    ],
+    name: '居住区跡', ambientColor: mixHex('#2c4a4a', '#020408', 0.72), ambientLevel: 0.5,
+    palette: steelPalette('#7fc0ac'), accent: '#9fd8c2',
+    bgLayers: bg('#7fc0ac', [[0.18, 0.55, 'tower'], [0.35, 0.5, 'deck'], [0.5, 0.3, 'haze']]),
   },
   {
-    name: '廃棄物層', ambientColor: '#4a3826', ambientLevel: 0.36,
-    palette: { fillDark: '#221812', fillMid: '#3d2c1e', fillLight: '#5c432c', edge: '#b07a45', line: '#160f0a' },
-    accent: '#c98f52',
-    bgLayers: [
-      { factor: 0.2, color: '#2a1f16', density: 0.5, kind: 'tower' },
-      { factor: 0.4, color: '#3a2b1d', density: 0.45, kind: 'deck' },
-    ],
+    name: '廃棄物層', ambientColor: mixHex('#4a3826', '#020408', 0.72), ambientLevel: 0.36,
+    palette: steelPalette('#b07a45'), accent: '#c98f52',
+    bgLayers: bg('#b07a45', [[0.2, 0.5, 'tower'], [0.4, 0.45, 'deck']]),
   },
   {
-    name: '大空洞帯', ambientColor: '#2f3f5c', ambientLevel: 0.72,
-    palette: { fillDark: '#1a2334', fillMid: '#2f4160', fillLight: '#4a648f', edge: '#8fb4e6', line: '#121a28' },
-    accent: '#a9c6ee',
-    bgLayers: [
-      { factor: 0.12, color: '#233350', density: 0.7, kind: 'tower' },
-      { factor: 0.3, color: '#2c4066', density: 0.5, kind: 'deck' },
-      { factor: 0.55, color: '#3a588a', density: 0.35, kind: 'haze' },
-    ],
+    name: '大空洞帯', ambientColor: mixHex('#2f3f5c', '#020408', 0.66), ambientLevel: 0.72,
+    palette: steelPalette('#8fb4e6'), accent: '#a9c6ee',
+    bgLayers: bg('#8fb4e6', [[0.12, 0.7, 'tower'], [0.3, 0.5, 'deck'], [0.55, 0.35, 'haze']]),
   },
   {
-    name: '上層', ambientColor: '#3a3a55', ambientLevel: 0.6,
-    palette: { fillDark: '#1e1e2c', fillMid: '#34344c', fillLight: '#50506f', edge: '#b6b6e0', line: '#14141e' },
-    accent: '#c9a0ff',
-    bgLayers: [
-      { factor: 0.16, color: '#26263a', density: 0.55, kind: 'tower' },
-      { factor: 0.36, color: '#31314a', density: 0.45, kind: 'deck' },
-    ],
+    name: '上層', ambientColor: mixHex('#3a3a55', '#020408', 0.72), ambientLevel: 0.6,
+    palette: steelPalette('#b6b6e0'), accent: '#c9a0ff',
+    bgLayers: bg('#b6b6e0', [[0.16, 0.55, 'tower'], [0.36, 0.45, 'deck']]),
   },
 ];
 
 /** 精錬炉(foundry): 溶鉱の赤熱を帯びた系統配色 */
 const FOUNDRY: Biome = {
-  name: '精錬炉', ambientColor: '#4a2620', ambientLevel: 0.44,
-  palette: { fillDark: '#241310', fillMid: '#432018', fillLight: '#6b3426', edge: '#d06a3c', line: '#160b08' },
-  accent: '#e8834a',
-  bgLayers: [
-    { factor: 0.2, color: '#2a1512', density: 0.5, kind: 'tower' },
-    { factor: 0.4, color: '#3a1d18', density: 0.45, kind: 'deck' },
-  ],
+  name: '精錬炉', ambientColor: mixHex('#4a2620', '#020408', 0.72), ambientLevel: 0.44,
+  palette: steelPalette('#d06a3c'), accent: '#e8834a',
+  bgLayers: bg('#d06a3c', [[0.2, 0.5, 'tower'], [0.4, 0.45, 'deck']]),
 };
 
 /** 系統 → バイオーム配色。地域(REGION)の系統でワールドを塗り分ける。 */

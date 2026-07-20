@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { biomeForSystem, biomeAt, biomeBlend, mixHex, SYSTEM_BIOME } from './biome';
 import { regionAt, REGION_SIZE } from '../world/hierarchy';
+import { relLum } from './steel';
 
 describe('biomeForSystem', () => {
   it('biomeForSystem は SYSTEM_BIOME と一致', () => {
@@ -45,6 +46,36 @@ describe('biomeBlend(地域ベース)', () => {
     expect(bb.from).toBe(bb.to);
     expect(bb.ambientColor).toBe(bb.from.ambientColor);
     expect(bb.ambientLevel).toBe(bb.from.ambientLevel);
+  });
+});
+
+describe('トーン再設計(realismモック水準)', () => {
+  const systems = ['water', 'power', 'habitation', 'disposal', 'foundry'] as const;
+  it('全系統: 基調はほぼ黒(fillMid 輝度 < 0.03)', () => {
+    for (const s of systems) {
+      expect(relLum(SYSTEM_BIOME[s].palette.fillMid)).toBeLessThan(0.03);
+    }
+  });
+  it('全系統: 明度4段 fillDark < fillMid < fillLight < edge', () => {
+    for (const s of systems) {
+      const p = SYSTEM_BIOME[s].palette;
+      expect(relLum(p.fillDark)).toBeLessThan(relLum(p.fillMid));
+      expect(relLum(p.fillMid)).toBeLessThan(relLum(p.fillLight));
+      expect(relLum(p.fillLight)).toBeLessThan(relLum(p.edge));
+    }
+  });
+  it('全系統: 環境色も暗い(ambientColor 輝度 < 0.03)', () => {
+    for (const s of systems) {
+      expect(relLum(SYSTEM_BIOME[s].ambientColor)).toBeLessThan(0.03);
+    }
+  });
+  it('全系統: 背景レイヤーは基調タイルより暗い(遠いほど暗い原則)', () => {
+    for (const s of systems) {
+      const b = SYSTEM_BIOME[s];
+      for (const L of b.bgLayers) {
+        expect(relLum(L.color)).toBeLessThanOrEqual(relLum(b.palette.fillMid) + 1e-6);
+      }
+    }
   });
 });
 
