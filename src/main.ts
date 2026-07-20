@@ -77,6 +77,12 @@ let frames = 0;
 let simTime = 0;
 // カメラの目標ズーム。開放度から毎数フレーム更新し、camera.zoomToで平滑追従する
 let zoomTarget = 1;
+// 開放度の時間平滑(EMA)状態。サンプル格子がタイル境界にスナップするため、歩くたび
+// 窓端の列が入れ替わって生の開放度が階段状にガタつく。数サンプルぶん時間平均することで
+// ズーム目標の微振動(=移動中の画面の伸び縮み・酔い)を断つ。nullは初回未計測。
+let opennessEma: number | null = null;
+// EMA係数。約100msごとの更新で0.35=数サンプル(~0.3秒)で追随。小さいほど滑らかで鈍い。
+const OPENNESS_EMA_ALPHA = 0.35;
 
 function update(dt: number): void {
   simTime += dt;
@@ -85,8 +91,9 @@ function update(dt: number): void {
   // 開放度は毎フレームだと重い(tileAt多数)ので6フレームごとに測る。
   // 求めた目標ズームへは毎フレーム平滑追従する。
   if (frames % OPENNESS_SAMPLE_INTERVAL_FRAMES === 0) {
-    const openness = sampleOpenness(tiles, player.centerX, player.centerY);
-    zoomTarget = targetZoomForOpenness(openness);
+    const raw = sampleOpenness(tiles, player.centerX, player.centerY);
+    opennessEma = opennessEma === null ? raw : opennessEma + (raw - opennessEma) * OPENNESS_EMA_ALPHA;
+    zoomTarget = targetZoomForOpenness(opennessEma);
   }
   camera.zoomTo(zoomTarget, dt);
   graviton.update(dt, input.fireHeld, fire);

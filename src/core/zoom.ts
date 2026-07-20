@@ -29,10 +29,16 @@ export function sampleOpenness(
 ): number {
   let open = 0;
   let total = 0;
-  const x0 = Math.floor(cx) - r;
-  const y0 = Math.floor(cy) - r;
-  for (let y = y0; y <= y0 + 2 * r; y += step) {
-    for (let x = x0; x <= x0 + 2 * r; x += step) {
+  // サンプル格子はプレイヤーではなく「ワールドの固定格子(stepの倍数)」にアンカーする。
+  // floor(cx)-r 起点だと1タイル歩くたびにサンプル列の偶奇が丸ごと入れ替わり(step>1)、
+  // 別の列集合を測るため開放度が鋸歯状に振動→ズームがぐわんぐわんする。固定格子なら
+  // 移動しても同じ世界列を測り続け、端で列が1本出入りするだけの滑らかな変化になる。
+  const x0 = Math.floor((Math.floor(cx) - r) / step) * step;
+  const y0 = Math.floor((Math.floor(cy) - r) / step) * step;
+  const x1 = Math.floor(cx) + r;
+  const y1 = Math.floor(cy) + r;
+  for (let y = y0; y <= y1; y += step) {
+    for (let x = x0; x <= x1; x += step) {
       total++;
       if (tileAt(x, y) !== TILE.SOLID) open++;
     }
