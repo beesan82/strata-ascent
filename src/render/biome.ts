@@ -1,6 +1,6 @@
 import type { TilePalette } from './tileset/generate';
 import { regionAt, type System } from '../world/hierarchy';
-import { mixHex, steelPalette } from './steel';
+import { mixHex, steelPalette, STEEL } from './steel';
 export { mixHex };
 
 /** パララックス背景1層の定義 */
@@ -21,9 +21,12 @@ export interface Biome {
   bgLayers: BgLayer[];
 }
 
+/** 背景レイヤーの基準色(STEELランプのみから導出)。奥(添字小)ほど暗い。bgLayersは最大3層前提。 */
+const BG_BASES = [mixHex(STEEL.black, STEEL.far, 0.5), STEEL.far, mixHex(STEEL.far, STEEL.base, 0.5)];
+
 /** 背景レイヤー色: 奥(添字小)ほど暗い鋼ランプ+微量ティント */
 const bgColor = (tint: string, i: number): string =>
-  mixHex(['#05080d', '#070c12', '#0a1017'][Math.min(i, 2)], tint, 0.05);
+  mixHex(BG_BASES[Math.min(i, 2)], tint, 0.05);
 
 const bg = (
   tint: string,
@@ -49,7 +52,7 @@ export const BIOMES: readonly Biome[] = [
     bgLayers: bg('#b07a45', [[0.2, 0.5, 'tower'], [0.4, 0.45, 'deck']]),
   },
   {
-    name: '大空洞帯', ambientColor: mixHex('#2f3f5c', '#020408', 0.66), ambientLevel: 0.72,
+    name: '大空洞帯', ambientColor: mixHex('#2f3f5c', '#020408', 0.66), ambientLevel: 0.72, // 最も開けた系統だけ僅かに環境色を残す
     palette: steelPalette('#8fb4e6'), accent: '#a9c6ee',
     bgLayers: bg('#8fb4e6', [[0.12, 0.7, 'tower'], [0.3, 0.5, 'deck'], [0.55, 0.35, 'haze']]),
   },
