@@ -52,9 +52,20 @@ describe('structureFill(超構造のトーン整合)', () => {
     }
   });
 
-  it('黒潰れしない(far でも純黒より明るい)', () => {
+  it('黒潰れしない(最暗端 far・hf=0 でも純黒より明るい)', () => {
     for (const amb of ambients) {
-      expect(relLum(structureFill(amb, 'far', 0.6))).toBeGreaterThan(relLum('#020408'));
+      expect(relLum(structureFill(amb, 'far', 0))).toBeGreaterThan(relLum('#020408'));
+    }
+  });
+
+  it('各系統で自系統の fillMid より暗い(実際の不変条件。全系統番犬より余裕が大きい)', () => {
+    for (const b of Object.values(SYSTEM_BIOME)) {
+      const own = relLum(b.palette.fillMid);
+      for (const tone of ['far', 'mid', 'near'] as const) {
+        for (const hf of [0, 0.3, 0.6]) {
+          expect(relLum(structureFill(b.ambientColor, tone, hf))).toBeLessThan(own);
+        }
+      }
     }
   });
 });

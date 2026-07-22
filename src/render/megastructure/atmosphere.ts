@@ -37,6 +37,7 @@ export function hazeColor(ambientColor: string): string {
  * かすみ係数で霞色へ寄せる。realismモックの奥行き原則
  * 「遠=ほぼ黒 → 中=暗灰 → 近(タイル)=中灰」を保つため、
  * どのトーン・かすみでも近景タイル基調(fillMid)より暗い。
+ * 基準暗色のアンカーは旧 '#05090e' から STEEL.black へ意図的に暗色化した。
  */
 export function structureFill(ambientColor: string, tone: Tone, hf: number): string {
   const baseDark = mixHex(STEEL.black, ambientColor, 0.25);
