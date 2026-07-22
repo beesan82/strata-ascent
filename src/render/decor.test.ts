@@ -3,6 +3,20 @@ import { TILE } from '../world/tiles';
 import { tileAt } from '../world/worldgen';
 import { decorateChunk, PALETTE } from './decor';
 
+// decorateChunk は (seed,cx,cy) の純関数。段階Fの広域スキャンは同じチャンクを
+// 複数テストで走査するため、seed=42 の結果をメモ化して再計算を避ける(挙動不変・高速化)。
+// ※決定論テスト(別呼び出しの同値検証)はキャッシュを介さず decorateChunk を直接呼ぶこと。
+const _decoCache = new Map<string, ReturnType<typeof decorateChunk>>();
+function deco(cx: number, cy: number): ReturnType<typeof decorateChunk> {
+  const k = `${cx},${cy}`;
+  let v = _decoCache.get(k);
+  if (!v) {
+    v = decorateChunk(42, cx, cy);
+    _decoCache.set(k, v);
+  }
+  return v;
+}
+
 describe('decorateChunk', () => {
   it('同一シード・同一チャンクなら同一の装飾リスト(決定論)', () => {
     expect(decorateChunk(42, 1, 1)).toEqual(decorateChunk(42, 1, 1));
@@ -13,7 +27,7 @@ describe('decorateChunk', () => {
     const colors = new Set<string>();
     for (let cx = 0; cx < 4; cx++) {
       for (let cy = -2; cy < 2; cy++) {
-        for (const op of decorateChunk(42, cx, cy)) {
+        for (const op of deco(cx, cy)) {
           kinds.add(op.kind);
           if ('color' in op) colors.add(op.color);
         }
@@ -28,7 +42,7 @@ describe('decorateChunk', () => {
   });
 
   it('ハッチングは内部タイル(全方向SOLID)にのみ付く', () => {
-    for (const op of decorateChunk(42, 1, 1)) {
+    for (const op of deco(1, 1)) {
       if (op.kind !== 'hatch') continue;
       const wx = 1 * 64 + Math.floor(op.x);
       const wy = 1 * 64 + Math.floor(op.y);
@@ -47,7 +61,7 @@ describe('decorateChunk', () => {
       for (let lx = 0; lx < 64 && !found; lx++) {
         if (tileAt(42, 64 + lx, 64 + ly) !== TILE.LADDER) continue;
         found = true;
-        const ops = decorateChunk(42, 1, 1).filter(
+        const ops = deco(1, 1).filter(
           (op) =>
             op.kind === 'line' &&
             op.color === PALETTE.rail &&
@@ -66,7 +80,7 @@ describe('decorateChunk セグメント装飾', () => {
     const colors = new Set<string>();
     for (let cx = 0; cx < 6; cx++) {
       for (let cy = -3; cy < 3; cy++) {
-        for (const op of decorateChunk(42, cx, cy)) {
+        for (const op of deco(cx, cy)) {
           if ('color' in op) colors.add(op.color);
         }
       }
@@ -79,7 +93,7 @@ describe('decorateChunk セグメント装飾', () => {
 
   it('床配管は床上面のあるセグメントにのみ載る(配管線の下は必ずSOLID)', () => {
     for (let cx = 0; cx < 3; cx++) {
-      for (const op of decorateChunk(42, cx, 1)) {
+      for (const op of deco(cx, 1)) {
         if (op.kind !== 'line' || op.color !== PALETTE.pipe) continue;
         if (op.x1 === op.x2) continue; // 壁の縦配管は除外(水平配管のみ検査)
         const midX = cx * 64 + Math.floor((op.x1 + op.x2) / 2);
@@ -92,7 +106,7 @@ describe('decorateChunk セグメント装飾', () => {
 
   it('天井ケーブルのアンカーは天井面にある(始点直上がSOLID)', () => {
     for (let cx = 0; cx < 3; cx++) {
-      for (const op of decorateChunk(42, cx, 1)) {
+      for (const op of deco(cx, 1)) {
         if (op.kind !== 'poly' || op.color !== PALETTE.cable) continue;
         const x0 = cx * 64 + Math.floor(op.pts[0]);
         const y0 = 1 * 64 + Math.floor(op.pts[1]);
@@ -105,7 +119,7 @@ describe('decorateChunk セグメント装飾', () => {
     // x=64(チャンク0と1の境界)付近を通る水平配管の世界座標区間を両チャンクから集めて比較
     const collect = (cx: number) => {
       const set = new Set<string>();
-      for (const op of decorateChunk(42, cx, 1)) {
+      for (const op of deco(cx, 1)) {
         if (op.kind !== 'line' || op.color !== PALETTE.pipe || op.x1 === op.x2) continue;
         const wx1 = cx * 64 + op.x1;
         const wx2 = cx * 64 + op.x2;
@@ -124,7 +138,7 @@ describe('壁の弐瓶化(段階F)', () => {
     let found = 0;
     for (let cx = 0; cx < 6; cx++) {
       for (let cy = -3; cy < 3; cy++) {
-        for (const op of decorateChunk(42, cx, cy)) {
+        for (const op of deco(cx, cy)) {
           if (op.kind !== 'rect' || op.color !== PALETTE.bay) continue;
           found++;
           for (const [fx, fy] of [
@@ -144,7 +158,7 @@ describe('壁の弐瓶化(段階F)', () => {
     let found = 0;
     for (let cx = 0; cx < 6; cx++) {
       for (let cy = -3; cy < 3; cy++) {
-        for (const op of decorateChunk(42, cx, cy)) {
+        for (const op of deco(cx, cy)) {
           if (op.kind !== 'grad') continue;
           // 大径配管(pipeHi起点の横グラデ)は対象外。錆筋(rust起点)のみ検査する
           if (op.stops[0][1] !== PALETTE.rust) continue;
@@ -173,7 +187,7 @@ describe('壁の弐瓶化(段階F)', () => {
       for (let cx = 0; cx < 8; cx++) {
         const collect = (ccy: number) => {
           const set = new Set<string>();
-          for (const op of decorateChunk(42, cx, ccy)) {
+          for (const op of deco(cx, ccy)) {
             if (op.kind !== 'rect' || op.color !== PALETTE.bay) continue;
             const wy = ccy * CH + op.y;
             if (wy < boundary && wy + op.h > boundary) {
@@ -202,7 +216,7 @@ describe('大径配管とケーブルトレイ(段階F)', () => {
     let found = 0;
     for (let cx = 0; cx < 10; cx++) {
       for (let cy = -5; cy < 5; cy++) {
-        for (const op of decorateChunk(42, cx, cy)) {
+        for (const op of deco(cx, cy)) {
           if (op.kind !== 'grad' || op.dir !== 'h') continue;
           if (op.stops[0][1] !== PALETTE.pipeHi) continue;
           found++;
@@ -221,7 +235,7 @@ describe('大径配管とケーブルトレイ(段階F)', () => {
     let found = 0;
     for (let cx = 0; cx < 10; cx++) {
       for (let cy = -5; cy < 5; cy++) {
-        for (const op of decorateChunk(42, cx, cy)) {
+        for (const op of deco(cx, cy)) {
           if (op.kind !== 'rect' || op.color !== PALETTE.tray) continue;
           found++;
           const wx = cx * CH + Math.floor(op.x + op.w / 2);
@@ -246,7 +260,7 @@ describe('大径配管とケーブルトレイ(段階F)', () => {
       for (let cx = 0; cx < 8; cx++) {
         const collect = (ccy: number) => {
           const set = new Set<string>();
-          for (const op of decorateChunk(42, cx, ccy)) {
+          for (const op of deco(cx, ccy)) {
             if (op.kind !== 'rect' || op.color !== PALETTE.tray) continue;
             const wyCeil = ccy * CH + op.y - 3.2; // op.y = 天井行 + 3.2
             if (wyCeil >= boundary - 4 && wyCeil <= boundary - 1) {
@@ -271,7 +285,7 @@ describe('歩廊の弐瓶化(段階F)', () => {
     let found = 0;
     for (let cx = 0; cx < 8; cx++) {
       for (let cy = -4; cy < 4; cy++) {
-        for (const op of decorateChunk(42, cx, cy)) {
+        for (const op of deco(cx, cy)) {
           if (op.kind !== 'rect' || op.color !== PALETTE.stringer) continue;
           found++;
           const wx = cx * CH + Math.floor(op.x + op.w / 2);
@@ -289,7 +303,7 @@ describe('歩廊の弐瓶化(段階F)', () => {
     let found = 0;
     for (let cx = 0; cx < 8; cx++) {
       for (let cy = -4; cy < 4; cy++) {
-        for (const op of decorateChunk(42, cx, cy)) {
+        for (const op of deco(cx, cy)) {
           if (op.kind !== 'line' || op.color !== PALETTE.railTop || op.surface || op.y1 !== op.y2) continue;
           found++;
           const wx = cx * CH + Math.floor((op.x1 + op.x2) / 2);
@@ -306,7 +320,7 @@ describe('歩廊の弐瓶化(段階F)', () => {
     let found = 0;
     for (let cx = 0; cx < 8; cx++) {
       for (let cy = -4; cy < 4; cy++) {
-        for (const op of decorateChunk(42, cx, cy)) {
+        for (const op of deco(cx, cy)) {
           if (op.kind !== 'poly' || op.color !== PALETTE.rib || !op.fill) continue;
           found++;
           // pts[0],pts[1] = 壁側の付け根(タイル境界上)。左右どちらかの隣接タイルが壁
@@ -332,7 +346,7 @@ describe('歩廊の弐瓶化(段階F)', () => {
       for (let cx = 0; cx < 8; cx++) {
         const collect = (ccy: number) => {
           const set = new Set<string>();
-          for (const op of decorateChunk(42, cx, ccy)) {
+          for (const op of deco(cx, ccy)) {
             let wyFloor: number;
             if (op.kind === 'rect' && op.color === PALETTE.stringer) {
               wyFloor = ccy * CH + op.y - 0.5; // op.y = 床行 + 0.5
