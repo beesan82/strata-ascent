@@ -48,7 +48,7 @@ export class PixelPipeline {
   constructor(palette: Uint8Array, private targetTilesX: number, private tilePx: number) {
     this.palRgb = palette;
     this.buffer = document.createElement('canvas');
-    this.bctx = this.buffer.getContext('2d')!;
+    this.bctx = this.buffer.getContext('2d', { willReadFrequently: true })!;
   }
 
   /** 画面寸法から内部解像度と整数スケールを決める。renderer.resizeから呼ぶ。 */

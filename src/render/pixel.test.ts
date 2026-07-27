@@ -19,6 +19,9 @@ describe('quantizeRgba', () => {
       expect(palSet.has(hex)).toBe(true);
     }
     expect(nearestIndex(90, 58, 36, rgb)).toBe(16);
+    // 錆(90,58,36)の画素(4画素目, offset 12)は index16(錆)のRGBに着地する
+    const i16 = 16 * 3;
+    expect([data[12], data[13], data[14]]).toEqual([rgb[i16], rgb[i16 + 1], rgb[i16 + 2]]);
   });
 
   it('アルファは保持する', () => {
