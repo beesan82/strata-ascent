@@ -2,6 +2,7 @@ import { hash2 } from '../world/noise';
 import { stratumIndexAt } from '../world/strata';
 import { CHUNK_SIZE, TILE } from '../world/tiles';
 import { tileAt } from '../world/worldgen';
+import { STEEL, mixHex } from './steel';
 
 /**
  * 装飾の描画命令。座標はチャンクローカルのタイル単位(浮動小数)。
@@ -13,28 +14,50 @@ export type DecorOp =
   | { kind: 'line'; x1: number; y1: number; x2: number; y2: number; w: number; color: string; surface?: boolean }
   | { kind: 'dot'; x: number; y: number; r: number; color: string; surface?: boolean }
   | { kind: 'poly'; pts: number[]; w: number; color: string; fill?: boolean; surface?: boolean }
-  | { kind: 'hatch'; x: number; y: number; w: number; h: number; spacing: number; color: string; cross?: boolean; surface?: boolean };
+  | { kind: 'hatch'; x: number; y: number; w: number; h: number; spacing: number; color: string; cross?: boolean; surface?: boolean }
+  | { kind: 'rect'; x: number; y: number; w: number; h: number; color: string; alpha?: number; surface?: boolean }
+  | { kind: 'grad'; x: number; y: number; w: number; h: number; dir: 'h' | 'v'; stops: ReadonlyArray<readonly [number, string]>; alpha?: number; surface?: boolean };
 
-/** 装飾の色パレット(すべて暗色。ライトに照らされて初めて質感として読める) */
+/** 装飾の色パレット(realismモックの鋼ランプSTEELから導出。暖色は錆のみリテラル) */
 export const PALETTE = {
-  edgeTop: '#4a545e',
-  edgeSide: '#39424b',
-  seam: '#0a0d10',
-  rivet: '#3b434b',
-  bolt: '#333b43',
-  hatch: '#313a42',
-  hatchFaint: '#232a30',
-  pipe: '#252c33',
-  pipeThin: '#1f262c',
-  bracket: '#30383f',
-  cable: '#20262c',
-  wire: '#191f24',
-  grill: '#39424b',
-  debris: '#1a2026',
-  debrisLine: '#39424b',
-  rail: '#39424b',
-  rung: '#2c343b',
-  hoop: '#242b31',
+  edgeTop: STEEL.railTop,
+  edgeSide: STEEL.bayEdge,
+  seam: STEEL.shadow,
+  rivet: STEEL.post,
+  bolt: STEEL.post,
+  hatch: STEEL.grate,
+  hatchFaint: STEEL.stringer,
+  pipe: STEEL.rib,
+  pipeThin: STEEL.grate,
+  bracket: STEEL.trayEdge,
+  cable: STEEL.stringer,
+  wire: STEEL.shadow,
+  grill: STEEL.trayEdge,
+  debris: STEEL.base,
+  debrisLine: STEEL.bayEdge,
+  rail: STEEL.post,
+  rung: STEEL.bayEdge,
+  hoop: STEEL.hanger,
+  // ── 段階F: 壁・歩廊・配管の接合ディテール ──
+  bay: STEEL.far,           // 凹ベイの暗面
+  bayEdge: STEEL.bayEdge,   // ベイ上縁の受け光
+  rib: STEEL.rib,           // リブ柱・ガセット
+  ribLight: STEEL.flange,   // リブ柱の受け光エッジ
+  stringer: STEEL.stringer, // H鋼ストリンガー
+  web: STEEL.rib,           // H鋼ウェブ
+  flange: STEEL.flange,     // 上フランジ受け光
+  shadow: STEEL.shadow,     // 落ち影・ジョイスト
+  grateLine: STEEL.shadow,  // グレーチングの目
+  railPost: STEEL.post,     // 手すり支柱
+  railTop: STEEL.railTop,   // 手すり上桟
+  railMid: STEEL.bayEdge,   // 手すり中桟
+  pipeHi: STEEL.post, pipeMid: STEEL.rib, pipeLo: STEEL.far, // 大径配管の円筒グラデ
+  clamp: STEEL.flange,      // バンドクランプ
+  hanger: STEEL.hanger,     // 吊り金具
+  tray: STEEL.base, trayEdge: STEEL.trayEdge, trayCable: STEEL.hanger, // ケーブルトレイ
+  rust: '#5a3a24', rust0: 'rgba(90,58,36,0)', // 錆筋(形に沿った風化。フェード終端)
+  rebar: STEEL.bayEdge,     // 露出鉄筋
+  hole: mixHex(STEEL.black, STEEL.far, 0.35), // 抜け区画
 } as const;
 
 function mod(n: number, m: number): number {
@@ -120,12 +143,20 @@ export function decorateChunk(seed: number, cx: number, cy: number): DecorOp[] {
         }
       }
 
-      // 内部ハッチング(露出面のないタイルのみ。階層で密度・向きが変わる)
+      // 内部: モックの壁はフラットな暗面が基調。ハッチは一部タイルだけ淡く残し、
+      // 世界座標整列のリブ柱(11タイル周期)が垂直リズムを作る。
       if (!upAir && !downAir && !leftAir && !rightAir) {
-        const si = stratumIndexAt(wy) % 3;
-        const spacing = 0.22 + 0.07 * si;
-        // 一部の階層はクロスハッチで密度を上げる(決定論的に階層で切替)
-        ops.push({ kind: 'hatch', x: lx, y: ly, w: 1, h: 1, spacing, color: PALETTE.hatch, cross: si !== 1, surface: true });
+        if (hash2(seed + 604, wx, wy) < 0.22) {
+          const si = stratumIndexAt(wy) % 3;
+          const spacing = 0.26 + 0.07 * si;
+          ops.push({ kind: 'hatch', x: lx, y: ly, w: 1, h: 1, spacing, color: PALETTE.hatchFaint, cross: false, surface: true });
+        }
+        // リブ柱(右側に受け光・2タイルごとにボルト)。列単位のhashで7割の柱が現存
+        if (mod(wx, 11) === 0 && hash2(seed + 726, Math.floor(wx / 11), 0) < 0.7) {
+          ops.push({ kind: 'rect', x: lx + 0.3, y: ly, w: 0.5, h: 1, color: PALETTE.rib });
+          ops.push({ kind: 'line', x1: lx + 0.8, y1: ly, x2: lx + 0.8, y2: ly + 1, w: 0.07, color: PALETTE.ribLight });
+          if (mod(wy, 2) === 0) ops.push({ kind: 'dot', x: lx + 0.55, y: ly + 0.5, r: 0.06, color: PALETTE.bolt });
+        }
       }
     }
   }
@@ -166,9 +197,11 @@ function segmentOps(
   t: (wx: number, wy: number) => number,
 ): void {
   // ── 床: 16タイルセグメント。全タイルが「上面が空気のSOLID」なら配管か瓦礫 ──
+  // 歩廊装飾は床から下へ最大3.2タイル伸びるため、上のチャンクにはみ出す床(ローカル負側)も
+  // 走査する(ly=-4 から)。バッファ読みは最悪 ly-1=-5 で MARGIN=17 内。
   const fs0 = Math.floor((bx - 16) / 16);
   const fs1 = Math.floor((bx + CHUNK_SIZE) / 16);
-  for (let ly = -1; ly <= CHUNK_SIZE; ly++) {
+  for (let ly = -4; ly <= CHUNK_SIZE; ly++) {
     const wy = by + ly;
     for (let s = fs0; s <= fs1; s++) {
       const x0 = s * 16;
@@ -178,6 +211,57 @@ function segmentOps(
       }
       if (!ok) continue;
       const lx0 = x0 - bx;
+      // ── 段階F: 歩廊/床の接合ディテール(モックの片持ち歩廊。既存の這う配管・瓦礫とは独立) ──
+      // グレーチングの目(歩ける上面のすぐ下に短い縦目。上端リムはrelief側が引く)
+      for (let i = 0; i < 32; i++) {
+        const gx = lx0 + i * 0.5 + 0.25;
+        ops.push({ kind: 'line', x1: gx, y1: ly + 0.12, x2: gx, y2: ly + 0.42, w: 0.05, color: PALETTE.grateLine });
+      }
+      // 薄い床(全16タイルの直下が非SOLID)= 歩廊: H鋼+ジョイスト+落ち影+錆筋+ガセット
+      let thin = true;
+      for (let i = 0; i < 16 && thin; i++) thin = t(x0 + i, wy + 1) !== TILE.SOLID;
+      if (thin) {
+        const yb = ly + 1; // 床タイル下端
+        ops.push({ kind: 'rect', x: lx0, y: yb, w: 16, h: 0.38, color: PALETTE.shadow, alpha: 0.8 }); // 落ち影
+        ops.push({ kind: 'rect', x: lx0, y: yb - 0.5, w: 16, h: 0.5, color: PALETTE.stringer });      // H鋼側面
+        ops.push({ kind: 'line', x1: lx0, y1: yb - 0.5, x2: lx0 + 16, y2: yb - 0.5, w: 0.07, color: PALETTE.flange }); // 上フランジ受け光
+        ops.push({ kind: 'rect', x: lx0, y: yb - 0.32, w: 16, h: 0.14, color: PALETTE.web });         // ウェブ帯
+        for (let i = 1; i < 16; i += 2) {
+          ops.push({ kind: 'dot', x: lx0 + i, y: yb - 0.25, r: 0.05, color: PALETTE.bolt });
+        }
+        for (let i = 2; i < 16; i += 4) {
+          ops.push({ kind: 'line', x1: lx0 + i, y1: yb, x2: lx0 + i, y2: yb + 0.9, w: 0.1, color: PALETTE.shadow }); // 下面ジョイスト
+        }
+        if (hash2(seed + 727, s, wy) < 0.6) {
+          const rx = lx0 + 2 + hash2(seed + 728, s, wy) * 12;
+          ops.push({
+            kind: 'grad', x: rx, y: yb, w: 0.2, h: 2.2, dir: 'v',
+            stops: [[0, PALETTE.rust], [1, PALETTE.rust0]], alpha: 0.4,
+          }); // 錆筋(エッジから下へ)
+        }
+        // ガセット: セグメント端の外側が壁(当該行と直下がSOLID)なら三角ブレースを壁へ噛ませる
+        for (const [ex, dir] of [[x0 - 1, 1], [x0 + 16, -1]] as const) {
+          if (t(ex, wy) !== TILE.SOLID || t(ex, wy + 1) !== TILE.SOLID) continue;
+          // 三角が占める3列の2タイル下が塞がっていたら描かない(下の歩行面の上端リムを覆わない)
+          let clear = true;
+          for (let i = 0; i < 3 && clear; i++) clear = t(ex + dir * (1 + i), wy + 2) !== TILE.SOLID;
+          if (!clear) continue;
+          const gx = ex - bx + (dir === 1 ? 1 : 0);
+          const tri = [gx, yb, gx + dir * 3, yb, gx, yb + 2];
+          ops.push({ kind: 'poly', pts: tri, w: 0, color: PALETTE.rib, fill: true });
+          ops.push({ kind: 'poly', pts: [...tri, gx, yb], w: 0.07, color: PALETTE.ribLight });
+          ops.push({ kind: 'dot', x: gx + dir * 0.8, y: yb + 0.4, r: 0.06, color: PALETTE.bolt });
+          ops.push({ kind: 'dot', x: gx + dir * 1.8, y: yb + 0.3, r: 0.06, color: PALETTE.bolt });
+        }
+      }
+      // 手すり(55%・非衝突の見た目のみ): 支柱+上桟+中桟。上面空気は床判定で保証済み
+      if (hash2(seed + 729, s, wy) < 0.55) {
+        for (let i = 0; i < 16; i += 2) {
+          ops.push({ kind: 'line', x1: lx0 + i + 0.5, y1: ly, x2: lx0 + i + 0.5, y2: ly - 0.9, w: 0.07, color: PALETTE.railPost });
+        }
+        ops.push({ kind: 'line', x1: lx0, y1: ly - 0.9, x2: lx0 + 16, y2: ly - 0.9, w: 0.09, color: PALETTE.railTop });
+        ops.push({ kind: 'line', x1: lx0, y1: ly - 0.45, x2: lx0 + 16, y2: ly - 0.45, w: 0.06, color: PALETTE.railMid });
+      }
       const r = hash2(seed + 701, s, wy);
       if (r < 0.52) {
         // 這う配管(太)+ときどき細い並走管、4タイルごとにブラケット
@@ -209,10 +293,13 @@ function segmentOps(
     }
   }
 
-  // ── 天井: 8タイルセグメント。全タイルが「下面が空気のSOLID」ならケーブル ──
+  // ── 天井: 8タイルセグメント。全タイルが「下面が空気のSOLID」ならケーブル/トレイ ──
+  // 天井装飾は下へ最大3.6タイル伸びる(トレイ ty+0.28=ly+3.48、カテナリー sag最大 ly+2.6)。
+  // 天井行が上のチャンクにあっても下のチャンクのピクセルに描かれるため、ly=-4 から走査する
+  // (歩廊装飾の境界切断と同型の対策)。バッファ読みは最悪 wy+3 → ローカル 67 で MARGIN=17 内。
   const cs0 = Math.floor((bx - 16) / 8);
   const cs1 = Math.floor((bx + CHUNK_SIZE) / 8);
-  for (let ly = -1; ly <= CHUNK_SIZE; ly++) {
+  for (let ly = -4; ly <= CHUNK_SIZE; ly++) {
     const wy = by + ly;
     for (let s = cs0; s <= cs1; s++) {
       const x0 = s * 8;
@@ -234,7 +321,22 @@ function segmentOps(
           pts.push(x, y);
         }
         ops.push({ kind: 'poly', pts, w: 0.09, color: PALETTE.cable });
-      } else if (r < 0.62) {
+      } else if (r < 0.56) {
+        // ケーブルトレイ(吊り金具2本+トレイ+内部ケーブル線)。
+        // 吊り下げ先2.2タイルまで空気が続く場合のみ(狭い通路には出さない)
+        let clear = true;
+        for (let i = 0; i < 8 && clear; i++) {
+          clear = t(x0 + i, wy + 2) !== TILE.SOLID && t(x0 + i, wy + 3) !== TILE.SOLID;
+        }
+        if (clear) {
+          const ty = ly + 1 + 2.2;
+          ops.push({ kind: 'line', x1: lx0 + 1, y1: ly + 1, x2: lx0 + 1, y2: ty, w: 0.07, color: PALETTE.hanger });
+          ops.push({ kind: 'line', x1: lx0 + 7, y1: ly + 1, x2: lx0 + 7, y2: ty, w: 0.07, color: PALETTE.hanger });
+          ops.push({ kind: 'rect', x: lx0, y: ty, w: 8, h: 0.4, color: PALETTE.tray });
+          ops.push({ kind: 'line', x1: lx0, y1: ty, x2: lx0 + 8, y2: ty, w: 0.05, color: PALETTE.trayEdge });
+          ops.push({ kind: 'line', x1: lx0 + 0.2, y1: ty + 0.28, x2: lx0 + 7.8, y2: ty + 0.28, w: 0.05, color: PALETTE.trayCable });
+        }
+      } else if (r < 0.68) {
         // 切れて垂れる短いワイヤー
         const wx0 = lx0 + 1 + Math.floor(hash2(seed + 705, s, wy) * 6);
         const len = 0.8 + hash2(seed + 706, s, wy) * 1.2;
@@ -277,6 +379,92 @@ function segmentOps(
           ops.push({ kind: 'line', x1: face, y1: ly0, x2: face, y2: ly0 + 4, w: 0.14, color: PALETTE.pipe });
           ops.push({ kind: 'dot', x: face, y: ly0 + 2, r: 0.12, color: PALETTE.bracket });
         }
+      }
+    }
+  }
+
+  // ── 大径配管: 縦8タイルすべて「SOLIDで空気側に露出」の壁面に、少し離して円筒管を立てる ──
+  // モックの「大径配管(円筒グラデ+クランプ+ハンガー)」。管は空気側(非衝突・見た目のみ)。
+  // 境界整合: 管は縦8タイル・8整列(y0=s*8)なので水平チャンク境界(64=8の倍数)を横切らない。
+  // 横方向は lx=-1..CHUNK_SIZE を走査し、垂直境界の両側チャンクが同一の wx を評価して一致する
+  // (管の描画は最大 lx±1.75 だが焼き込みクリップで整合)。t 読みは wx±1 → ローカル [-2,65] でバッファ内。
+  const ps0 = Math.floor((by - 16) / 8);
+  const ps1 = Math.floor((by + CHUNK_SIZE) / 8);
+  for (let lx = -1; lx <= CHUNK_SIZE; lx++) {
+    const wx = bx + lx;
+    for (let s = ps0; s <= ps1; s++) {
+      const y0 = s * 8;
+      for (const dir of [-1, 1] as const) {
+        let ok = true;
+        for (let i = 0; i < 8 && ok; i++) {
+          ok = t(wx, y0 + i) === TILE.SOLID && t(wx + dir, y0 + i) === TILE.AIR;
+        }
+        if (!ok || hash2(seed + 730, wx, s * 2 + (dir < 0 ? 0 : 1)) > 0.16) continue;
+        const ly0 = y0 - by;
+        const px0 = dir === -1 ? lx - 0.75 : lx + 1.2; // 壁面から0.2離す
+        ops.push({
+          kind: 'grad', x: px0, y: ly0, w: 0.55, h: 8, dir: 'h',
+          stops: [[0, PALETTE.pipeHi], [0.35, PALETTE.pipeMid], [1, PALETTE.pipeLo]],
+        });
+        // バンドクランプ(リング)
+        for (const cy2 of [ly0 + 1.5, ly0 + 4.5, ly0 + 7]) {
+          ops.push({ kind: 'line', x1: px0, y1: cy2, x2: px0 + 0.55, y2: cy2, w: 0.12, color: PALETTE.clamp });
+        }
+        // サポートハンガー(壁面→管)
+        const wallX = dir === -1 ? lx : lx + 1;
+        for (const hy of [ly0 + 2.5, ly0 + 6]) {
+          ops.push({
+            kind: 'line', x1: wallX, y1: hy,
+            x2: dir === -1 ? px0 + 0.55 : px0, y2: hy, w: 0.08, color: PALETTE.hanger,
+          });
+        }
+      }
+    }
+  }
+
+  // ── 凹ベイ: 8x7 の世界座標整列ブロックが周囲1タイル込みで完全SOLIDなら、
+  // 後退した暗い区画を彫る(内側上端の落ち影+上縁の受け光+損傷+錆筋)。
+  // モックの「凹ベイ+抜け区画+露出鉄筋+錆の筋」に対応する。
+  // 注意: y0 は7整列のため走査端(bt0)のベイがバッファ下端外(y0-1 < by-17)を読むことが
+  // あるが、t() のAIRフォールバックで ok=false となりスキップされる。そのベイの描画範囲は
+  // このチャンクのピクセルに重ならないため無害で、隣接チャンクが完全に計算する
+  // (segmentOps冒頭コメントの方針どおり)。
+  const bs0 = Math.floor((bx - 16) / 8);
+  const bs1 = Math.floor((bx + CHUNK_SIZE) / 8);
+  const bt0 = Math.floor((by - 16) / 7);
+  const bt1 = Math.floor((by + CHUNK_SIZE) / 7);
+  for (let sy = bt0; sy <= bt1; sy++) {
+    for (let sx = bs0; sx <= bs1; sx++) {
+      if (hash2(seed + 721, sx, sy) > 0.6) continue; // 全面ベイだと壁が虚ろになるので6割
+      const x0 = sx * 8;
+      const y0 = sy * 7;
+      let ok = true;
+      for (let iy = -1; iy <= 7 && ok; iy++)
+        for (let ix = -1; ix <= 8 && ok; ix++)
+          ok = t(x0 + ix, y0 + iy) === TILE.SOLID;
+      if (!ok) continue;
+      const lx0 = x0 - bx;
+      const ly0 = y0 - by;
+      ops.push({ kind: 'rect', x: lx0 + 0.5, y: ly0 + 0.5, w: 7, h: 6, color: PALETTE.bay });
+      ops.push({ kind: 'rect', x: lx0 + 0.5, y: ly0 + 0.5, w: 7, h: 0.5, color: STEEL.black, alpha: 0.6 });
+      ops.push({ kind: 'line', x1: lx0 + 0.5, y1: ly0 + 0.5, x2: lx0 + 7.5, y2: ly0 + 0.5, w: 0.08, color: PALETTE.bayEdge });
+      // 損傷: 抜け区画+露出鉄筋(35%)
+      if (hash2(seed + 722, sx, sy) < 0.35) {
+        const hx = lx0 + 1 + Math.floor(hash2(seed + 723, sx, sy) * 4);
+        const hy = ly0 + 3.5;
+        ops.push({ kind: 'rect', x: hx, y: hy, w: 2.4, h: 2.4, color: PALETTE.hole });
+        for (let i = 0; i < 3; i++) {
+          const rx = hx + 0.3 + i * 0.8;
+          ops.push({ kind: 'line', x1: rx, y1: hy + 2.4, x2: rx + 0.5, y2: hy + 1.2, w: 0.05, color: PALETTE.rebar });
+        }
+      }
+      // 錆筋: 上縁から下へフェード(50%)
+      if (hash2(seed + 724, sx, sy) < 0.5) {
+        const rx = lx0 + 1 + hash2(seed + 725, sx, sy) * 5.5;
+        ops.push({
+          kind: 'grad', x: rx, y: ly0 + 0.6, w: 0.28, h: 2.6, dir: 'v',
+          stops: [[0, PALETTE.rust], [1, PALETTE.rust0]], alpha: 0.45,
+        });
       }
     }
   }

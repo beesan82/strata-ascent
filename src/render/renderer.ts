@@ -6,6 +6,7 @@ import { Background } from './background';
 import { ChunkBaker } from './chunkbake';
 import { Lighting } from './lighting';
 import { biomeBlend, mixHex } from './biome';
+import { STEEL } from './steel';
 import { drawPlayer } from './playerSprite';
 import { Post } from './post';
 import { drawHierarchyDebug } from './debugHierarchy';
@@ -96,14 +97,14 @@ export class Renderer {
     // バイオーム混合(背景・環境光で共有)
     const bb = biomeBlend(this.seed, player.centerX, player.body.y);
 
-    // 背景(最初のフィル): 開放空間もバイオーム環境色でわずかに持ち上げる。
+    // 背景(最初のフィル): ほぼ黒の鋼基準色をベースに、バイオーム環境色でわずかに持ち上げる。
     // ambientLevelが高いほど明るく色づき(水系統=大空洞帯は暗青の空気に)、
     // ambientの低い系統(廃棄物層など)はほぼ暗いまま。SOLIDタイルより必ず暗くしてシルエットを保つ。
     // 上を少し明るく下を暗くする縦グラデで開放空間に奥行きを与える。
-    const lit = mixHex('#05070a', mixHex(bb.ambientColor, '#000000', 0.5), bb.ambientLevel);
+    const lit = mixHex(STEEL.black, mixHex(bb.ambientColor, '#000000', 0.6), bb.ambientLevel);
     const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, mixHex(lit, '#ffffff', 0.08 * bb.ambientLevel));
-    grad.addColorStop(1, mixHex(lit, '#000000', 0.35));
+    grad.addColorStop(0, mixHex(lit, '#ffffff', 0.05 * bb.ambientLevel));
+    grad.addColorStop(1, mixHex(lit, '#000000', 0.45));
     ctx.fillStyle = grad;
     // シェイクで生じる端の隙間を隠すため少し外側まで塗る(shake=0でも無害)
     ctx.fillRect(-SHAKE_MAX, -SHAKE_MAX, w + SHAKE_MAX * 2, h + SHAKE_MAX * 2);
