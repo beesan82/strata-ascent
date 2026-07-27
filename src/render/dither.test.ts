@@ -24,9 +24,18 @@ describe('bayerOffset', () => {
     expect(bayerOffset(0, 0)).toBe(bayerOffset(4, 4));
     expect(bayerOffset(1, 2)).toBe(bayerOffset(-3, -2));
   });
-  it('16マスすべて異なる値(単調な閾値分布)', () => {
+  it('16マスすべて異なる値(重複なし)', () => {
     const vals = new Set<number>();
     for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) vals.add(bayerOffset(x, y));
     expect(vals.size).toBe(16);
+  });
+  it('16マスのオフセット合計が0(中心化・一様加算でバイアスを生まない)', () => {
+    let sum = 0;
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) sum += bayerOffset(x, y);
+    expect(sum).toBeCloseTo(0, 10);
+  });
+  it('端点の値(最小マス→-0.46875, 最大マス→+0.46875)', () => {
+    expect(bayerOffset(0, 0)).toBeCloseTo(-0.46875, 10); // BAYER4=0
+    expect(bayerOffset(0, 3)).toBeCloseTo(0.46875, 10);  // BAYER4[12]=15
   });
 });
