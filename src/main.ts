@@ -89,7 +89,8 @@ function update(dt: number): void {
   player.update(input.state, dt, tiles);
   camera.follow(player.centerX, player.centerY, dt);
   // 開放度は毎フレームだと重い(tileAt多数)ので6フレームごとに測る。
-  // 求めた目標ズームへは毎フレーム平滑追従する。
+  // 求めた目標ズームは quantizeZoom で離散段へ量子化してから、毎フレーム平滑追従する
+  // (camera.zoomTo自体は連続補間。描画スケールの段スナップは段I Task5でrenderer側が行う)。
   if (frames % OPENNESS_SAMPLE_INTERVAL_FRAMES === 0) {
     const raw = sampleOpenness(tiles, player.centerX, player.centerY);
     opennessEma = opennessEma === null ? raw : opennessEma + (raw - opennessEma) * OPENNESS_EMA_ALPHA;

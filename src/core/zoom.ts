@@ -58,12 +58,18 @@ export function targetZoomForOpenness(openness: number): number {
 }
 
 /**
- * 許可ズーム段(離散)。ドット絵はサブピクセルのにじみを避けるため連続ズームを禁じ、
- * この段のみ許す。MIN_ZOOM(0.5)〜MAX_ZOOM(1)の範囲を3段に分ける。昇順。
+ * 許可ズーム段(離散)。開放度由来の目標ズームをこの段へ量子化する。ドット絵で
+ * サブピクセルのにじみを避けるため、実際に描画へ使う zoom も renderer(段I)で
+ * quantizeZoom(cam.zoom) によりこの段へスナップする(目標と描画の両方を段に乗せる)。
+ * MIN_ZOOM(0.5)〜MAX_ZOOM(1)を3段に分ける。昇順。
+ * 段境界でのチャタリングは既存のopenness EMA平滑で緩和し、残れば実機確認後に対処。
  */
 export const ZOOM_STEPS: readonly number[] = [0.5, 0.75, 1];
 
-/** 連続ズーム値を最近傍の許可段へスナップ(範囲外はクランプ)。純関数・決定論。 */
+/**
+ * 連続ズーム値を最近傍の許可段へスナップ(範囲外はクランプ)。純関数・決定論・ヒステリシスなし
+ * (前回段に依存しない)。同距離の中点は厳密不等号(d < bestD)により小さい段が勝つ。
+ */
 export function quantizeZoom(z: number): number {
   let best = ZOOM_STEPS[0];
   let bestD = Infinity;

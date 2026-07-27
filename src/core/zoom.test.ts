@@ -104,4 +104,12 @@ describe('quantizeZoom', () => {
       prev = q;
     }
   });
+  it('段の両端が MIN_ZOOM/MAX_ZOOM と一致する', () => {
+    expect(ZOOM_STEPS[0]).toBe(MIN_ZOOM);
+    expect(ZOOM_STEPS[ZOOM_STEPS.length - 1]).toBe(MAX_ZOOM);
+  });
+  it('段の中点は決定論的に低い段へ寄る(タイブレーク)', () => {
+    expect(quantizeZoom(0.875)).toBe(0.75); // 0.75と1の等距離
+    expect(quantizeZoom(0.625)).toBe(0.5); // 0.5と0.75の等距離
+  });
 });
