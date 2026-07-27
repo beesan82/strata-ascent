@@ -56,3 +56,23 @@ export function targetZoomForOpenness(openness: number): number {
   const clamped = Math.max(0, Math.min(1, t));
   return MAX_ZOOM + (MIN_ZOOM - MAX_ZOOM) * clamped;
 }
+
+/**
+ * 許可ズーム段(離散)。ドット絵はサブピクセルのにじみを避けるため連続ズームを禁じ、
+ * この段のみ許す。MIN_ZOOM(0.5)〜MAX_ZOOM(1)の範囲を3段に分ける。昇順。
+ */
+export const ZOOM_STEPS: readonly number[] = [0.5, 0.75, 1];
+
+/** 連続ズーム値を最近傍の許可段へスナップ(範囲外はクランプ)。純関数・決定論。 */
+export function quantizeZoom(z: number): number {
+  let best = ZOOM_STEPS[0];
+  let bestD = Infinity;
+  for (const s of ZOOM_STEPS) {
+    const d = Math.abs(z - s);
+    if (d < bestD) {
+      bestD = d;
+      best = s;
+    }
+  }
+  return best;
+}

@@ -7,6 +7,8 @@ import {
   MAX_ZOOM,
   OPENNESS_LO,
   OPENNESS_HI,
+  quantizeZoom,
+  ZOOM_STEPS,
 } from './zoom';
 
 describe('sampleOpenness', () => {
@@ -73,5 +75,33 @@ describe('targetZoomForOpenness', () => {
   it('範囲外入力でも[MIN_ZOOM, MAX_ZOOM]にクランプ', () => {
     expect(targetZoomForOpenness(-5)).toBe(MAX_ZOOM);
     expect(targetZoomForOpenness(5)).toBe(MIN_ZOOM);
+  });
+});
+
+describe('quantizeZoom', () => {
+  it('許可段(ZOOM_STEPS)のいずれかを返す', () => {
+    for (let z = 0.4; z <= 1.05; z += 0.03) {
+      expect(ZOOM_STEPS).toContain(quantizeZoom(z));
+    }
+  });
+  it('段そのものはその段を返す', () => {
+    for (const s of ZOOM_STEPS) expect(quantizeZoom(s)).toBe(s);
+  });
+  it('最近傍段へスナップ', () => {
+    expect(quantizeZoom(0.9)).toBe(1);
+    expect(quantizeZoom(0.8)).toBe(0.75);
+    expect(quantizeZoom(0.55)).toBe(0.5);
+  });
+  it('範囲外はクランプ(最小/最大段)', () => {
+    expect(quantizeZoom(0.1)).toBe(Math.min(...ZOOM_STEPS));
+    expect(quantizeZoom(2)).toBe(Math.max(...ZOOM_STEPS));
+  });
+  it('単調非減少', () => {
+    let prev = quantizeZoom(0.4);
+    for (let z = 0.4; z <= 1.05; z += 0.02) {
+      const q = quantizeZoom(z);
+      expect(q).toBeGreaterThanOrEqual(prev);
+      prev = q;
+    }
   });
 });

@@ -8,7 +8,7 @@ import { Destruction } from './world/destruction';
 import { regionAt, type System } from './world/hierarchy';
 import { CHUNK_SIZE } from './world/tiles';
 import { findSpawn } from './world/worldgen';
-import { sampleOpenness, targetZoomForOpenness } from './core/zoom';
+import { sampleOpenness, targetZoomForOpenness, quantizeZoom } from './core/zoom';
 
 const DEFAULT_SEED = 20260711;
 const STEP_MS = 1000 / 60;
@@ -93,7 +93,7 @@ function update(dt: number): void {
   if (frames % OPENNESS_SAMPLE_INTERVAL_FRAMES === 0) {
     const raw = sampleOpenness(tiles, player.centerX, player.centerY);
     opennessEma = opennessEma === null ? raw : opennessEma + (raw - opennessEma) * OPENNESS_EMA_ALPHA;
-    zoomTarget = targetZoomForOpenness(opennessEma);
+    zoomTarget = quantizeZoom(targetZoomForOpenness(opennessEma));
   }
   camera.zoomTo(zoomTarget, dt);
   graviton.update(dt, input.fireHeld, fire);
