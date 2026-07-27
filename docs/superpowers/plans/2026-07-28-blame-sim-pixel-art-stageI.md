@@ -573,7 +573,19 @@ const VIEW_TILES_X = 34;
     const w = this.pipeline.bufW;
     const h = this.pipeline.bufH;
 ```
-(以降の ppt 計算・チャンク可視範囲・px/py・lighting・post はこの w/h をそのまま使うので変更不要)
+(チャンク可視範囲・px/py・lighting・post はこの w/h をそのまま使うので変更不要)
+
+5b. **描画に使う zoom を離散段へスナップ(ドット絵のクリスプ保証)**:import に `quantizeZoom` を追加し、
+```ts
+import { quantizeZoom } from '../core/zoom';
+```
+既存の ppt 計算(`const ppt = (w / VIEW_TILES_X) * cam.zoom;`)を:
+```ts
+    // 描画スケールは離散段へスナップ。cam.zoom は連続平滑追従だが、ここで段に丸めることで
+    // ズーム遷移中もタイルが整数倍で拡大され、ドット絵がにじまない(段Iの狙い)。
+    const ppt = (w / VIEW_TILES_X) * quantizeZoom(cam.zoom);
+```
+に変更する。これにより「目標の量子化(Task4・main)」と「描画の段スナップ(ここ)」の両方でズームが段に乗り、遷移中も常にクリスプになる。
 
 6. カメラのにじみ防止:`render` 内でチャンク/プレイヤーの画面座標を求める箇所は既に `* ppt + w/2` 形式。ドットにじみを避けるため、mouseX/mouseY は screen 座標(dpr適用済み)で来るので、内部座標へ換算する必要がある。**エイム角の算出だけは内部px基準に合わせる**:
    `render` の引数 `mouseX, mouseY` は画面(dpr)px。内部bufは画面を `scale` で割った座標系なので、プレイヤー画面座標 `px,py`(内部系)とマウスの内部系座標を揃える。マウスを内部系へ換算:
