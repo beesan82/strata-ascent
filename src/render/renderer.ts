@@ -1,4 +1,4 @@
-import type { Camera } from '../core/camera';
+import { Camera } from '../core/camera';
 import type { Player } from '../entities/player';
 import type { ChunkStore } from '../world/chunks';
 import { CHUNK_SIZE } from '../world/tiles';
@@ -13,9 +13,12 @@ import { drawHierarchyDebug } from './debugHierarchy';
 import { drawBeam, drawCharge } from './beam';
 import { MegaStructure } from './megastructure';
 import { LightShafts } from './lightshaft';
+import { PixelPipeline } from './pixel';
+import { paletteRgb } from './palette';
+import { quantizeZoom } from '../core/zoom';
 
 /** 画面の横幅に収めるタイル数(スケール感の基準) */
-const VIEW_TILES_X = 44;
+const VIEW_TILES_X = 34;
 
 /** 発射直後の画面シェイク最大振幅(px) */
 const SHAKE_MAX = 6;
@@ -30,6 +33,8 @@ export interface GravitonFx {
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
+  private screenCtx: CanvasRenderingContext2D;
+  private pipeline: PixelPipeline;
   private lighting = new Lighting();
   private post = new Post();
   private baker: ChunkBaker;
@@ -47,7 +52,9 @@ export class Renderer {
     private canvas: HTMLCanvasElement,
     private seed: number,
   ) {
-    this.ctx = canvas.getContext('2d')!;
+    this.screenCtx = canvas.getContext('2d')!;
+    this.pipeline = new PixelPipeline(paletteRgb(), VIEW_TILES_X, 6);
+    this.ctx = this.pipeline.ctx;
     this.baker = new ChunkBaker(seed);
     this.background = new Background(seed);
     this.megastructure = new MegaStructure(seed);
@@ -61,8 +68,10 @@ export class Renderer {
   resize(w: number, h: number): void {
     this.canvas.width = w;
     this.canvas.height = h;
-    this.lighting.resize(w, h);
-    this.post.resize(w, h);
+    this.pipeline.resize(w, h);
+    this.ctx = this.pipeline.ctx;
+    this.lighting.resize(this.pipeline.bufW, this.pipeline.bufH);
+    this.post.resize(this.pipeline.bufW, this.pipeline.bufH);
   }
 
   /** ChunkStore.evictFarFromと対で呼ぶ(焼き込みキャッシュの解放) */
@@ -80,18 +89,28 @@ export class Renderer {
     mouseX: number, mouseY: number, timeSec: number,
     fx: GravitonFx,
   ): void {
-    const w = this.canvas.width;
-    const h = this.canvas.height;
+    const w = this.pipeline.bufW;
+    const h = this.pipeline.bufH;
     // cam.zoom<1 で ppt が縮み、画面に入るタイル数が増える(開放空間の豆粒化)
-    const ppt = (w / VIEW_TILES_X) * cam.zoom;
+    const renderZoom = quantizeZoom(cam.zoom);
+    const ppt = (w / VIEW_TILES_X) * renderZoom;
     const ctx = this.ctx;
+    const renderCam = new Camera(
+      Math.round(cam.x * ppt) / ppt,
+      Math.round(cam.y * ppt) / ppt,
+    );
+    renderCam.zoom = renderZoom;
 
     // 発射直後の画面シェイク: シーン全体を微小にずらす。ビームの残光(alpha)に比例。
     // ctxを丸ごと平行移動するので各レイヤーは一貫してずれる。restoreで必ず戻す。
     const shake = fx.beam ? fx.beam.alpha * SHAKE_MAX : 0;
     ctx.save();
     if (shake > 0.01) {
-      ctx.translate((Math.random() * 2 - 1) * shake, (Math.random() * 2 - 1) * shake);
+      const internalShake = Math.max(1, Math.round(shake / this.pipeline.scale));
+      ctx.translate(
+        (Math.random() < 0.5 ? -1 : 1) * internalShake,
+        (Math.random() < 0.5 ? -1 : 1) * internalShake,
+      );
     }
 
     // バイオーム混合(背景・環境光で共有)
@@ -110,37 +129,49 @@ export class Renderer {
     ctx.fillRect(-SHAKE_MAX, -SHAKE_MAX, w + SHAKE_MAX * 2, h + SHAKE_MAX * 2);
 
     // パララックス遠景(バイオーム配色の多層構造)
-    this.background.render(ctx, cam.x, cam.y, w, h, ppt, bb);
+    this.background.render(ctx, renderCam.x, renderCam.y, w, h, ppt, bb);
 
     // 意味を持つ超構造(遠→中→近の深度＋かすみ)。焼き込みチャンクより背後、遠景パララックスより手前。
-    this.megastructure.render(ctx, cam, w, h, ppt, bb);
+    this.megastructure.render(ctx, renderCam, w, h, ppt, bb);
 
     // 可視チャンクの焼き込み画像を貼る
     const chunkPx = CHUNK_SIZE * ppt;
-    const cx0 = Math.floor((cam.x - w / ppt / 2) / CHUNK_SIZE);
-    const cx1 = Math.floor((cam.x + w / ppt / 2) / CHUNK_SIZE);
-    const cy0 = Math.floor((cam.y - h / ppt / 2) / CHUNK_SIZE);
-    const cy1 = Math.floor((cam.y + h / ppt / 2) / CHUNK_SIZE);
+    const cx0 = Math.floor((renderCam.x - w / ppt / 2) / CHUNK_SIZE);
+    const cx1 = Math.floor((renderCam.x + w / ppt / 2) / CHUNK_SIZE);
+    const cy0 = Math.floor((renderCam.y - h / ppt / 2) / CHUNK_SIZE);
+    const cy1 = Math.floor((renderCam.y + h / ppt / 2) / CHUNK_SIZE);
     for (let cy = cy0; cy <= cy1; cy++) {
       for (let cx = cx0; cx <= cx1; cx++) {
         const baked = this.baker.get(cx, cy, store);
-        const sx = (cx * CHUNK_SIZE - cam.x) * ppt + w / 2;
-        const sy = (cy * CHUNK_SIZE - cam.y) * ppt + h / 2;
+        const sx = (cx * CHUNK_SIZE - renderCam.x) * ppt + w / 2;
+        const sy = (cy * CHUNK_SIZE - renderCam.y) * ppt + h / 2;
         ctx.drawImage(baked, sx, sy, chunkPx, chunkPx);
       }
     }
 
     // プレイヤー(コートの人影)
-    const px = (player.centerX - cam.x) * ppt + w / 2;
-    const py = (player.centerY - cam.y) * ppt + h / 2;
-    const angle = Math.atan2(mouseY - py, mouseX - px);
+    const px = Math.round((player.centerX - renderCam.x) * ppt + w / 2);
+    const py = Math.round((player.centerY - renderCam.y) * ppt + h / 2);
+    const presentX = Math.floor(
+      (this.canvas.width - this.pipeline.bufW * this.pipeline.scale) / 2,
+    );
+    const presentY = Math.floor(
+      (this.canvas.height - this.pipeline.bufH * this.pipeline.scale) / 2,
+    );
+    const mbx = (
+      mouseX - presentX
+    ) / this.pipeline.scale;
+    const mby = (
+      mouseY - presentY
+    ) / this.pipeline.scale;
+    const angle = Math.atan2(mby - py, mbx - px);
     drawPlayer(ctx, px, py, ppt, player.facing, player.walkPhase, angle, bb.ambientColor);
 
     // バイオーム環境光+プレイヤー補助光
     this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, bb.ambientLevel);
 
     // 光条(場所依存の体積光)。ライトの後・FX/postの前。暗く開けた空間だけに硬い光条が差す。
-    this.lightShafts.render(ctx, cam, w, h, ppt, bb.ambientLevel);
+    this.lightShafts.render(ctx, renderCam, w, h, ppt, bb.ambientLevel);
 
     // 重力子砲の演出: ライトの「上」に描いて発光体として読ませる。
     // ただし post(グレイン+ビネット)の「前」に描くことで画面全体の質感と馴染ませる。
@@ -160,11 +191,12 @@ export class Renderer {
       // 'hierarchy' または 'hierarchy:<tilesAcross>'。既定は広域俯瞰(40000タイル)。
       const n = Number(this.debugMode.split(':')[1]);
       const tilesAcross = Number.isFinite(n) && n > 0 ? n : 40000;
-      drawHierarchyDebug(ctx, cam, this.seed, w, h, tilesAcross);
+      drawHierarchyDebug(ctx, renderCam, this.seed, w, h, tilesAcross);
     }
 
     ctx.restore(); // シェイクの平行移動を戻す
     // update側がボーリング/ビーム方向として読めるよう、算出したエイム角を公開する
     this.aimAngle = angle;
+    this.pipeline.present(this.screenCtx, this.canvas.width, this.canvas.height);
   }
 }
