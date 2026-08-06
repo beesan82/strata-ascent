@@ -43,13 +43,13 @@ describe('quantizeRgba', () => {
     expect([...a]).toEqual([...b]);
   });
 
-  it('ディザ強度>0で、同色の帯が隣接画素で異なる色に割れうる(バンド散らし)', () => {
+  it('production strength disperses a representative color band', () => {
     const w = 16;
     const data = new Uint8ClampedArray(w * 4);
     for (let x = 0; x < w; x++) {
       data[x * 4] = 45; data[x * 4 + 1] = 55; data[x * 4 + 2] = 70; data[x * 4 + 3] = 255;
     }
-    quantizeRgba(data, w, 1, rgb, 32);
+    quantizeRgba(data, w, 1, rgb, DITHER_STRENGTH);
     const colors = new Set<string>();
     for (let x = 0; x < w; x++) {
       colors.add(`${data[x * 4]},${data[x * 4 + 1]},${data[x * 4 + 2]}`);

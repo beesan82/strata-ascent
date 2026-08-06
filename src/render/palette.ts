@@ -1,3 +1,7 @@
+/**
+ * Fixed 32-color high-fidelity palette.
+ * Indices 0–27 are the dark-to-light cold steel ramp; 28–31 are warm rust and light accents.
+ */
 export const PIXEL_PALETTE: readonly string[] = [
   '#020408', '#03050a', '#04070c', '#05090f',
   '#070c12', '#091017', '#0a121a', '#0d141c',

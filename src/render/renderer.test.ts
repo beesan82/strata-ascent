@@ -40,23 +40,21 @@ describe('Renderer pixel pipeline', () => {
   });
 
   it('renders 34 horizontal tiles at 12 internal pixels per tile', () => {
+    const offscreenCanvases: FakeCanvas[] = [];
     vi.stubGlobal('document', {
-      createElement: () => new FakeCanvas(),
+      createElement: () => {
+        const canvas = new FakeCanvas();
+        offscreenCanvases.push(canvas);
+        return canvas;
+      },
     });
     const screen = new FakeCanvas();
     const renderer = new Renderer(screen as unknown as HTMLCanvasElement, 20260711);
 
     renderer.resize(1280, 720);
 
-    const pipeline = (
-      renderer as unknown as {
-        pipeline: { bufW: number; bufH: number; scale: number };
-      }
-    ).pipeline;
-    expect(pipeline).toMatchObject({
-      bufW: 427,
-      bufH: 240,
-      scale: 3,
-    });
+    expect(
+      offscreenCanvases.map(({ width, height }) => ({ width, height })),
+    ).toContainEqual({ width: 427, height: 240 });
   });
 });

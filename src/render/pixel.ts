@@ -29,8 +29,10 @@ export function quantizeRgba(
   }
 }
 
-/** Dither strength (pixel-value scale); visually tune only within the approved weak 8–16 range. */
+/** Internal pixel density per world tile for the high-fidelity renderer. */
 export const HIGH_FIDELITY_TILE_PX = 12;
+
+/** Dither strength in pixel-value units; visually tune only within the approved weak 8–16 range. */
 export const DITHER_STRENGTH = 12;
 
 export interface PixelLayout {
