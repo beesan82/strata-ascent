@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { quantizeRgba } from './pixel';
+import {
+  computePixelLayout,
+  DITHER_STRENGTH,
+  HIGH_FIDELITY_TILE_PX,
+  quantizeRgba,
+} from './pixel';
 import { paletteRgb, PIXEL_PALETTE, nearestIndex } from './palette';
 
 describe('quantizeRgba', () => {
@@ -50,5 +55,28 @@ describe('quantizeRgba', () => {
       colors.add(`${data[x * 4]},${data[x * 4 + 1]},${data[x * 4 + 2]}`);
     }
     expect(colors.size).toBeGreaterThan(1);
+  });
+});
+
+describe('computePixelLayout', () => {
+  it('uses the high-fidelity tile size and softer dither strength', () => {
+    expect(HIGH_FIDELITY_TILE_PX).toBe(12);
+    expect(DITHER_STRENGTH).toBe(12);
+  });
+
+  it('computes a three-times nearest-neighbor layout for 1280 by 720', () => {
+    expect(computePixelLayout(1280, 720, 34, 12)).toEqual({
+      bufW: 427,
+      bufH: 240,
+      scale: 3,
+    });
+  });
+
+  it('clamps a small viewport to the minimum buffer dimensions', () => {
+    expect(computePixelLayout(100, 50, 34, 12)).toEqual({
+      bufW: 160,
+      bufH: 90,
+      scale: 1,
+    });
   });
 });

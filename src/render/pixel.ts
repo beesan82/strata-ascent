@@ -30,7 +30,29 @@ export function quantizeRgba(
 }
 
 /** ディザ強度(px値スケール)。色帯を散らす量。実装時にスクショで 24〜40 を調整。 */
-export const DITHER_STRENGTH = 32;
+export const HIGH_FIDELITY_TILE_PX = 12;
+export const DITHER_STRENGTH = 12;
+
+export interface PixelLayout {
+  bufW: number;
+  bufH: number;
+  scale: number;
+}
+
+export function computePixelLayout(
+  screenW: number,
+  screenH: number,
+  targetTilesX: number,
+  tilePx: number,
+): PixelLayout {
+  const targetBufW = targetTilesX * tilePx;
+  const scale = Math.max(1, Math.round(screenW / targetBufW));
+  return {
+    scale,
+    bufW: Math.max(160, Math.round(screenW / scale)),
+    bufH: Math.max(90, Math.round(screenH / scale)),
+  };
+}
 
 /**
  * ドット絵化パイプライン。内部低解像度canvasへ全レイヤーを描かせ、
@@ -53,10 +75,10 @@ export class PixelPipeline {
 
   /** 画面寸法から内部解像度と整数スケールを決める。renderer.resizeから呼ぶ。 */
   resize(screenW: number, screenH: number): void {
-    const targetBufW = this.targetTilesX * this.tilePx; // 例 34*6=204
-    this.scale = Math.max(1, Math.round(screenW / targetBufW));
-    this.bufW = Math.max(160, Math.round(screenW / this.scale));
-    this.bufH = Math.max(90, Math.round(screenH / this.scale));
+    const layout = computePixelLayout(screenW, screenH, this.targetTilesX, this.tilePx);
+    this.scale = layout.scale;
+    this.bufW = layout.bufW;
+    this.bufH = layout.bufH;
     this.buffer.width = this.bufW;
     this.buffer.height = this.bufH;
     this.bctx.imageSmoothingEnabled = false;
