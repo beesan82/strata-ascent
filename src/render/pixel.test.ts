@@ -18,10 +18,10 @@ describe('quantizeRgba', () => {
         .toString(16).padStart(6, '0');
       expect(palSet.has(hex)).toBe(true);
     }
-    expect(nearestIndex(90, 58, 36, rgb)).toBe(16);
-    // 錆(90,58,36)の画素(4画素目, offset 12)は index16(錆)のRGBに着地する
-    const i16 = 16 * 3;
-    expect([data[12], data[13], data[14]]).toEqual([rgb[i16], rgb[i16 + 1], rgb[i16 + 2]]);
+    expect(nearestIndex(90, 58, 36, rgb)).toBe(29);
+    // The fourth pixel starts at offset 12 and must use rust palette index 29.
+    const i29 = 29 * 3;
+    expect([data[12], data[13], data[14]]).toEqual([rgb[i29], rgb[i29 + 1], rgb[i29 + 2]]);
   });
 
   it('アルファは保持する', () => {
