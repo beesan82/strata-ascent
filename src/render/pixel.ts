@@ -29,7 +29,7 @@ export function quantizeRgba(
   }
 }
 
-/** ディザ強度(px値スケール)。色帯を散らす量。実装時にスクショで 24〜40 を調整。 */
+/** Dither strength (pixel-value scale); visually tune only within the approved weak 8–16 range. */
 export const HIGH_FIDELITY_TILE_PX = 12;
 export const DITHER_STRENGTH = 12;
 

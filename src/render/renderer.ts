@@ -13,7 +13,7 @@ import { drawHierarchyDebug } from './debugHierarchy';
 import { drawBeam, drawCharge } from './beam';
 import { MegaStructure } from './megastructure';
 import { LightShafts } from './lightshaft';
-import { PixelPipeline } from './pixel';
+import { HIGH_FIDELITY_TILE_PX, PixelPipeline } from './pixel';
 import { paletteRgb } from './palette';
 import { quantizeZoom } from '../core/zoom';
 
@@ -53,7 +53,11 @@ export class Renderer {
     private seed: number,
   ) {
     this.screenCtx = canvas.getContext('2d')!;
-    this.pipeline = new PixelPipeline(paletteRgb(), VIEW_TILES_X, 6);
+    this.pipeline = new PixelPipeline(
+      paletteRgb(),
+      VIEW_TILES_X,
+      HIGH_FIDELITY_TILE_PX,
+    );
     this.ctx = this.pipeline.ctx;
     this.baker = new ChunkBaker(seed);
     this.background = new Background(seed);
