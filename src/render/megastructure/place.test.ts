@@ -22,6 +22,7 @@ describe('damageFor', () => {
       expect(value).toBeLessThanOrEqual(1);
     }
     expect(damage).not.toEqual([...damage].sort((a, b) => a - b));
+    expect(damage).not.toEqual([...damage].sort((a, b) => b - a));
   });
 
   it('keeps extreme signed coordinates within [0,1]', () => {

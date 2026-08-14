@@ -23,6 +23,9 @@ export const STRATA: readonly Stratum[] = [
   { name: '上層',     floorSpacing: 12, gapChance: 0.3,  massThreshold: 0.68, cavityThreshold: 0.7 },
 ];
 
+const EVEN_STRATUM_POOL: readonly number[] = [0, 1];
+const ODD_STRATUM_POOL: readonly number[] = [2, 3, 4];
+
 /** ワールドy座標 → 階層インデックス(0始まり、ループ前の通し番号) */
 export function stratumIndexAt(worldY: number): number {
   return Math.floor(worldY / STRATUM_HEIGHT);
@@ -32,7 +35,7 @@ export function stratumIndexAt(worldY: number): number {
 export function stratumAt(seed: number, worldY: number): Stratum {
   const band = stratumIndexAt(worldY);
   const normalizedParity = ((band % 2) + 2) % 2;
-  const pool = normalizedParity === 0 ? [0, 1] : [2, 3, 4];
+  const pool = normalizedParity === 0 ? EVEN_STRATUM_POOL : ODD_STRATUM_POOL;
   const selection = Math.floor(hash2(seed + 811, band, band < 0 ? -1 : 1) * pool.length);
   return STRATA[pool[selection]] ?? STRATA[0];
 }
