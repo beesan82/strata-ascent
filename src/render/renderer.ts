@@ -169,7 +169,17 @@ export class Renderer {
       mouseY - presentY
     ) / this.pipeline.scale;
     const angle = Math.atan2(mby - py, mbx - px);
-    drawPlayer(ctx, px, py, ppt, player.facing, player.walkPhase, angle, bb.ambientColor);
+    drawPlayer(
+      ctx,
+      px,
+      py,
+      ppt,
+      player.facing,
+      player.walkPhase,
+      angle,
+      bb.ambientColor,
+      timeSec,
+    );
 
     // バイオーム環境光+プレイヤー補助光
     this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, bb.ambientLevel);
