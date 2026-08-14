@@ -13,17 +13,18 @@ describe('damageFor', () => {
     }
   });
 
-  it('高度が上がるほど平均損傷は増える(崩壊寄りバイアス・単調)', () => {
-    const avg = (alt: number) => {
-      let s = 0;
-      for (let x = 0; x < 200; x++) s += damageFor(SEED, x, 0, alt);
-      return s / 200;
-    };
-    expect(avg(4000)).toBeGreaterThanOrEqual(avg(0));
-    expect(avg(20000)).toBeGreaterThanOrEqual(avg(4000));
+  it('uses signed Y cells for bounded, non-monotonic damage', () => {
+    const damage = [-100000, -10000, 0, 10000, 100000].map((worldY) =>
+      damageFor(SEED, 12, 0, worldY),
+    );
+    for (const value of damage) {
+      expect(value).toBeGreaterThanOrEqual(0);
+      expect(value).toBeLessThanOrEqual(1);
+    }
+    expect(damage).not.toEqual([...damage].sort((a, b) => a - b));
   });
 
-  it('高度が極端でも[0,1]にクランプ', () => {
+  it('keeps extreme signed coordinates within [0,1]', () => {
     expect(damageFor(SEED, 3, 0, 1e9)).toBeLessThanOrEqual(1);
     expect(damageFor(SEED, 3, 0, -1e9)).toBeGreaterThanOrEqual(0);
   });

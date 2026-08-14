@@ -9,6 +9,7 @@ import { regionAt, type System } from './world/hierarchy';
 import { CHUNK_SIZE } from './world/tiles';
 import { findSpawn } from './world/worldgen';
 import { sampleOpenness, targetZoomForOpenness, quantizeZoom } from './core/zoom';
+import { displayY } from './core/coordinate';
 
 const DEFAULT_SEED = 20260711;
 const STEP_MS = 1000 / 60;
@@ -122,7 +123,7 @@ const SYSTEM_LABEL: Record<System, string> = {
 };
 
 function updateHud(): void {
-  const altitude = Math.max(0, Math.floor(-(player.body.y + player.body.h)));
+  const coordinateY = displayY(player.body.y, player.body.h);
   const sys = regionAt(seed, Math.floor(player.centerX), Math.floor(player.body.y)).system;
   let cannon = `重力子砲 ${graviton.charges}/3`;
   const r = graviton.chargeRatio;
@@ -131,7 +132,7 @@ function updateHud(): void {
     const bars = Math.round(r * 4);
     cannon += ` [${'#'.repeat(bars)}${'-'.repeat(4 - bars)}]`;
   }
-  hud.textContent = `高度 ${altitude}m — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${cannon}`;
+  hud.textContent = `座標 Y ${coordinateY} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${cannon}`;
 }
 
 let last = performance.now();

@@ -26,13 +26,11 @@ function clamp01(v: number): number {
 }
 
 /**
- * 構造の損傷度(0..1)。座標ハッシュ基準 + 高度が上がるほど崩壊寄りのバイアス。
- * altitudeTiles は max(0,-worldY) 相当を呼び出し側が渡す。常に[0,1]にクランプ。
+ * Structure damage ratio (0..1), deterministically varied by signed world Y cells.
  */
-export function damageFor(seed: number, slotX: number, band: number, altitudeTiles: number): number {
-  const base = hash2(seed + 51000 + band, slotX, 0) * 0.7;
-  const altBias = clamp01(Math.max(0, altitudeTiles) / 30000) * 0.3;
-  return clamp01(base + altBias);
+export function damageFor(seed: number, slotX: number, band: number, worldY: number): number {
+  const yCell = Math.floor(worldY / 500);
+  return clamp01(hash2(seed + 51000 + band, slotX, yCell));
 }
 
 export interface Slot {
@@ -52,7 +50,7 @@ export interface Slot {
  * camXtiles 中心・spanTiles 幅の可視範囲に落ちる各バンドの構造スロットを決定論で列挙。
  * type はプレイヤーの実座標(camXtiles,camYtiles)の regionAt().system で、可視構造は
  * 「今いる系統」に統一する(背景がプレイヤーの系統を追従する設計)。
- * camYtiles は符号付きワールドY(上=負)。高度バイアス altitude は max(0,-camYtiles)。
+ * camYtiles is the signed world Y coordinate used for deterministic variation.
  */
 export function slotsInView(
   seed: number,
@@ -61,7 +59,6 @@ export function slotsInView(
   camYtiles: number = 0,
 ): Slot[] {
   const out: Slot[] = [];
-  const altitudeTiles = Math.max(0, -camYtiles);
   const rowY = Math.floor(camYtiles);
   // 系統はプレイヤーの実ワールド座標(camXtiles)で判定する。worldX はパララックス圧縮
   // 空間の値なので regionAt に渡すと実系統とずれる。可視構造は「今いる系統」で統一する
@@ -84,7 +81,7 @@ export function slotsInView(
         factor: B.factor,
         span: B.span,
         type: system,
-        damage: damageFor(seed, k, bi, altitudeTiles),
+        damage: damageFor(seed, k, bi, rowY),
         variantSeed: Math.floor(hash2(seed + 52200 + bi, k, 0) * 0xffffff),
         biomech: hash2(seed + 52300 + bi, k, 0) < 0.08,
       });
