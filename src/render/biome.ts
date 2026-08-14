@@ -1,5 +1,5 @@
 import type { TilePalette } from './tileset/generate';
-import { regionAt, type System } from '../world/hierarchy';
+import type { System } from '../world/hierarchy';
 import { mixHex, steelPalette, STEEL } from './steel';
 export { mixHex };
 
@@ -92,12 +92,69 @@ export interface BiomeBlend {
 }
 
 /** ワールド座標 → その地域(系統)のバイオーム */
+export const BIOME_CELL_BASE = 1500;
+export const BIOME_CELL_JITTER = 150;
+export const BIOME_BLEND_HALF_WIDTH = 200;
+
+const signedHash = (seed: number, cell: number, sign: number): number => {
+  let hash = (seed | 0) ^ Math.imul(cell | 0, 0x9e3779b1);
+  hash = Math.imul(hash ^ (sign < 0 ? 0x85ebca6b : 0xc2b2ae35), 0x27d4eb2d);
+  hash ^= hash >>> 15;
+  return Math.imul(hash, 0x85ebca6b) >>> 0;
+};
+
+const cellSign = (cell: number): number => cell < 0 ? -1 : 1;
+
+const biomeJitter = (seed: number, cell: number): number =>
+  (signedHash(seed, cell, cellSign(cell)) % (BIOME_CELL_JITTER * 2 + 1)) - BIOME_CELL_JITTER;
+
+export function biomeBoundary(seed: number, cell: number): number {
+  return cell * BIOME_CELL_BASE + biomeJitter(seed, cell);
+}
+
+export function biomeCellAt(seed: number, y: number): number {
+  let cell = Math.floor(y / BIOME_CELL_BASE);
+  while (y < biomeBoundary(seed, cell)) cell--;
+  while (y >= biomeBoundary(seed, cell + 1)) cell++;
+  return cell;
+}
+
+export function biomeForCell(seed: number, cell: number): Biome {
+  const pool = ((cell % 2) + 2) % 2 === 0 ? [0, 1] : [2, 3, 4];
+  const index = pool[signedHash(seed, cell, cellSign(cell)) % pool.length];
+  return BIOMES[index] ?? BIOMES[0];
+}
+
 export function biomeAt(seed: number, x: number, y: number): Biome {
-  return SYSTEM_BIOME[regionAt(seed, x, y).system];
+  void x;
+  return biomeForCell(seed, biomeCellAt(seed, y));
 }
 
 /** 地域ベースでは地域内は単色。from=to=地域配色, t=0。 */
+const blend = (from: Biome, to: Biome, t: number): BiomeBlend => ({
+  from,
+  to,
+  t,
+  ambientLevel: from.ambientLevel + (to.ambientLevel - from.ambientLevel) * t,
+  ambientColor: mixHex(from.ambientColor, to.ambientColor, t),
+});
+
 export function biomeBlend(seed: number, x: number, y: number): BiomeBlend {
-  const b = biomeAt(seed, x, y);
+  void x;
+  const cell = biomeCellAt(seed, y);
+  const lowerBoundary = biomeBoundary(seed, cell);
+  const upperBoundary = biomeBoundary(seed, cell + 1);
+
+  if (y < lowerBoundary + BIOME_BLEND_HALF_WIDTH) {
+    const t = (y - (lowerBoundary - BIOME_BLEND_HALF_WIDTH)) / (BIOME_BLEND_HALF_WIDTH * 2);
+    return blend(biomeForCell(seed, cell - 1), biomeForCell(seed, cell), t);
+  }
+
+  if (y >= upperBoundary - BIOME_BLEND_HALF_WIDTH) {
+    const t = (y - (upperBoundary - BIOME_BLEND_HALF_WIDTH)) / (BIOME_BLEND_HALF_WIDTH * 2);
+    return blend(biomeForCell(seed, cell), biomeForCell(seed, cell + 1), t);
+  }
+
+  const b = biomeForCell(seed, cell);
   return { from: b, to: b, t: 0, ambientLevel: b.ambientLevel, ambientColor: b.ambientColor };
 }
