@@ -377,26 +377,33 @@ describe('player sprite', () => {
     }
   });
 
-  it('keeps the hard silhouette inside the configured pose height at low bob', () => {
-    const context = new RecordingContext();
-    const lowBobTime = (Math.PI * 1.5) / 2.2;
+  it('keeps the hard silhouette grounded inside its configured height across gait and bob', () => {
+    const phases = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
+    const times = [0, Math.PI / (2 * 2.2), (3 * Math.PI) / (2 * 2.2)];
 
-    drawPlayer(
-      context as unknown as CanvasRenderingContext2D,
-      0,
-      0,
-      16,
-      1,
-      0,
-      0,
-      '#000000',
-      lowBobTime,
-    );
+    for (const facing of [1, -1] as const) {
+      for (const phase of phases) {
+        for (const timeSec of times) {
+          const context = new RecordingContext();
+          drawPlayer(
+            context as unknown as CanvasRenderingContext2D,
+            0,
+            0,
+            16,
+            facing,
+            phase,
+            0,
+            '#000000',
+            timeSec,
+          );
 
-    const pathY = context.operations
-      .filter(({ name }) => name === 'moveTo' || name === 'lineTo')
-      .map(({ args }) => args[1]);
-    expect(Math.min(...pathY)).toBeGreaterThanOrEqual(-PLAYER_DRAW_HEIGHT_TILES);
-    expect(Math.max(...pathY)).toBeLessThanOrEqual(0);
+          const pathY = context.operations
+            .filter(({ name }) => name === 'moveTo' || name === 'lineTo')
+            .map(({ args }) => args[1]);
+          expect(Math.min(...pathY)).toBeGreaterThanOrEqual(-PLAYER_DRAW_HEIGHT_TILES);
+          expect(Math.max(...pathY)).toBeLessThanOrEqual(0);
+        }
+      }
+    }
   });
 });
