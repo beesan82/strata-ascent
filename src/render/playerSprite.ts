@@ -89,8 +89,8 @@ const drawLeg = (
   drawJoint(ctx, knee, 0.075, palette.joint);
   drawJoint(ctx, ankle, 0.052, palette.joint);
   polygon(ctx, [
-    { x: ankle.x - 0.07, y: ankle.y + 0.01 },
-    { x: ankle.x + 0.07, y: ankle.y + 0.01 },
+    { x: ankle.x - facing * 0.07, y: ankle.y + 0.01 },
+    { x: ankle.x + facing * 0.07, y: ankle.y + 0.01 },
     { x: foot.x + facing * 0.16, y: foot.y },
     { x: foot.x - facing * 0.08, y: foot.y },
   ], palette.uniformLight);
@@ -202,6 +202,23 @@ const pointAlong = (origin: Vec2, direction: Vec2, distance: number): Vec2 => ({
   y: origin.y + direction.y * distance,
 });
 
+const weaponDirection = (pose: PlayerPose): Vec2 => {
+  const dx = pose.muzzle.x - pose.weaponHand.x;
+  const dy = pose.muzzle.y - pose.weaponHand.y;
+  const length = Math.hypot(dx, dy) || 1;
+  return { x: dx / length, y: dy / length };
+};
+
+const supportContactOnWeapon = (pose: PlayerPose): Vec2 => {
+  const direction = weaponDirection(pose);
+  const supportOffset = {
+    x: pose.supportHand.x - pose.weaponHand.x,
+    y: pose.supportHand.y - pose.weaponHand.y,
+  };
+  const alongWeapon = supportOffset.x * direction.x + supportOffset.y * direction.y;
+  return pointAlong(pose.weaponHand, direction, alongWeapon);
+};
+
 const offsetPoint = (
   origin: Vec2,
   direction: Vec2,
@@ -218,18 +235,20 @@ const drawWeapon = (
   pose: PlayerPose,
   palette: PlayerPalette,
 ): void => {
-  const dx = pose.muzzle.x - pose.weaponHand.x;
-  const dy = pose.muzzle.y - pose.weaponHand.y;
-  const length = Math.hypot(dx, dy) || 1;
-  const direction = { x: dx / length, y: dy / length };
+  const direction = weaponDirection(pose);
   const normal = { x: -direction.y, y: direction.x };
+  const supportContact = supportContactOnWeapon(pose);
+  const supportAlong =
+    (supportContact.x - pose.weaponHand.x) * direction.x +
+    (supportContact.y - pose.weaponHand.y) * direction.y;
+  const rearExtent = Math.min(-0.13, supportAlong - 0.035);
 
   polygon(ctx, [
-    offsetPoint(pose.weaponHand, direction, -0.13, normal, -0.075),
+    offsetPoint(pose.weaponHand, direction, rearExtent, normal, -0.075),
     offsetPoint(pose.muzzle, direction, 0.04, normal, -0.075),
     offsetPoint(pose.muzzle, direction, 0.08, normal, 0),
     offsetPoint(pose.muzzle, direction, 0.04, normal, 0.075),
-    offsetPoint(pose.weaponHand, direction, -0.13, normal, 0.075),
+    offsetPoint(pose.weaponHand, direction, rearExtent, normal, 0.075),
   ], palette.weapon);
   polygon(ctx, [
     offsetPoint(pose.weaponHand, direction, -0.08, normal, 0.03),
@@ -314,6 +333,7 @@ export function drawPlayer(
 ): void {
   const pose = calculatePlayerPose(facing, walkPhase, aimAngle, timeSec);
   const palette = tintPalette(ambientColor);
+  const supportContact = supportContactOnWeapon(pose);
 
   ctx.save();
   ctx.translate(px, py + 0.875 * ppt);
@@ -323,7 +343,7 @@ export function drawPlayer(
   drawArm(
     ctx,
     pose.supportShoulder,
-    pose.supportHand,
+    supportContact,
     facing * 0.07,
     palette,
     true,
