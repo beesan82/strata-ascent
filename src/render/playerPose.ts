@@ -24,24 +24,48 @@ export interface PlayerPose {
 
 const IDLE_BOB_AMPLITUDE = 0.018;
 const FOOT_LIFT_TILES = 0.08;
+const WALK_BODY_RISE_TILES = 0.025;
+const WALK_BODY_SWAY_TILES = 0.035;
+const WALK_HEAD_STABILIZATION_TILES = 0.015;
+const WALK_ARM_RECOIL_TILES = 0.04;
 
 export function calculatePlayerPose(
   facing: 1 | -1,
   walkPhase: number,
+  isWalking: boolean,
   aimAngle: number,
   timeSec: number,
 ): PlayerPose {
   const idleBob = Math.sin(timeSec * 2.2) * IDLE_BOB_AMPLITUDE;
-  const gait = Math.sin(walkPhase);
+  const gait = isWalking ? Math.sin(walkPhase) : 0;
+  const bodyRise = Math.abs(gait) * WALK_BODY_RISE_TILES;
   const leftLift = Math.max(0, gait) * FOOT_LIFT_TILES;
   const rightLift = Math.max(0, -gait) * FOOT_LIFT_TILES;
-  const leftFoot: Vec2 = { x: facing * (-0.11 + gait * 0.2), y: -leftLift };
-  const rightFoot: Vec2 = { x: facing * (0.11 - gait * 0.2), y: -rightLift };
-  const hip: Vec2 = { x: facing * 0.035, y: -0.83 + idleBob };
-  const neck: Vec2 = { x: facing * 0.015, y: -1.76 + idleBob };
+  const leftFoot: Vec2 = {
+    x: facing * (-0.11 + gait * 0.2),
+    y: isWalking ? -leftLift : 0,
+  };
+  const rightFoot: Vec2 = {
+    x: facing * (0.11 - gait * 0.2),
+    y: isWalking ? -rightLift : 0,
+  };
+  const hip: Vec2 = {
+    x: facing * (0.035 + gait * WALK_BODY_SWAY_TILES),
+    y: -0.83 + idleBob - bodyRise,
+  };
+  const neck: Vec2 = {
+    x: facing * (0.015 + gait * WALK_BODY_SWAY_TILES * 0.5),
+    y: -1.76 + idleBob - bodyRise * 0.5,
+  };
   const aim = { x: Math.cos(aimAngle), y: Math.sin(aimAngle) };
-  const weaponShoulder: Vec2 = { x: facing * 0.23, y: -1.62 + idleBob };
-  const supportShoulder: Vec2 = { x: facing * -0.19, y: -1.58 + idleBob };
+  const weaponShoulder: Vec2 = {
+    x: facing * (0.23 - gait * WALK_ARM_RECOIL_TILES),
+    y: -1.62 + idleBob - bodyRise * 0.5,
+  };
+  const supportShoulder: Vec2 = {
+    x: facing * (-0.19 - gait * WALK_ARM_RECOIL_TILES * 0.5),
+    y: -1.58 + idleBob - bodyRise * 0.5,
+  };
   const weaponHand: Vec2 = {
     x: weaponShoulder.x + aim.x * 0.38,
     y: weaponShoulder.y + aim.y * 0.38,
@@ -52,7 +76,10 @@ export function calculatePlayerPose(
   };
 
   return {
-    head: { x: facing * 0.045, y: -2.08 + idleBob },
+    head: {
+      x: facing * (0.045 - gait * WALK_HEAD_STABILIZATION_TILES),
+      y: -2.08 + idleBob,
+    },
     neck,
     hip,
     leftKnee: {
@@ -73,7 +100,7 @@ export function calculatePlayerPose(
       x: weaponHand.x + aim.x * 0.56,
       y: weaponHand.y + aim.y * 0.56,
     },
-    coatSwing: facing * Math.sin(walkPhase - 0.55) * 0.09,
+    coatSwing: isWalking ? Math.sin(walkPhase - 0.55) * 0.09 : 0,
     indicator: 0.72 + Math.sin(timeSec * 4.2) * 0.18,
   };
 }

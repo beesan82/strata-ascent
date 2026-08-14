@@ -16,6 +16,7 @@ import { LightShafts } from './lightshaft';
 import { HIGH_FIDELITY_TILE_PX, PixelPipeline } from './pixel';
 import { paletteRgb } from './palette';
 import { quantizeZoom } from '../core/zoom';
+import type { Vec2 } from './playerPose';
 
 /** 画面の横幅に収めるタイル数(スケール感の基準) */
 const VIEW_TILES_X = 34;
@@ -29,6 +30,33 @@ export interface GravitonFx {
   chargeRatio: number;
   /** 生存中のビーム。nullなら描かない */
   beam: { angle: number; alpha: number } | null;
+}
+
+/**
+ * Draws weapon effects from the visible muzzle. Gameplay destruction keeps its
+ * existing player-center origin in main.ts; this contract is render-only.
+ */
+export function drawGravitonEffects(
+  ctx: CanvasRenderingContext2D,
+  muzzle: Vec2,
+  fx: GravitonFx,
+  viewportWidth: number,
+  viewportHeight: number,
+): void {
+  if (fx.chargeRatio > 0) {
+    drawCharge(ctx, muzzle.x, muzzle.y, fx.chargeRatio);
+  }
+  if (fx.beam) {
+    const beamLength = Math.hypot(viewportWidth, viewportHeight) * 1.15;
+    drawBeam(
+      ctx,
+      muzzle.x,
+      muzzle.y,
+      fx.beam.angle,
+      beamLength,
+      fx.beam.alpha,
+    );
+  }
 }
 
 export class Renderer {
@@ -169,13 +197,15 @@ export class Renderer {
       mouseY - presentY
     ) / this.pipeline.scale;
     const angle = Math.atan2(mby - py, mbx - px);
-    drawPlayer(
+    const isWalking = player.body.onGround && player.body.vx !== 0;
+    const visualAnchors = drawPlayer(
       ctx,
       px,
       py,
       ppt,
       player.facing,
       player.walkPhase,
+      isWalking,
       angle,
       bb.ambientColor,
       timeSec,
@@ -189,14 +219,7 @@ export class Renderer {
 
     // 重力子砲の演出: ライトの「上」に描いて発光体として読ませる。
     // ただし post(グレイン+ビネット)の「前」に描くことで画面全体の質感と馴染ませる。
-    if (fx.chargeRatio > 0) {
-      drawCharge(ctx, px, py, fx.chargeRatio);
-    }
-    if (fx.beam) {
-      // ワールド length=300 タイルは画面外まで伸びる貫通ビーム。対角を覆う長さで十分。
-      const beamLen = Math.hypot(w, h) * 1.15;
-      drawBeam(ctx, px, py, fx.beam.angle, beamLen, fx.beam.alpha);
-    }
+    drawGravitonEffects(ctx, visualAnchors.muzzle, fx, w, h);
 
     // ポストプロセス(グレイン+ビネット)
     this.post.render(ctx, w, h, bb.ambientLevel);

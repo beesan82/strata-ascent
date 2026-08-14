@@ -19,6 +19,10 @@ export const PLAYER_COLORS = {
 
 type PlayerPalette = { [Key in keyof typeof PLAYER_COLORS]: string };
 
+export interface PlayerVisualAnchors {
+  muzzle: Vec2;
+}
+
 const polygon = (
   ctx: CanvasRenderingContext2D,
   points: readonly Vec2[],
@@ -138,6 +142,20 @@ const drawTorsoArmor = (
     { x: pose.hip.x + facing * 0.08, y: pose.hip.y - 0.23 },
     { x: pose.hip.x + facing * 0.005, y: pose.hip.y - 0.25 },
   ], palette.chestLight);
+
+  const indicatorCenter = {
+    x: pose.neck.x + facing * 0.08,
+    y: pose.neck.y + 0.23,
+  };
+  const previousAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = pose.indicator;
+  polygon(ctx, [
+    { x: indicatorCenter.x - 0.025, y: indicatorCenter.y - 0.025 },
+    { x: indicatorCenter.x + 0.025, y: indicatorCenter.y - 0.025 },
+    { x: indicatorCenter.x + 0.025, y: indicatorCenter.y + 0.025 },
+    { x: indicatorCenter.x - 0.025, y: indicatorCenter.y + 0.025 },
+  ], palette.indicator);
+  ctx.globalAlpha = previousAlpha;
 };
 
 const drawHead = (
@@ -170,16 +188,6 @@ const drawHead = (
     { x: head.x + facing * 0.135, y: head.y + 0.015 },
     { x: head.x - facing * 0.035, y: head.y + 0.005 },
   ], palette.visor);
-
-  const previousAlpha = ctx.globalAlpha;
-  ctx.globalAlpha = pose.indicator;
-  polygon(ctx, [
-    { x: head.x - facing * 0.12, y: head.y + 0.03 },
-    { x: head.x - facing * 0.075, y: head.y + 0.03 },
-    { x: head.x - facing * 0.075, y: head.y + 0.075 },
-    { x: head.x - facing * 0.12, y: head.y + 0.075 },
-  ], palette.indicator);
-  ctx.globalAlpha = previousAlpha;
 };
 
 const drawArm = (
@@ -245,9 +253,9 @@ const drawWeapon = (
 
   polygon(ctx, [
     offsetPoint(pose.weaponHand, direction, rearExtent, normal, -0.075),
-    offsetPoint(pose.muzzle, direction, 0.04, normal, -0.075),
-    offsetPoint(pose.muzzle, direction, 0.08, normal, 0),
-    offsetPoint(pose.muzzle, direction, 0.04, normal, 0.075),
+    offsetPoint(pose.muzzle, direction, -0.04, normal, -0.075),
+    pose.muzzle,
+    offsetPoint(pose.muzzle, direction, -0.04, normal, 0.075),
     offsetPoint(pose.weaponHand, direction, rearExtent, normal, 0.075),
   ], palette.weapon);
   polygon(ctx, [
@@ -259,7 +267,7 @@ const drawWeapon = (
   line(
     ctx,
     pointAlong(pose.weaponHand, direction, 0.06),
-    pointAlong(pose.muzzle, direction, 0.025),
+    pose.muzzle,
     palette.uniformLight,
     0.025,
   );
@@ -327,16 +335,24 @@ export function drawPlayer(
   ppt: number,
   facing: 1 | -1,
   walkPhase: number,
+  isWalking: boolean,
   aimAngle: number,
   ambientColor: string,
   timeSec: number,
-): void {
-  const pose = calculatePlayerPose(facing, walkPhase, aimAngle, timeSec);
+): PlayerVisualAnchors {
+  const pose = calculatePlayerPose(
+    facing,
+    walkPhase,
+    isWalking,
+    aimAngle,
+    timeSec,
+  );
   const palette = tintPalette(ambientColor);
   const supportContact = supportContactOnWeapon(pose);
+  const feetY = py + 0.875 * ppt;
 
   ctx.save();
-  ctx.translate(px, py + 0.875 * ppt);
+  ctx.translate(px, feetY);
   ctx.scale(ppt, ppt);
 
   drawLeg(ctx, pose.hip, pose.rightKnee, pose.rightFoot, facing, palette, true);
@@ -355,4 +371,11 @@ export function drawPlayer(
   drawAccents(ctx, pose, facing, palette);
 
   ctx.restore();
+
+  return {
+    muzzle: {
+      x: px + pose.muzzle.x * ppt,
+      y: feetY + pose.muzzle.y * ppt,
+    },
+  };
 }

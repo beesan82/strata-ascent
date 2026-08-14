@@ -11,6 +11,7 @@ type Operation = {
   args: number[];
   fillStyle?: string;
   strokeStyle?: string;
+  lineWidth?: number;
   path?: Vec2[];
 };
 
@@ -32,6 +33,7 @@ class RecordingContext {
       args,
       fillStyle: typeof this.fillStyle === 'string' ? this.fillStyle : undefined,
       strokeStyle: typeof this.strokeStyle === 'string' ? this.strokeStyle : undefined,
+      lineWidth: this.lineWidth,
     };
     this.operations.push(operation);
     return operation;
@@ -69,7 +71,9 @@ class RecordingContext {
   fill(): void {
     this.record('fill').path = this.currentPath.map((point) => ({ ...point }));
   }
-  stroke(): void { this.record('stroke'); }
+  stroke(): void {
+    this.record('stroke').path = this.currentPath.map((point) => ({ ...point }));
+  }
   fillRect(x: number, y: number, width: number, height: number): void {
     this.record('fillRect', [x, y, width, height]);
   }
@@ -82,10 +86,11 @@ type DrawPlayer = (
   ppt: number,
   facing: 1 | -1,
   walkPhase: number,
+  isWalking: boolean,
   aimAngle: number,
   ambientColor: string,
   timeSec: number,
-) => void;
+) => { muzzle: Vec2 };
 
 const drawPlayer = playerSprite.drawPlayer as DrawPlayer;
 
@@ -137,6 +142,22 @@ const distanceToAxis = (point: Vec2, origin: Vec2, direction: Vec2): number =>
     (point.y - origin.y) * direction.x,
   );
 
+const pointInPolygon = (point: Vec2, polygon: readonly Vec2[]): boolean => {
+  let inside = false;
+  for (let index = 0, previous = polygon.length - 1;
+    index < polygon.length;
+    previous = index, index += 1) {
+    const currentPoint = polygon[index];
+    const previousPoint = polygon[previous];
+    const crossesY = (currentPoint.y > point.y) !== (previousPoint.y > point.y);
+    const crossingX = previousPoint.x +
+      ((point.y - previousPoint.y) * (currentPoint.x - previousPoint.x)) /
+      (currentPoint.y - previousPoint.y);
+    if (crossesY && point.x < crossingX) inside = !inside;
+  }
+  return inside;
+};
+
 const segmentsProperlyIntersect = (
   a: Vec2,
   b: Vec2,
@@ -177,6 +198,7 @@ describe('player sprite', () => {
       16,
       1,
       0.5,
+      true,
       0,
       '#203040',
       1.25,
@@ -198,6 +220,7 @@ describe('player sprite', () => {
       24,
       1,
       0.7,
+      true,
       -Math.PI / 4,
       ambient,
       0.8,
@@ -219,6 +242,48 @@ describe('player sprite', () => {
     }
   });
 
+  it('places the pulsing indicator inside the chest instead of the head', () => {
+    const ambient = '#000000';
+    const phase = 0.8;
+    const timeSec = 1.3;
+
+    for (const facing of [1, -1] as const) {
+      const context = new RecordingContext();
+      drawPlayer(
+        context as unknown as CanvasRenderingContext2D,
+        0,
+        0,
+        24,
+        facing,
+        phase,
+        true,
+        0.2,
+        ambient,
+        timeSec,
+      );
+
+      const fillPath = (baseColor: string): Vec2[] | undefined =>
+        context.operations.find(({ name, fillStyle, path }) =>
+          name === 'fill' &&
+          path !== undefined &&
+          fillStyle !== undefined &&
+          isBoundedAmbientMix(fillStyle, baseColor, ambient, 0.12),
+        )?.path;
+      const indicatorPath = fillPath(playerSprite.PLAYER_COLORS.indicator);
+      const chestPath = fillPath(playerSprite.PLAYER_COLORS.chest);
+      expect(indicatorPath, 'indicator polygon was not drawn').toBeDefined();
+      expect(chestPath, 'chest polygon was not drawn').toBeDefined();
+
+      const indicatorCentroid = indicatorPath!.reduce(
+        (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
+        { x: 0, y: 0 },
+      );
+      indicatorCentroid.x /= indicatorPath!.length;
+      indicatorCentroid.y /= indicatorPath!.length;
+      expect(pointInPolygon(indicatorCentroid, chestPath!)).toBe(true);
+    }
+  });
+
   it('balances canvas state and exercises filled and stroked component paths', () => {
     const context = new RecordingContext();
 
@@ -229,6 +294,7 @@ describe('player sprite', () => {
       20,
       -1,
       Math.PI / 2,
+      true,
       Math.PI * 0.75,
       '#506070',
       2,
@@ -258,6 +324,7 @@ describe('player sprite', () => {
             18,
             facing,
             1.2,
+            true,
             angle,
             ambient,
             3.5,
@@ -267,7 +334,7 @@ describe('player sprite', () => {
           expect(operation.args.every(Number.isFinite)).toBe(true);
         }
 
-        const pose = calculatePlayerPose(facing, 1.2, angle, 3.5);
+        const pose = calculatePlayerPose(facing, 1.2, true, angle, 3.5);
         const aim = { x: Math.cos(angle), y: Math.sin(angle) };
         const weaponPaths = context.operations
           .filter(({ name, fillStyle, path }) =>
@@ -350,6 +417,7 @@ describe('player sprite', () => {
       16,
       -1,
       Math.PI / 2,
+      true,
       0,
       ambient,
       0,
@@ -377,6 +445,153 @@ describe('player sprite', () => {
     }
   });
 
+  it('mirrors the animated coat polygon exactly across left and right facings', () => {
+    const ambient = '#000000';
+    const torsoPaths = (facing: 1 | -1): Vec2[] => {
+      const context = new RecordingContext();
+      drawPlayer(
+        context as unknown as CanvasRenderingContext2D,
+        0,
+        0,
+        16,
+        facing,
+        1.2,
+        true,
+        0,
+        ambient,
+        0,
+      );
+      const torso = context.operations.find(({ name, fillStyle, path }) =>
+        name === 'fill' &&
+        path?.length === 9 &&
+        fillStyle !== undefined &&
+        isBoundedAmbientMix(
+          fillStyle,
+          playerSprite.PLAYER_COLORS.uniform,
+          ambient,
+          0.3,
+        ),
+      )?.path;
+      expect(torso, 'coat polygon was not drawn').toBeDefined();
+      return torso!;
+    };
+
+    const right = torsoPaths(1);
+    const left = torsoPaths(-1);
+    expect(left).toHaveLength(right.length);
+    left.forEach((point, index) => {
+      expect(point.x).toBeCloseTo(-right[index].x);
+      expect(point.y).toBeCloseTo(right[index].y);
+    });
+  });
+
+  it('returns the visible muzzle tip in screen coordinates', () => {
+    const context = new RecordingContext();
+    const px = 70;
+    const py = 90;
+    const ppt = 20;
+    const result = drawPlayer(
+      context as unknown as CanvasRenderingContext2D,
+      px,
+      py,
+      ppt,
+      -1,
+      Math.PI / 2,
+      true,
+      -Math.PI / 3,
+      '#000000',
+      0.4,
+    );
+    const localMuzzle = {
+      x: (result.muzzle.x - px) / ppt,
+      y: (result.muzzle.y - (py + 0.875 * ppt)) / ppt,
+    };
+    const barrel = context.operations.find(({ name, fillStyle, path }) =>
+      name === 'fill' &&
+      path?.length === 5 &&
+      fillStyle !== undefined &&
+      isBoundedAmbientMix(
+        fillStyle,
+        playerSprite.PLAYER_COLORS.weapon,
+        '#000000',
+        0.3,
+      ),
+    )?.path;
+    expect(barrel, 'weapon barrel polygon was not drawn').toBeDefined();
+    expect(
+      barrel!.some((point) => distance(point, localMuzzle) < 1e-9),
+      'returned muzzle must be the visible barrel tip',
+    ).toBe(true);
+
+    const highlight = context.operations.find(({
+      name,
+      strokeStyle,
+      lineWidth,
+      path,
+    }) =>
+      name === 'stroke' &&
+      path?.length === 2 &&
+      Math.abs((lineWidth ?? 0) - 0.025) < 1e-9 &&
+      strokeStyle !== undefined &&
+      isBoundedAmbientMix(
+        strokeStyle,
+        playerSprite.PLAYER_COLORS.uniformLight,
+        '#000000',
+        0.3,
+      ),
+    )?.path;
+    expect(highlight, 'weapon highlight was not drawn').toBeDefined();
+    expect(
+      highlight!.some((point) => distance(point, localMuzzle) < 1e-9),
+      'no visible weapon stroke may extend past the effect muzzle',
+    ).toBe(true);
+    const aim = { x: Math.cos(-Math.PI / 3), y: Math.sin(-Math.PI / 3) };
+    for (const point of highlight!) {
+      expect(dot({
+        x: point.x - localMuzzle.x,
+        y: point.y - localMuzzle.y,
+      }, aim)).toBeLessThanOrEqual(1e-9);
+    }
+  });
+
+  it('keeps one rendered foot grounded while walking and both grounded when stopped', () => {
+    for (const isWalking of [true, false]) {
+      const context = new RecordingContext();
+      drawPlayer(
+        context as unknown as CanvasRenderingContext2D,
+        0,
+        0,
+        16,
+        1,
+        Math.PI / 2,
+        isWalking,
+        0,
+        '#000000',
+        0,
+      );
+      const footPolygons = context.operations
+        .filter(({ name, fillStyle, path }) =>
+          name === 'fill' &&
+          path?.length === 4 &&
+          Math.min(...path.map(({ y }) => y)) > -0.3 &&
+          fillStyle !== undefined &&
+          isBoundedAmbientMix(
+            fillStyle,
+            playerSprite.PLAYER_COLORS.uniformLight,
+            '#000000',
+            0.3,
+          ),
+        )
+        .map(({ path }) => path!);
+
+      expect(footPolygons).toHaveLength(2);
+      const groundedFeet = footPolygons.filter((path) =>
+        Math.abs(Math.max(...path.map(({ y }) => y))) < 1e-9,
+      );
+      expect(groundedFeet).toHaveLength(isWalking ? 1 : 2);
+    }
+  });
+
   it('keeps the hard silhouette grounded inside its configured height across gait and bob', () => {
     const phases = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
     const times = [0, Math.PI / (2 * 2.2), (3 * Math.PI) / (2 * 2.2)];
@@ -392,6 +607,7 @@ describe('player sprite', () => {
             16,
             facing,
             phase,
+            true,
             0,
             '#000000',
             timeSec,
