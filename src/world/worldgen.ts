@@ -13,7 +13,7 @@ function mod(n: number, m: number): number {
 
 /** シード+ワールドタイル座標 → 素のノイズ躯体タイル種。純粋関数(同じ入力なら常に同じ出力) */
 export function noiseTileAt(seed: number, x: number, y: number): Tile {
-  const s = stratumAt(y);
+  const s = stratumAt(seed, y);
 
   // 床帯(band): floorSpacing行ごとのまとまり。床行はbandの先頭行
   // 注: 床行の位相は階層(stratum)の継ぎ目でリセットされるため、継ぎ目ごとに

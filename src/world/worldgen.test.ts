@@ -42,6 +42,20 @@ describe('generateChunk', () => {
       }
     }
   });
+
+  it('matches tileAt across the positive-Y stratum boundary from y=499 through y=562', () => {
+    const seed = 42;
+    for (let y = 499; y <= 562; y += 7) {
+      const cy = Math.floor(y / CHUNK_SIZE);
+      const chunk = generateChunk(seed, 2, cy);
+      const ty = y - cy * CHUNK_SIZE;
+      for (let tx = 0; tx < CHUNK_SIZE; tx += 7) {
+        expect(chunk[ty * CHUNK_SIZE + tx]).toBe(
+          tileAt(seed, 2 * CHUNK_SIZE + tx, y),
+        );
+      }
+    }
+  });
 });
 
 describe('tileAt', () => {
@@ -70,20 +84,16 @@ describe('tileAt', () => {
     // (将来のパラメータ調整で退行させない)。
     // ladderXは実装(tileAt)の式をそのまま再現している。実装と鏡写しの結合だが、
     // 「梯子は常にどんな地形も貫通する」性質を固定する目的で意図的に許容する。
-    const FLOOR_SPACING = 8; // 階層0(最下層)
+    const TEST_RANGE_UNIT = 8;
     for (const seed of [1, 42, 20260711]) {
       for (let group = 0; group < 8; group++) {
-        // 階層0内の床帯を地上側(band -40..-1, y=-320..-1)と
-        // 地下側(band 1..40, y=8..327)の両方で検証
-        for (let band = -40; band <= 40; band++) {
-          if (band === 0) continue;
+        // Signed Y positions across several strata retain their ladder columns.
+        for (let y = -TEST_RANGE_UNIT * 40; y < TEST_RANGE_UNIT * 41; y++) {
+          const s = stratumAt(seed, y);
+          const band = Math.floor(y / s.floorSpacing);
           const ladderX =
             group * 32 + Math.floor(hash2(seed + 404, group, band) * 32);
-          for (let y = band * FLOOR_SPACING; y < (band + 1) * FLOOR_SPACING; y++) {
-            const s = stratumAt(y);
-            expect(s.floorSpacing).toBe(FLOOR_SPACING);
-            expect(tileAt(seed, ladderX, y)).toBe(TILE.LADDER);
-          }
+          expect(tileAt(seed, ladderX, y)).toBe(TILE.LADDER);
         }
       }
     }
@@ -113,7 +123,7 @@ describe('findSpawn', () => {
     // このテストはそのレビューの見落としを固定するための回帰テスト。
     const seed = 20260711;
     const spawn = findSpawn(seed);
-    const floorSpacing = stratumAt(spawn.y).floorSpacing;
+    const floorSpacing = stratumAt(seed, spawn.y).floorSpacing;
 
     // スポーンが属する32タイル幅の列グループの梯子x座標を求める(tileAtの式を再現)。
     // 実装と鏡写しの結合だが、「スポーン地点の近くに必ず梯子がある」ことを固定する

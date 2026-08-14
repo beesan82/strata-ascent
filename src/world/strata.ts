@@ -1,4 +1,6 @@
 /** 階層(高度帯)ごとの生成パラメータ */
+import { hash2 } from './noise';
+
 export interface Stratum {
   name: string;
   /** 床の垂直間隔(タイル) */
@@ -23,11 +25,14 @@ export const STRATA: readonly Stratum[] = [
 
 /** ワールドy座標 → 階層インデックス(0始まり、ループ前の通し番号) */
 export function stratumIndexAt(worldY: number): number {
-  const altitude = Math.max(0, -worldY);
-  return Math.floor(altitude / STRATUM_HEIGHT);
+  return Math.floor(worldY / STRATUM_HEIGHT);
 }
 
 /** ワールドy座標 → 階層パラメータ(末尾以降はループ) */
-export function stratumAt(worldY: number): Stratum {
-  return STRATA[stratumIndexAt(worldY) % STRATA.length];
+export function stratumAt(seed: number, worldY: number): Stratum {
+  const band = stratumIndexAt(worldY);
+  const normalizedParity = ((band % 2) + 2) % 2;
+  const pool = normalizedParity === 0 ? [0, 1] : [2, 3, 4];
+  const selection = Math.floor(hash2(seed + 811, band, band < 0 ? -1 : 1) * pool.length);
+  return STRATA[pool[selection]] ?? STRATA[0];
 }
