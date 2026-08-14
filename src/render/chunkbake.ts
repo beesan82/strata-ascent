@@ -2,12 +2,12 @@ import type { ChunkStore } from '../world/chunks';
 import { CHUNK_SIZE, TILE } from '../world/tiles';
 import { blobId } from './tileset/autotile';
 import type { Atlas } from './tileset/atlas';
-import { generateAtlas } from './tileset/generate';
+import { generateAtlas, type TilePalette } from './tileset/generate';
 import { regionAt } from '../world/hierarchy';
 import { conduitAt } from '../world/network';
 import { facilityTileAt } from '../world/facility';
 import { megaFacilityAt } from '../world/megafacility';
-import { biomeForSystem, mixHex, type Biome } from './biome';
+import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
 import { decorateChunk, type DecorOp } from './decor';
 import { traceAt, type Trace } from './traces';
@@ -15,6 +15,26 @@ import { STEEL } from './steel';
 
 /** 焼き込み解像度(px/タイル)。表示は拡縮されるが16pxあれば線は読める */
 export const BAKE_PPT = 16;
+
+/** Bounds the atlas cache while retaining visible progress through the 400-tile blend band. */
+export const CHUNK_VISUAL_BLEND_STEPS = 16;
+
+export interface ChunkVisual extends BiomeBlend {
+  cacheKey: string;
+}
+
+/** Resolve the deterministic visual palette at a chunk center, independent of facility regions. */
+export function chunkVisualAt(seed: number, cx: number, cy: number): ChunkVisual {
+  const centerX = cx * CHUNK_SIZE + CHUNK_SIZE / 2;
+  const centerY = cy * CHUNK_SIZE + CHUNK_SIZE / 2;
+  const exact = biomeBlend(seed, centerX, centerY);
+  const step = exact.from === exact.to ? 0 : Math.round(exact.t * CHUNK_VISUAL_BLEND_STEPS);
+  const t = step / CHUNK_VISUAL_BLEND_STEPS;
+  return {
+    ...blendBiomeVisuals(exact.from, exact.to, t),
+    cacheKey: `${exact.from.name}>${exact.to.name}:${step}`,
+  };
+}
 
 /** チャンク1枚を一度だけオフスクリーンCanvasへ焼き込み、以後はdrawImageで貼る */
 export class ChunkBaker {
@@ -26,11 +46,11 @@ export class ChunkBaker {
   constructor(private seed: number) {}
 
   /** バイオームに対応する色付きアトラスを取得(なければ生成してキャッシュ) */
-  private atlasFor(biome: Biome): Atlas {
-    let atlas = this.atlasByBiome.get(biome.name);
+  private atlasFor(key: string, palette: TilePalette): Atlas {
+    let atlas = this.atlasByBiome.get(key);
     if (!atlas) {
-      atlas = generateAtlas(biome.palette);
-      this.atlasByBiome.set(biome.name, atlas);
+      atlas = generateAtlas(palette);
+      this.atlasByBiome.set(key, atlas);
     }
     return atlas;
   }
@@ -77,14 +97,13 @@ export class ChunkBaker {
     const bx = cx * CHUNK_SIZE;
     const by = cy * CHUNK_SIZE;
 
-    // チャンク中心のワールド座標が属する地域(REGION)の系統でバイオームを決める。
-    // 地域(262144タイル)に対し1チャンク=64タイルは十分小さく、地域境界をまたぐ
-    // チャンクだけが片側の系統色になるが、ライティングで視覚的に馴染むため許容する。
+    // Tile palette and accent follow the visual-cell blend at the chunk center.
+    // Facility-only effects still consult the independent hierarchy system below.
     const centerX = cx * CHUNK_SIZE + CHUNK_SIZE / 2;
     const centerYw = cy * CHUNK_SIZE + CHUNK_SIZE / 2;
     const system = regionAt(this.seed, centerX, centerYw).system;
-    const biome = biomeForSystem(system);
-    const atlas = this.atlasFor(biome);
+    const biome = chunkVisualAt(this.seed, cx, cy);
+    const atlas = this.atlasFor(biome.cacheKey, biome.palette);
 
     // ベース: SOLIDタイルを8近傍から求めたブロブIDでオートタイル描画する。
     // 近傍参照はstore.tileAt(純粋)経由でチャンクをまたいでも継ぎ目なく一致する。

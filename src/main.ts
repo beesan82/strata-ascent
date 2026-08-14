@@ -25,6 +25,7 @@ const BAKE_EVICT_RADIUS = 2;
 const params = new URLSearchParams(location.search);
 const seedParam = params.get('seed');
 const seed = seedParam !== null && Number.isFinite(Number(seedParam)) ? Number(seedParam) : DEFAULT_SEED;
+const freezeSimulation = params.get('freeze') === '1';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
@@ -141,9 +142,13 @@ let acc = 0;
 function frame(now: number): void {
   acc += Math.min(now - last, 100); // タブ復帰時のスパイラル防止
   last = now;
-  while (acc >= STEP_MS) {
-    update(STEP_MS / 1000);
-    acc -= STEP_MS;
+  if (freezeSimulation) {
+    acc = 0;
+  } else {
+    while (acc >= STEP_MS) {
+      update(STEP_MS / 1000);
+      acc -= STEP_MS;
+    }
   }
   const beam = lastBeam ? { angle: lastBeam.angle, alpha: lastBeam.ttl / BEAM_TTL } : null;
   renderer.render(store, camera, player, input.mouseX * dpr, input.mouseY * dpr, simTime, {

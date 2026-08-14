@@ -35,4 +35,18 @@ describe('stratumAt', () => {
       expect(s.cavityThreshold).toBeLessThanOrEqual(1);
     }
   });
+
+  it('does not mirror positive and negative signed sequences across seeds', () => {
+    for (const seed of [1, 42, 20260711]) {
+      const positive = Array.from(
+        { length: 12 },
+        (_, index) => stratumAt(seed, (index + 1) * STRATUM_HEIGHT).name,
+      );
+      const negative = Array.from(
+        { length: 12 },
+        (_, index) => stratumAt(seed, -(index + 1) * STRATUM_HEIGHT).name,
+      );
+      expect(positive).not.toEqual(negative);
+    }
+  });
 });

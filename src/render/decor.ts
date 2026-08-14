@@ -4,6 +4,12 @@ import { CHUNK_SIZE, TILE } from '../world/tiles';
 import { tileAt } from '../world/worldgen';
 import { STEEL, mixHex } from './steel';
 
+export function hatchSpacingAt(worldY: number): number {
+  const index = stratumIndexAt(worldY);
+  const cycle = ((index % 3) + 3) % 3;
+  return 0.26 + 0.07 * cycle;
+}
+
 /**
  * 装飾の描画命令。座標はチャンクローカルのタイル単位(浮動小数)。
  * チャンク境界をまたぐ装飾は範囲外の座標を取ることがある(焼き込み時にクリップされる)。
@@ -147,8 +153,7 @@ export function decorateChunk(seed: number, cx: number, cy: number): DecorOp[] {
       // 世界座標整列のリブ柱(11タイル周期)が垂直リズムを作る。
       if (!upAir && !downAir && !leftAir && !rightAir) {
         if (hash2(seed + 604, wx, wy) < 0.22) {
-          const si = stratumIndexAt(wy) % 3;
-          const spacing = 0.26 + 0.07 * si;
+          const spacing = hatchSpacingAt(wy);
           ops.push({ kind: 'hatch', x: lx, y: ly, w: 1, h: 1, spacing, color: PALETTE.hatchFaint, cross: false, surface: true });
         }
         // リブ柱(右側に受け光・2タイルごとにボルト)。列単位のhashで7割の柱が現存

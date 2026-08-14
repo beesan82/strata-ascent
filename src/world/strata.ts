@@ -1,4 +1,4 @@
-/** 階層(高度帯)ごとの生成パラメータ */
+/** Terrain-generation parameters selected by signed world-Y strata. */
 import { hash2 } from './noise';
 
 export interface Stratum {
@@ -26,12 +26,12 @@ export const STRATA: readonly Stratum[] = [
 const EVEN_STRATUM_POOL: readonly number[] = [0, 1];
 const ODD_STRATUM_POOL: readonly number[] = [2, 3, 4];
 
-/** ワールドy座標 → 階層インデックス(0始まり、ループ前の通し番号) */
+/** Signed world-Y coordinate to an unbounded 500-tile stratum index. */
 export function stratumIndexAt(worldY: number): number {
   return Math.floor(worldY / STRATUM_HEIGHT);
 }
 
-/** ワールドy座標 → 階層パラメータ(末尾以降はループ) */
+/** Select deterministic stratum parameters from the signed band and seed. */
 export function stratumAt(seed: number, worldY: number): Stratum {
   const band = stratumIndexAt(worldY);
   const normalizedParity = ((band % 2) + 2) % 2;

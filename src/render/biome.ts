@@ -11,7 +11,7 @@ export interface BgLayer {
   kind: 'tower' | 'deck' | 'haze';
 }
 
-/** バイオーム: 系統(地域)ごとの見た目一式 */
+/** Complete visual-biome definition used by coordinate cells and legacy system lookups. */
 export interface Biome {
   name: string;
   ambientColor: string;
@@ -35,7 +35,7 @@ const bg = (
   defs.map(([factor, density, kind], i) => ({ factor, density, kind, color: bgColor(tint, i) }));
 
 export const BIOMES: readonly Biome[] = [
-  // BIOMES[0] (最下層) は SYSTEM_BIOME 未使用の予備パレット(温存)。
+  // BIOMES[0] is both the cold-steel fallback and a valid visual-cell biome.
   {
     name: '最下層', ambientColor: mixHex('#2e3a44', '#020408', 0.72), ambientLevel: 0.34,
     palette: steelPalette('#6f8794'), accent: '#6f8794',
@@ -70,7 +70,7 @@ const FOUNDRY: Biome = {
   bgLayers: bg('#d06a3c', [[0.2, 0.5, 'tower'], [0.4, 0.45, 'deck']]),
 };
 
-/** 系統 → バイオーム配色。地域(REGION)の系統でワールドを塗り分ける。 */
+/** Facility system to biome lookup; visual landscape selection uses coordinate cells below. */
 export const SYSTEM_BIOME: Record<System, Biome> = {
   water: BIOMES[3],
   habitation: BIOMES[1],
@@ -89,9 +89,11 @@ export interface BiomeBlend {
   t: number;
   ambientLevel: number;
   ambientColor: string;
+  palette: TilePalette;
+  accent: string;
 }
 
-/** ワールド座標 → その地域(系統)のバイオーム */
+/** Coordinate-cell sizing and transition width in signed world-Y tiles. */
 export const BIOME_CELL_BASE = 1500;
 export const BIOME_CELL_JITTER = 150;
 export const BIOME_BLEND_HALF_WIDTH = 200;
@@ -104,6 +106,9 @@ const signedHash = (seed: number, cell: number, sign: number): number => {
 };
 
 const cellSign = (cell: number): number => cell < 0 ? -1 : 1;
+
+const EVEN_BIOME_POOL: readonly number[] = [0, 1];
+const ODD_BIOME_POOL: readonly number[] = [2, 3, 4];
 
 const biomeJitter = (seed: number, cell: number): number =>
   (signedHash(seed, cell, cellSign(cell)) % (BIOME_CELL_JITTER * 2 + 1)) - BIOME_CELL_JITTER;
@@ -120,8 +125,13 @@ export function biomeCellAt(seed: number, y: number): number {
 }
 
 export function biomeForCell(seed: number, cell: number): Biome {
-  const pool = ((cell % 2) + 2) % 2 === 0 ? [0, 1] : [2, 3, 4];
+  const pool = ((cell % 2) + 2) % 2 === 0 ? EVEN_BIOME_POOL : ODD_BIOME_POOL;
   const index = pool[signedHash(seed, cell, cellSign(cell)) % pool.length];
+  return biomeFromIndex(index);
+}
+
+/** Resolve a selected visual-biome index, falling back to cold steel. */
+export function biomeFromIndex(index: number): Biome {
   return BIOMES[index] ?? BIOMES[0];
 }
 
@@ -130,13 +140,24 @@ export function biomeAt(seed: number, x: number, y: number): Biome {
   return biomeForCell(seed, biomeCellAt(seed, y));
 }
 
-/** 地域ベースでは地域内は単色。from=to=地域配色, t=0。 */
-const blend = (from: Biome, to: Biome, t: number): BiomeBlend => ({
+/** Mix every continuously blendable visual channel for downstream render consumers. */
+const mixPalette = (from: TilePalette, to: TilePalette, t: number): TilePalette => ({
+  fillDark: mixHex(from.fillDark, to.fillDark, t),
+  fillMid: mixHex(from.fillMid, to.fillMid, t),
+  fillLight: mixHex(from.fillLight, to.fillLight, t),
+  edge: mixHex(from.edge, to.edge, t),
+  line: mixHex(from.line, to.line, t),
+});
+
+/** Canonical blend consumed by lighting, tiles, accents, and background renderers. */
+export const blendBiomeVisuals = (from: Biome, to: Biome, t: number): BiomeBlend => ({
   from,
   to,
   t,
   ambientLevel: from.ambientLevel + (to.ambientLevel - from.ambientLevel) * t,
   ambientColor: mixHex(from.ambientColor, to.ambientColor, t),
+  palette: mixPalette(from.palette, to.palette, t),
+  accent: mixHex(from.accent, to.accent, t),
 });
 
 export function biomeBlend(seed: number, x: number, y: number): BiomeBlend {
@@ -147,14 +168,14 @@ export function biomeBlend(seed: number, x: number, y: number): BiomeBlend {
 
   if (y < lowerBoundary + BIOME_BLEND_HALF_WIDTH) {
     const t = (y - (lowerBoundary - BIOME_BLEND_HALF_WIDTH)) / (BIOME_BLEND_HALF_WIDTH * 2);
-    return blend(biomeForCell(seed, cell - 1), biomeForCell(seed, cell), t);
+    return blendBiomeVisuals(biomeForCell(seed, cell - 1), biomeForCell(seed, cell), t);
   }
 
   if (y >= upperBoundary - BIOME_BLEND_HALF_WIDTH) {
     const t = (y - (upperBoundary - BIOME_BLEND_HALF_WIDTH)) / (BIOME_BLEND_HALF_WIDTH * 2);
-    return blend(biomeForCell(seed, cell), biomeForCell(seed, cell + 1), t);
+    return blendBiomeVisuals(biomeForCell(seed, cell), biomeForCell(seed, cell + 1), t);
   }
 
   const b = biomeForCell(seed, cell);
-  return { from: b, to: b, t: 0, ambientLevel: b.ambientLevel, ambientColor: b.ambientColor };
+  return blendBiomeVisuals(b, b, 0);
 }

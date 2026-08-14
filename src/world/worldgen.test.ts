@@ -31,8 +31,8 @@ describe('generateChunk', () => {
     }
   });
 
-  it('階層境界(高度500)をまたぐチャンクでもtileAtと一致する', () => {
-    // cy=-8 → y=-512..-449。高度500(y=-500)の階層境界を横断する
+  it('matches tileAt across the negative signed-stratum boundary at Y=-500', () => {
+    // cy=-8 spans y=-512..-449 and therefore crosses the Y=-500 band boundary.
     const chunk = generateChunk(42, 2, -8);
     for (let ty = 0; ty < CHUNK_SIZE; ty += 7) {
       for (let tx = 0; tx < CHUNK_SIZE; tx += 7) {
@@ -99,8 +99,8 @@ describe('tileAt', () => {
     }
   });
 
-  it('床行には開口部(欠落セグメント)が存在する', () => {
-    // 最下層(高度0〜500)の床間隔は8。床行のうちAIRになっている箇所が広域に必ずある
+  it('includes deterministic gaps in the signed band containing Y=-8', () => {
+    // Sample the band containing Y=-8; some floor segments should deterministically be AIR.
     let gaps = 0;
     for (let x = 0; x < 512; x++) {
       if (tileAt(42, x, -8) !== TILE.SOLID) gaps++;
@@ -133,7 +133,7 @@ describe('findSpawn', () => {
     const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, band) * 32);
 
     const tiles = (tx: number, ty: number) => tileAt(seed, tx, ty);
-    // 梯子列の上、スポーンと同じ高度に配置して登り始める
+    // Place the player above the ladder column at the spawn's Y coordinate.
     const player = new Player(ladderX + 0.1, spawn.y);
     const startFeet = player.body.y + player.body.h;
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TILE } from '../world/tiles';
 import { tileAt } from '../world/worldgen';
-import { decorateChunk, PALETTE } from './decor';
+import { decorateChunk, hatchSpacingAt, PALETTE } from './decor';
 
 // decorateChunk は (seed,cx,cy) の純関数。段階Fの広域スキャンは同じチャンクを
 // 複数テストで走査するため、seed=42 の結果をメモ化して再計算を避ける(挙動不変・高速化)。
@@ -18,6 +18,13 @@ function deco(cx: number, cy: number): ReturnType<typeof decorateChunk> {
 }
 
 describe('decorateChunk', () => {
+  it('cycles hatch spacing consistently through negative stratum indices', () => {
+    expect(hatchSpacingAt(0)).toBeCloseTo(0.26);
+    expect(hatchSpacingAt(-1)).toBeCloseTo(0.4);
+    expect(hatchSpacingAt(-501)).toBeCloseTo(0.33);
+    expect(hatchSpacingAt(-1001)).toBeCloseTo(0.26);
+  });
+
   it('同一シード・同一チャンクなら同一の装飾リスト(決定論)', () => {
     expect(decorateChunk(42, 1, 1)).toEqual(decorateChunk(42, 1, 1));
   });

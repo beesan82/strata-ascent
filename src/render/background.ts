@@ -37,12 +37,43 @@ export function rareLandmarkAt(seed: number, slot: number): RareLandmark | null 
   return { kind, w, h };
 }
 
+export interface BackgroundLayerContribution {
+  layer: BgLayer;
+  layerIndex: number;
+  opacity: number;
+  source: 'from' | 'to';
+}
+
+/** Cross-fade complete layer sets so matched roles and unmatched haze never pop at a cell edge. */
+export function backgroundLayerContributions(bb: BiomeBlend): BackgroundLayerContribution[] {
+  if (bb.from === bb.to || bb.t <= 0) {
+    return bb.from.bgLayers.map((layer, layerIndex) => ({
+      layer,
+      layerIndex,
+      opacity: 1,
+      source: 'from' as const,
+    }));
+  }
+
+  return [
+    ...bb.from.bgLayers.map((layer, layerIndex) => ({
+      layer,
+      layerIndex,
+      opacity: 1 - bb.t,
+      source: 'from' as const,
+    })),
+    ...bb.to.bgLayers.map((layer, layerIndex) => ({
+      layer,
+      layerIndex,
+      opacity: bb.t,
+      source: 'to' as const,
+    })),
+  ];
+}
+
 /**
- * バイオーム配色の多層パララックス遠景(決定論的・継ぎ目なし)。
- *
- * 現在地バイオーム(bb.from)の bgLayers を奥→手前で描く。各層は factor で
- * カメラ追従率が変わり、構造は整数スロット番号でハッシュ配置するためパンしても
- * 継ぎ目が出ない。バイオームは地域(系統)ごとに単色で from=to のため from の層のみ描く。
+ * Deterministic multi-layer parallax background. During a visual-cell transition,
+ * both complete biome layer sets are cross-faded so unmatched roles disappear smoothly.
  */
 export class Background {
   constructor(private seed: number) {}
@@ -59,13 +90,11 @@ export class Background {
     // 最遠層: 遠景の巨大シルエット + 稀少な巨大ランドマーク(近景層より背後)
     this.farLayer(ctx, camX, camY, w, h, ppt, bb);
 
-    const layers = bb.from.bgLayers;
-    for (let li = 0; li < layers.length; li++) {
-      const L = layers[li];
+    for (const { layer: L, layerIndex, opacity } of backgroundLayerContributions(bb)) {
       switch (L.kind) {
-        case 'tower': this.towers(ctx, L, li, camX, w, h, ppt); break;
-        case 'deck': this.decks(ctx, L, li, camY, w, h, ppt); break;
-        case 'haze': this.haze(ctx, L, li, camY, w, h, ppt); break;
+        case 'tower': this.towers(ctx, L, layerIndex, camX, w, h, ppt, opacity); break;
+        case 'deck': this.decks(ctx, L, layerIndex, camY, w, h, ppt, opacity); break;
+        case 'haze': this.haze(ctx, L, layerIndex, camY, w, h, ppt, opacity); break;
       }
     }
     ctx.globalAlpha = 1;
@@ -85,7 +114,7 @@ export class Background {
     const scale = FAR_FACTOR * ppt;            // far-tile → px
     const horizon = h * 0.9;                    // 巨大構造の基部(地平)を画面下寄りに
     const camYoff = camY * FAR_FACTOR * 0.25 * ppt; // 垂直パララックスはさらに鈍い
-    const tint = mixHex('#0e141b', bb.from.ambientColor, 0.35);
+    const tint = mixHex('#0e141b', bb.ambientColor, 0.35);
     ctx.strokeStyle = tint;
     ctx.fillStyle = tint;
 
@@ -191,8 +220,8 @@ export class Background {
   }
 
   /** 縦の巨大塔: 画面全高のバーをスロット単位で配置し水平パララックス */
-  private towers(ctx: CanvasRenderingContext2D, L: BgLayer, li: number, camX: number, w: number, h: number, ppt: number): void {
-    ctx.globalAlpha = this.alphaFor(0.34, L.factor);
+  private towers(ctx: CanvasRenderingContext2D, L: BgLayer, li: number, camX: number, w: number, h: number, ppt: number, opacity: number): void {
+    ctx.globalAlpha = this.alphaFor(0.34, L.factor) * opacity;
     ctx.fillStyle = L.color;
     const slotTiles = 13 + Math.round(L.factor * 20);
     const slotPx = slotTiles * ppt;
@@ -213,8 +242,8 @@ export class Background {
   }
 
   /** 水平デッキ: 行単位のバーを垂直パララックスで配置 */
-  private decks(ctx: CanvasRenderingContext2D, L: BgLayer, li: number, camY: number, w: number, h: number, ppt: number): void {
-    ctx.globalAlpha = this.alphaFor(0.3, L.factor);
+  private decks(ctx: CanvasRenderingContext2D, L: BgLayer, li: number, camY: number, w: number, h: number, ppt: number, opacity: number): void {
+    ctx.globalAlpha = this.alphaFor(0.3, L.factor) * opacity;
     ctx.fillStyle = L.color;
     const rowTiles = 11 + Math.round(L.factor * 18);
     const rowPx = rowTiles * ppt;
@@ -230,14 +259,14 @@ export class Background {
       const dx = hash2(s, 2, j) * (w - dw);
       ctx.fillRect(dx, jy, dw, thick);
       // デッキ下面のリブ(細い影)で厚みを持たせる
-      ctx.globalAlpha = this.alphaFor(0.18, L.factor);
+      ctx.globalAlpha = this.alphaFor(0.18, L.factor) * opacity;
       ctx.fillRect(dx, jy + thick, dw, Math.max(1, thick * 0.5));
-      ctx.globalAlpha = this.alphaFor(0.3, L.factor);
+      ctx.globalAlpha = this.alphaFor(0.3, L.factor) * opacity;
     }
   }
 
   /** かすみ: 非常に淡い水平の色帯(垂直グラデーション) */
-  private haze(ctx: CanvasRenderingContext2D, L: BgLayer, _li: number, camY: number, w: number, h: number, ppt: number): void {
+  private haze(ctx: CanvasRenderingContext2D, L: BgLayer, _li: number, camY: number, w: number, h: number, ppt: number, opacity: number): void {
     const offY = camY * L.factor * 0.4 * ppt;
     // 画面中央付近をゆっくり漂う帯
     const bandH = h * 0.7;
@@ -247,7 +276,7 @@ export class Background {
     g.addColorStop(0, 'rgba(0,0,0,0)');
     g.addColorStop(0.5, L.color);
     g.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.globalAlpha = this.alphaFor(0.22, L.factor);
+    ctx.globalAlpha = this.alphaFor(0.22, L.factor) * opacity;
     ctx.fillStyle = g;
     ctx.fillRect(0, y0, w, bandH);
   }

@@ -1,4 +1,4 @@
-// 使い方: node scripts/screenshot.mjs [--seed=20260711] [--out=screenshots/shot.png] [--pos=x,y] [--wait=2500] [--debug=hierarchy]
+// 使い方: node scripts/screenshot.mjs [--seed=20260711] [--out=screenshots/shot.png] [--pos=x,y] [--wait=2500] [--freeze=true] [--debug=hierarchy]
 //   キー入力: [--press=KeyF] [--hold=800] [--capture=during|after] [--settle=400] [--mouse=x,y]
 //   --press したキーを --hold ミリ秒押下する。--capture=during は押下中に撮影(溜め演出向け)、
 //   after(既定)は離してから --settle ミリ秒待って撮影(発射・破壊痕向け)。
@@ -23,6 +23,7 @@ const hold = Number(args['--hold'] ?? 800);
 const capture = args['--capture'] ?? 'after';
 const settle = Number(args['--settle'] ?? 400);
 const mouse = args['--mouse'];
+const freeze = args['--freeze'] === 'true';
 
 const server = await createServer({ logLevel: 'silent', server: { port: 0 } });
 await server.listen();
@@ -34,6 +35,9 @@ if (pos) {
 }
 if (debug) {
   url += `&debug=${debug}`;
+}
+if (freeze) {
+  url += '&freeze=1';
 }
 
 const browser = await chromium.launch();

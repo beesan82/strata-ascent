@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BIOMES,
   BIOME_BLEND_HALF_WIDTH,
   biomeAt,
   biomeBlend,
   biomeBoundary,
   biomeCellAt,
+  biomeFromIndex,
   biomeForCell,
   biomeForSystem,
   mixHex,
@@ -78,11 +80,23 @@ describe('visual biome cells', () => {
     expect(middle.t).toBe(0.5);
     expect(middle.ambientLevel).toBe((middle.from.ambientLevel + middle.to.ambientLevel) / 2);
     expect(middle.ambientColor).toBe(mixHex(middle.from.ambientColor, middle.to.ambientColor, 0.5));
+    expect(middle.palette.fillMid).toBe(
+      mixHex(middle.from.palette.fillMid, middle.to.palette.fillMid, 0.5),
+    );
+    expect(middle.palette.edge).toBe(
+      mixHex(middle.from.palette.edge, middle.to.palette.edge, 0.5),
+    );
+    expect(middle.accent).toBe(mixHex(middle.from.accent, middle.to.accent, 0.5));
     expect(after.from).toBe(after.to);
     expect(after.from).toBe(biomeForCell(seed, 0));
     expect(after.t).toBe(0);
     expect(after.ambientLevel).toBe(after.from.ambientLevel);
     expect(after.ambientColor).toBe(after.from.ambientColor);
+  });
+
+  it('falls back to the cold-steel biome for an undefined selection', () => {
+    expect(biomeFromIndex(-1)).toBe(BIOMES[0]);
+    expect(biomeFromIndex(BIOMES.length)).toBe(BIOMES[0]);
   });
 });
 
