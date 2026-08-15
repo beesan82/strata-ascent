@@ -9,16 +9,26 @@ const signedHash = (seed: number, cell: number, sign: number): number => {
   let hash = (seed | 0) ^ Math.imul(cell | 0, 0x9e3779b1);
   hash = Math.imul(hash ^ (sign < 0 ? 0x85ebca6b : 0xc2b2ae35), 0x27d4eb2d);
   hash ^= hash >>> 15;
-  return Math.imul(hash, 0x85ebca6b) >>> 0;
+  return Math.imul(hash, 0x85ebca6b);
 };
 
 const cellSign = (cell: number): number => cell < 0 ? -1 : 1;
 
+const unsignedHash = (seed: number, cell: number): number =>
+  signedHash(seed, cell, cellSign(cell)) >>> 0;
+
 const EVEN_BIOME_POOL: readonly BiomeId[] = ['coldSteel', 'habitation'];
 const ODD_BIOME_POOL: readonly BiomeId[] = ['disposal', 'waterVoid', 'power'];
 
-const biomeJitter = (seed: number, cell: number): number =>
-  (signedHash(seed, cell, cellSign(cell)) % (BIOME_CELL_JITTER + 1)) - BIOME_CELL_JITTER;
+const anchorJitter = (seed: number, anchor: number): number =>
+  (unsignedHash(seed, anchor) % (BIOME_CELL_JITTER * 2 + 1)) - BIOME_CELL_JITTER;
+
+const biomeJitter = (seed: number, cell: number): number => {
+  const anchor = Math.floor(cell / 2);
+  const current = anchorJitter(seed, anchor);
+  if ((cell & 1) === 0) return current;
+  return Math.trunc((current + anchorJitter(seed, anchor + 1)) / 2);
+};
 
 export function biomeBoundary(seed: number, cell: number): number {
   return cell * BIOME_CELL_BASE + biomeJitter(seed, cell);
@@ -33,5 +43,5 @@ export function biomeCellAt(seed: number, y: number): number {
 
 export function biomeIdForCell(seed: number, cell: number): BiomeId {
   const pool = ((cell % 2) + 2) % 2 === 0 ? EVEN_BIOME_POOL : ODD_BIOME_POOL;
-  return pool[signedHash(seed, cell, cellSign(cell)) % pool.length];
+  return pool[unsignedHash(seed, cell) % pool.length];
 }

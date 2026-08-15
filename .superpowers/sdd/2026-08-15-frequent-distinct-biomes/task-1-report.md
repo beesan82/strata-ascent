@@ -34,3 +34,22 @@
 ## Concerns
 
 None.
+
+## Fix Round 1
+
+### Root cause and correction
+
+- The first implementation reduced the jitter modulus to `BIOME_CELL_JITTER + 1` to preserve cell widths, which incorrectly limited offsets to `[-75, 0]`.
+- Jitter now uses the signed 32-bit hash normalized with `>>> 0` before modulus, producing full-range `[-75, +75]` anchor offsets. Direct midpoint interpolation between consecutive anchors caps each boundary delta at 75 tiles, preserving 300–450 tile cell widths without traversal from zero.
+- Added deterministic coverage proving sampled jitter remains integral and in bounds with both signs represented, and that every `BIOME_IDS` entry is reachable in the broad signed sample.
+- Updated the chunk-blend fixture to a deterministic boundary whose 64-tile chunk centers both lie inside the ±50 blend interval.
+
+### Verification
+
+- `npm test -- src/world/biomeCells.test.ts src/render/biome.test.ts src/render/background.test.ts src/render/chunkbake.test.ts src/render/renderer.test.ts` — passed: 5 files, 33 tests.
+- `npm test` — passed: 35 files, 286 tests.
+- `npm run build` — passed: `tsc` and Vite production build.
+
+### Commit
+
+- `fix: normalize biome jitter range` (this commit)

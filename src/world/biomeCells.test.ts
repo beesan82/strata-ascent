@@ -29,15 +29,33 @@ describe('biome cells', () => {
     }
   });
 
+  it('uses deterministic signed jitter across both sides of zero', () => {
+    const jitters = new Set<number>();
+    for (const seed of seeds) {
+      for (let cell = -100; cell <= 100; cell++) {
+        const jitter = biomeBoundary(seed, cell) - cell * BIOME_CELL_BASE;
+        expect(Number.isInteger(jitter)).toBe(true);
+        expect(jitter).toBeGreaterThanOrEqual(-BIOME_CELL_JITTER);
+        expect(jitter).toBeLessThanOrEqual(BIOME_CELL_JITTER);
+        jitters.add(jitter);
+      }
+    }
+    expect(Math.min(...jitters)).toBeLessThan(0);
+    expect(Math.max(...jitters)).toBeGreaterThan(0);
+  });
+
   it('is deterministic, uses all supported IDs, and never repeats across adjacent cells', () => {
+    const selectedIds = new Set<typeof BIOME_IDS[number]>();
     for (const seed of seeds) {
       for (let cell = -100; cell <= 100; cell++) {
         const id = biomeIdForCell(seed, cell);
         expect(BIOME_IDS).toContain(id);
+        selectedIds.add(id);
         expect(id).toBe(biomeIdForCell(seed, cell));
         expect(id).not.toBe(biomeIdForCell(seed, cell + 1));
       }
     }
+    expect(selectedIds).toEqual(new Set(BIOME_IDS));
   });
 
   it('keeps positive and negative 20-cell ID sequences independent', () => {
