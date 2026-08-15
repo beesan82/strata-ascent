@@ -1,10 +1,57 @@
 import { describe, expect, it } from 'vitest';
 import { Player } from '../entities/player';
+import {
+  BIOME_IDS,
+  biomeBoundary,
+  biomeCellAt,
+  biomeIdForCell,
+  type BiomeId,
+} from './biomeCells';
+import { terrainProfileFor } from './biomeTerrain';
 import { hash2 } from './noise';
-import { stratumAt } from './strata';
 import { CHUNK_SIZE, TILE } from './tiles';
 import { findSpawn, generateChunk, noiseTileAt, tileAt, tileAtLive } from './worldgen';
 import { Destruction } from './destruction';
+
+function representativeBiomeCenter(seed: number, target: BiomeId): number {
+  for (let cell = -100; cell <= 100; cell++) {
+    if (biomeIdForCell(seed, cell) !== target) continue;
+    const start = biomeBoundary(seed, cell);
+    const end = biomeBoundary(seed, cell + 1);
+    const center = Math.floor((start + end) / 2);
+    if (biomeCellAt(seed, center) === cell) return center;
+  }
+  throw new Error(`No representative cell found for ${target}`);
+}
+
+function floorGapRate(seed: number, biomeId: BiomeId): number {
+  const centerY = representativeBiomeCenter(seed, biomeId);
+  const { floorSpacing } = terrainProfileFor(biomeId);
+  let floorTiles = 0;
+  let gaps = 0;
+  for (let y = centerY - 120; y < centerY + 120; y++) {
+    if (((y % floorSpacing) + floorSpacing) % floorSpacing !== 0) continue;
+    for (let x = -512; x < 512; x++) {
+      floorTiles++;
+      if (noiseTileAt(seed, x, y) !== TILE.SOLID) gaps++;
+    }
+  }
+  return gaps / floorTiles;
+}
+
+function countBiomeTiles(seed: number, biomeId: BiomeId): Record<'air' | 'solid' | 'ladder', number> {
+  const centerY = representativeBiomeCenter(seed, biomeId);
+  const counts = { air: 0, solid: 0, ladder: 0 };
+  for (let y = centerY - 96; y < centerY + 96; y++) {
+    for (let x = -256; x < 256; x++) {
+      const tile = noiseTileAt(seed, x, y);
+      if (tile === TILE.AIR) counts.air++;
+      else if (tile === TILE.SOLID) counts.solid++;
+      else if (tile === TILE.LADDER) counts.ladder++;
+    }
+  }
+  return counts;
+}
 
 describe('generateChunk', () => {
   it('同一シード・同一チャンク座標なら完全に同じ出力(決定論)', () => {
@@ -31,28 +78,19 @@ describe('generateChunk', () => {
     }
   });
 
-  it('matches tileAt across the negative signed-stratum boundary at Y=-500', () => {
-    // cy=-8 spans y=-512..-449 and therefore crosses the Y=-500 band boundary.
-    const chunk = generateChunk(42, 2, -8);
-    for (let ty = 0; ty < CHUNK_SIZE; ty += 7) {
-      for (let tx = 0; tx < CHUNK_SIZE; tx += 7) {
-        expect(chunk[ty * CHUNK_SIZE + tx]).toBe(
-          tileAt(42, 2 * CHUNK_SIZE + tx, -8 * CHUNK_SIZE + ty),
-        );
-      }
-    }
-  });
-
-  it('matches tileAt across the positive-Y stratum boundary from y=499 through y=562', () => {
+  it('matches tileAt across signed biome boundaries', () => {
     const seed = 42;
-    for (let y = 499; y <= 562; y += 7) {
-      const cy = Math.floor(y / CHUNK_SIZE);
-      const chunk = generateChunk(seed, 2, cy);
-      const ty = y - cy * CHUNK_SIZE;
-      for (let tx = 0; tx < CHUNK_SIZE; tx += 7) {
-        expect(chunk[ty * CHUNK_SIZE + tx]).toBe(
-          tileAt(seed, 2 * CHUNK_SIZE + tx, y),
-        );
+    for (let cell = -10; cell <= 10; cell++) {
+      const edge = biomeBoundary(seed, cell);
+      for (let y = edge - 1; y <= edge + 1; y++) {
+        const cy = Math.floor(y / CHUNK_SIZE);
+        const chunk = generateChunk(seed, 2, cy);
+        const ty = y - cy * CHUNK_SIZE;
+        for (let tx = 0; tx < CHUNK_SIZE; tx += 7) {
+          expect(chunk[ty * CHUNK_SIZE + tx]).toBe(
+            tileAt(seed, 2 * CHUNK_SIZE + tx, y),
+          );
+        }
       }
     }
   });
@@ -87,12 +125,10 @@ describe('tileAt', () => {
     const TEST_RANGE_UNIT = 8;
     for (const seed of [1, 42, 20260711]) {
       for (let group = 0; group < 8; group++) {
-        // Signed Y positions across several strata retain their ladder columns.
+        // The same signed-X column must be a ladder throughout all Y values.
         for (let y = -TEST_RANGE_UNIT * 40; y < TEST_RANGE_UNIT * 41; y++) {
-          const s = stratumAt(seed, y);
-          const band = Math.floor(y / s.floorSpacing);
           const ladderX =
-            group * 32 + Math.floor(hash2(seed + 404, group, band) * 32);
+            group * 32 + Math.floor(hash2(seed + 404, group, 0) * 32);
           expect(tileAt(seed, ladderX, y)).toBe(TILE.LADDER);
         }
       }
@@ -106,6 +142,56 @@ describe('tileAt', () => {
       if (tileAt(42, x, -8) !== TILE.SOLID) gaps++;
     }
     expect(gaps).toBeGreaterThan(0);
+  });
+});
+
+describe('biome-driven terrain', () => {
+  const seed = 20260711;
+
+  it('contains air, solid, and ladders at a representative center for every visual biome', () => {
+    for (const biomeId of BIOME_IDS) {
+      const counts = countBiomeTiles(seed, biomeId);
+      expect(counts.air).toBeGreaterThan(0);
+      expect(counts.solid).toBeGreaterThan(0);
+      expect(counts.ladder).toBeGreaterThan(0);
+    }
+  });
+
+  it('makes water void airier and habitation denser than cold steel', () => {
+    const waterVoid = countBiomeTiles(seed, 'waterVoid');
+    const coldSteel = countBiomeTiles(seed, 'coldSteel');
+    const habitation = countBiomeTiles(seed, 'habitation');
+
+    expect(waterVoid.air).toBeGreaterThan(coldSteel.air);
+    expect(waterVoid.air).toBeGreaterThan(habitation.air);
+    expect(habitation.solid).toBeGreaterThan(waterVoid.solid);
+  });
+
+  it('makes disposal floor rows gap more often than cold steel', () => {
+    expect(floorGapRate(seed, 'disposal')).toBeGreaterThan(floorGapRate(seed, 'coldSteel'));
+  });
+
+  it('keeps a deterministic ladder column continuous through every sampled biome boundary', () => {
+    const ladderColumns = Array.from({ length: 3 }, (_, group) =>
+      group * 32 + Math.floor(hash2(seed + 404, group, 0) * 32),
+    );
+
+    for (let cell = -10; cell <= 10; cell++) {
+      const edge = biomeBoundary(seed, cell);
+      expect(ladderColumns.some((x) =>
+        Array.from({ length: 25 }, (_, offset) => noiseTileAt(seed, x, edge - 12 + offset))
+          .every((tile) => tile === TILE.LADDER),
+      )).toBe(true);
+    }
+  });
+
+  it('uses the same continuous ladder rule in signed X groups', () => {
+    for (const group of [-3, -2, -1]) {
+      const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, 0) * 32);
+      for (const y of [-900, -1, 0, 900]) {
+        expect(noiseTileAt(seed, ladderX, y)).toBe(TILE.LADDER);
+      }
+    }
   });
 });
 
@@ -123,14 +209,15 @@ describe('findSpawn', () => {
     // このテストはそのレビューの見落としを固定するための回帰テスト。
     const seed = 20260711;
     const spawn = findSpawn(seed);
-    const floorSpacing = stratumAt(seed, spawn.y).floorSpacing;
+    const floorSpacing = terrainProfileFor(
+      biomeIdForCell(seed, biomeCellAt(seed, spawn.y)),
+    ).floorSpacing;
 
     // スポーンが属する32タイル幅の列グループの梯子x座標を求める(tileAtの式を再現)。
     // 実装と鏡写しの結合だが、「スポーン地点の近くに必ず梯子がある」ことを固定する
     // 目的で意図的に許容する。
     const group = Math.floor(spawn.x / 32);
-    const band = Math.floor(spawn.y / floorSpacing);
-    const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, band) * 32);
+    const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, 0) * 32);
 
     const tiles = (tx: number, ty: number) => tileAt(seed, tx, ty);
     // Place the player above the ladder column at the spawn's Y coordinate.

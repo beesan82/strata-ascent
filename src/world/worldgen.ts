@@ -1,8 +1,9 @@
 import { facilityTileAt } from './facility';
 import { megaFacilityAt } from './megafacility';
 import { networkTileAt, sectorTrunkTileAt } from './network';
+import { biomeCellAt, biomeIdForCell } from './biomeCells';
+import { terrainProfileFor } from './biomeTerrain';
 import { hash2, valueNoise2 } from './noise';
-import { stratumAt } from './strata';
 import { CHUNK_SIZE, TILE, type Tile } from './tiles';
 import type { Destruction } from './destruction';
 
@@ -13,34 +14,33 @@ function mod(n: number, m: number): number {
 
 /** シード+ワールドタイル座標 → 素のノイズ躯体タイル種。純粋関数(同じ入力なら常に同じ出力) */
 export function noiseTileAt(seed: number, x: number, y: number): Tile {
-  const s = stratumAt(seed, y);
+  const cell = biomeCellAt(seed, y);
+  const biomeId = biomeIdForCell(seed, cell);
+  const profile = terrainProfileFor(biomeId);
 
-  // 床帯(band): floorSpacing行ごとのまとまり。床行はbandの先頭行
-  // 注: 床行の位相は階層(stratum)の継ぎ目でリセットされるため、継ぎ目ごとに
-  // 床間隔がやや広い区間が1つ生じる(想定内・許容)
-  const band = Math.floor(y / s.floorSpacing);
-  const isFloorRow = mod(y, s.floorSpacing) === 0;
+  // Floor bands use the active biome profile while their phase stays in world coordinates.
+  const band = Math.floor(y / profile.floorSpacing);
+  const isFloorRow = mod(y, profile.floorSpacing) === 0;
   const seg = Math.floor(x / 16);
-  const floorGap = isFloorRow && hash2(seed + 303, seg, band) < s.gapChance;
+  const floorGap = isFloorRow && hash2(seed + 303, seg, band) < profile.gapChance;
 
   // 1. 梯子: 32タイル幅の列グループごとに1本。巨大空洞・柱壁・床のいずれよりも
   //    先に判定する。巨大空洞を貫く垂直シャフト(塔)として読める。
   //    注: ladderXはband単位でずれるため、空洞内では8〜14タイルの梯子片が
-  //    列をまたいで不連続になる。空洞からの脱出は「橋を渡って空洞の縁へ」が
-  //    現状の想定ルート(段階3の重力子砲が詰み防止の最終手段)。
+  //    The column is deliberately independent of Y so it remains a route across biome edges.
   const group = Math.floor(x / 32);
-  const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, band) * 32);
+  const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, 0) * 32);
   if (x === ladderX) return TILE.LADDER;
 
   // 2. 巨大空洞(低頻度ノイズ)。空洞内は4床帯ごとの橋だけ残る
-  const cavity = valueNoise2(seed + 101, x / 160, y / 160) > s.cavityThreshold;
+  const cavity = valueNoise2(seed + 101, x / 160, y / 160) > profile.cavityThreshold;
   if (cavity) {
     if (isFloorRow && mod(band, 4) === 0 && !floorGap) return TILE.SOLID;
     return TILE.AIR;
   }
 
   // 3. 柱・壁塊(中頻度ノイズ)
-  const mass = valueNoise2(seed + 202, x / 28, y / 28) > s.massThreshold;
+  const mass = valueNoise2(seed + 202, x / 28, y / 28) > profile.massThreshold;
   if (mass) return TILE.SOLID;
 
   // 4. 床
