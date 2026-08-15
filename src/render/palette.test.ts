@@ -9,7 +9,7 @@ describe('PIXEL_PALETTE', () => {
     for (const color of PIXEL_PALETTE) expect(color).toMatch(/^#[0-9a-f]{6}$/);
   });
 
-  it('orders the first 28 cold steel colors by increasing luminance', () => {
+  it('orders the first 28 industrial colors by increasing luminance', () => {
     for (let i = 1; i < 28; i++) {
       expect(relLum(PIXEL_PALETTE[i])).toBeGreaterThan(relLum(PIXEL_PALETTE[i - 1]));
     }
@@ -49,5 +49,34 @@ describe('nearestIndex', () => {
 
   it('maps rust to the second rust accent', () => {
     expect(nearestIndex(90, 58, 36, paletteRgb())).toBe(29);
+  });
+
+  it('retains the five visual-biome hue families through quantization', () => {
+    const rgb = paletteRgb();
+    const quantized = (hex: string): [number, number, number] => {
+      const value = parseInt(hex.slice(1), 16);
+      const index = nearestIndex((value >> 16) & 255, (value >> 8) & 255, value & 255, rgb);
+      return [rgb[index * 3], rgb[index * 3 + 1], rgb[index * 3 + 2]];
+    };
+
+    const [coldR, coldG, coldB] = quantized('#5b7e9b');
+    expect(coldB).toBeGreaterThan(coldG);
+    expect(coldG).toBeGreaterThan(coldR);
+
+    const [habitationR, habitationG, habitationB] = quantized('#3f9b83');
+    expect(habitationG).toBeGreaterThan(habitationB);
+    expect(habitationB).toBeGreaterThan(habitationR);
+
+    const [disposalR, disposalG, disposalB] = quantized('#a26028');
+    expect(disposalR).toBeGreaterThan(disposalG);
+    expect(disposalG).toBeGreaterThan(disposalB);
+
+    const [waterR, waterG, waterB] = quantized('#297cc4');
+    expect(waterB).toBeGreaterThan(waterG);
+    expect(waterG).toBeGreaterThan(waterR);
+
+    const [powerR, powerG, powerB] = quantized('#8157c8');
+    expect(powerB).toBeGreaterThan(powerR);
+    expect(powerR).toBeGreaterThan(powerG);
   });
 });

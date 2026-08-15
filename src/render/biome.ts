@@ -42,40 +42,41 @@ export interface Biome {
 const BG_BASES = [mixHex(STEEL.black, STEEL.far, 0.5), STEEL.far, mixHex(STEEL.far, STEEL.base, 0.5)];
 
 /** 背景レイヤー色: 奥(添字小)ほど暗い鋼ランプ+微量ティント */
-const bgColor = (tint: string, i: number): string =>
-  mixHex(BG_BASES[Math.min(i, 2)], tint, 0.05);
+const bgColor = (tint: string, i: number, amount: number): string =>
+  mixHex(BG_BASES[Math.min(i, 2)], tint, amount);
 
 const bg = (
   tint: string,
   defs: ReadonlyArray<readonly [number, number, BgLayer['kind']]>,
+  amount = 0.05,
 ): BgLayer[] =>
-  defs.map(([factor, density, kind], i) => ({ factor, density, kind, color: bgColor(tint, i) }));
+  defs.map(([factor, density, kind], i) => ({ factor, density, kind, color: bgColor(tint, i, amount) }));
 
 export const VISUAL_BIOME: Record<BiomeId, Biome> = {
   coldSteel: {
-    name: '最下層', ambientColor: mixHex('#2e3a44', '#020408', 0.72), ambientLevel: 0.34,
-    palette: steelPalette('#6f8794'), accent: '#6f8794',
-    bgLayers: bg('#6f8794', [[0.2, 0.5, 'tower'], [0.4, 0.4, 'deck']]),
+    name: '最下層', ambientColor: '#101b26', ambientLevel: 0.28,
+    palette: steelPalette('#5b7e9b', 0.2), accent: '#7898ae',
+    bgLayers: bg('#5b7e9b', [[0.2, 0.36, 'tower'], [0.45, 0.28, 'deck']], 0.22),
   },
   habitation: {
-    name: '居住区跡', ambientColor: mixHex('#2c4a4a', '#020408', 0.72), ambientLevel: 0.5,
-    palette: steelPalette('#7fc0ac'), accent: '#9fd8c2',
-    bgLayers: bg('#7fc0ac', [[0.18, 0.55, 'tower'], [0.35, 0.5, 'deck'], [0.5, 0.3, 'haze']]),
+    name: '居住区跡', ambientColor: '#0c302a', ambientLevel: 0.56,
+    palette: steelPalette('#3f9b83', 0.23), accent: '#75c6a8',
+    bgLayers: bg('#2eae79', [[0.18, 0.78, 'tower'], [0.35, 0.68, 'deck'], [0.5, 0.38, 'haze']], 0.22),
   },
   disposal: {
-    name: '廃棄物層', ambientColor: mixHex('#4a3826', '#020408', 0.72), ambientLevel: 0.36,
-    palette: steelPalette('#b07a45'), accent: '#c98f52',
-    bgLayers: bg('#b07a45', [[0.2, 0.5, 'tower'], [0.4, 0.45, 'deck']]),
+    name: '廃棄物層', ambientColor: '#341c0d', ambientLevel: 0.36,
+    palette: steelPalette('#a26028', 0.22), accent: '#d38a42',
+    bgLayers: bg('#b16628', [[0.24, 0.33, 'tower'], [0.5, 0.72, 'deck']], 0.22),
   },
   waterVoid: {
-    name: '大空洞帯', ambientColor: mixHex('#2f3f5c', '#020408', 0.66), ambientLevel: 0.72, // 最も開けた系統だけ僅かに環境色を残す
-    palette: steelPalette('#8fb4e6'), accent: '#a9c6ee',
-    bgLayers: bg('#8fb4e6', [[0.12, 0.7, 'tower'], [0.3, 0.5, 'deck'], [0.55, 0.35, 'haze']]),
+    name: '大空洞帯', ambientColor: '#0a1d4e', ambientLevel: 0.7, // 最も開けた系統だけ僅かに環境色を残す
+    palette: steelPalette('#297cc4', 0.25), accent: '#55c8e8',
+    bgLayers: bg('#2484da', [[0.12, 0.25, 'tower'], [0.3, 0.22, 'deck'], [0.55, 0.78, 'haze']], 0.22),
   },
   power: {
-    name: '上層', ambientColor: mixHex('#3a3a55', '#020408', 0.72), ambientLevel: 0.6,
-    palette: steelPalette('#b6b6e0'), accent: '#c9a0ff',
-    bgLayers: bg('#b6b6e0', [[0.16, 0.55, 'tower'], [0.36, 0.45, 'deck']]),
+    name: '上層', ambientColor: '#2b1648', ambientLevel: 0.62,
+    palette: steelPalette('#8157c8', 0.23), accent: '#bc7cff',
+    bgLayers: bg('#8d52d8', [[0.16, 0.62, 'tower'], [0.36, 0.56, 'deck']], 0.22),
   },
 };
 

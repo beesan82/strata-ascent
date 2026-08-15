@@ -1,15 +1,16 @@
 /**
  * Fixed 32-color high-fidelity palette.
- * Indices 0–27 are the dark-to-light cold steel ramp; 28–31 are warm rust and light accents.
+ * Indices 0–27 are a dark-to-light industrial ramp with cold, teal, cobalt, and violet steps;
+ * 28–31 are warm rust and light accents.
  */
 export const PIXEL_PALETTE: readonly string[] = [
   '#020408', '#03050a', '#04070c', '#05090f',
   '#070c12', '#091017', '#0a121a', '#0d141c',
   '#10171f', '#131b24', '#16202b', '#192633',
-  '#1c3040', '#203446', '#22384a', '#263d51',
-  '#2a4258', '#2f4961', '#33506a', '#39536c',
-  '#3d566e', '#456078', '#4a6a84', '#53738c',
-  '#5f7d94', '#6d899f', '#7d97ad', '#c7d0ce',
+  '#30254c', '#17354d', '#193b37', '#2b355e',
+  '#1f4660', '#3f4773', '#24564d', '#2a586f',
+  '#44518b', '#356557', '#53649e', '#3c755f',
+  '#477765', '#6e72b0', '#8d62cb', '#c7d0ce',
   '#3d2618', '#5a3a24', '#9a6d32', '#caa64a',
 ];
 

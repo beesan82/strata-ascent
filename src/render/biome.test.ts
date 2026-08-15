@@ -18,6 +18,15 @@ import {
 import { relLum } from './steel';
 import { BIOME_IDS, biomeIdForCell } from '../world/biomeCells';
 
+const rgbDistance = (a: string, b: string): number => {
+  const aa = parseInt(a.slice(1), 16);
+  const bb = parseInt(b.slice(1), 16);
+  const dr = ((aa >> 16) & 255) - ((bb >> 16) & 255);
+  const dg = ((aa >> 8) & 255) - ((bb >> 8) & 255);
+  const db = (aa & 255) - (bb & 255);
+  return Math.hypot(dr, dg, db);
+};
+
 describe('biomeForSystem', () => {
   it('returns the matching system biome', () => {
     expect(biomeForSystem('water')).toBe(SYSTEM_BIOME.water);
@@ -148,6 +157,48 @@ describe('tone and palette realism', () => {
         expect(relLum(layer.color)).toBeLessThanOrEqual(relLum(biome.palette.fillMid) + 1e-6);
       }
     }
+  });
+});
+
+describe('visual biome separation', () => {
+  const visualBiomes = BIOME_IDS.map((id) => VISUAL_BIOME[id]);
+
+  it('keeps every biome visual tuple distinct', () => {
+    const tuples = new Set(visualBiomes.map((biome) => JSON.stringify({
+      ambientColor: biome.ambientColor,
+      ambientLevel: biome.ambientLevel,
+      fillMid: biome.palette.fillMid,
+      accent: biome.accent,
+      layers: biome.bgLayers.map(({ color, density, factor, kind }) => [color, density, factor, kind]),
+    })));
+    expect(tuples.size).toBe(BIOME_IDS.length);
+  });
+
+  it('keeps ambient, accent, and foreground background colors materially separated', () => {
+    for (let i = 0; i < visualBiomes.length; i++) {
+      for (let j = i + 1; j < visualBiomes.length; j++) {
+        expect(rgbDistance(visualBiomes[i].ambientColor, visualBiomes[j].ambientColor)).toBeGreaterThanOrEqual(18);
+        expect(rgbDistance(visualBiomes[i].accent, visualBiomes[j].accent)).toBeGreaterThanOrEqual(40);
+        expect(rgbDistance(visualBiomes[i].bgLayers[0].color, visualBiomes[j].bgLayers[0].color)).toBeGreaterThanOrEqual(15);
+      }
+    }
+  });
+
+  it('keeps background layers valid while retaining towers, decks, and biome-specific haze', () => {
+    const signatures = new Set<string>();
+    for (const biome of visualBiomes) {
+      expect(biome.bgLayers.length).toBeGreaterThanOrEqual(2);
+      signatures.add(biome.bgLayers.map((layer) => layer.kind).join(','));
+      for (const layer of biome.bgLayers) {
+        expect(layer.color).toMatch(/^#[0-9a-f]{6}$/i);
+        expect(layer.factor).toBeGreaterThan(0);
+        expect(layer.factor).toBeLessThanOrEqual(1);
+        expect(layer.density).toBeGreaterThan(0);
+        expect(layer.density).toBeLessThanOrEqual(1);
+      }
+    }
+    expect(signatures.size).toBeGreaterThanOrEqual(2);
+    expect(visualBiomes.filter((biome) => biome.bgLayers.some((layer) => layer.kind === 'haze'))).toHaveLength(2);
   });
 });
 
