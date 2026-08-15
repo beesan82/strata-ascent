@@ -24,10 +24,9 @@ export function noiseTileAt(seed: number, x: number, y: number): Tile {
   const seg = Math.floor(x / 16);
   const floorGap = isFloorRow && hash2(seed + 303, seg, band) < profile.gapChance;
 
-  // 1. 梯子: 32タイル幅の列グループごとに1本。巨大空洞・柱壁・床のいずれよりも
-  //    先に判定する。巨大空洞を貫く垂直シャフト(塔)として読める。
-  //    注: ladderXはband単位でずれるため、空洞内では8〜14タイルの梯子片が
-  //    The column is deliberately independent of Y so it remains a route across biome edges.
+  // Ladder columns take precedence over all terrain features.
+  // Each signed 32-tile X group has one deterministic column, independent of Y,
+  // so it remains a continuous route through floors, cavities, and biome edges.
   const group = Math.floor(x / 32);
   const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, 0) * 32);
   if (x === ladderX) return TILE.LADDER;
