@@ -60,7 +60,7 @@ export const VISUAL_BIOME: Record<BiomeId, Biome> = {
   },
   habitation: {
     name: '居住区跡', ambientColor: '#0c302a', ambientLevel: 0.56,
-    palette: steelPalette('#3f9b83', 0.23), accent: '#75c6a8',
+    palette: steelPalette('#3f9b83', 0.23), accent: '#3c755f',
     bgLayers: bg('#2eae79', [[0.18, 0.78, 'tower'], [0.35, 0.68, 'deck'], [0.5, 0.38, 'haze']], 0.22),
   },
   disposal: {
@@ -70,7 +70,7 @@ export const VISUAL_BIOME: Record<BiomeId, Biome> = {
   },
   waterVoid: {
     name: '大空洞帯', ambientColor: '#0a1d4e', ambientLevel: 0.7, // 最も開けた系統だけ僅かに環境色を残す
-    palette: steelPalette('#297cc4', 0.25), accent: '#55c8e8',
+    palette: steelPalette('#297cc4', 0.25), accent: '#3a73a4',
     bgLayers: bg('#2484da', [[0.12, 0.25, 'tower'], [0.3, 0.22, 'deck'], [0.55, 0.78, 'haze']], 0.22),
   },
   power: {

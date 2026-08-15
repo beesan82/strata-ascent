@@ -16,6 +16,7 @@ import {
   SYSTEM_BIOME,
 } from './biome';
 import { relLum } from './steel';
+import { nearestIndex, paletteRgb } from './palette';
 import { BIOME_IDS, biomeIdForCell } from '../world/biomeCells';
 
 const rgbDistance = (a: string, b: string): number => {
@@ -25,6 +26,15 @@ const rgbDistance = (a: string, b: string): number => {
   const dg = ((aa >> 8) & 255) - ((bb >> 8) & 255);
   const db = (aa & 255) - (bb & 255);
   return Math.hypot(dr, dg, db);
+};
+
+const quantizedHex = (hex: string): string => {
+  const value = parseInt(hex.slice(1), 16);
+  const rgb = paletteRgb();
+  const index = nearestIndex((value >> 16) & 255, (value >> 8) & 255, value & 255, rgb);
+  return `#${[rgb[index * 3], rgb[index * 3 + 1], rgb[index * 3 + 2]]
+    .map((channel) => channel.toString(16).padStart(2, '0'))
+    .join('')}`;
 };
 
 describe('biomeForSystem', () => {
@@ -184,6 +194,25 @@ describe('visual biome separation', () => {
     }
   });
 
+  it('preserves materially distinct visual-biome swatches after final palette quantization', () => {
+    const swatches = visualBiomes.map((biome) => ({
+      ambientColor: quantizedHex(biome.ambientColor),
+      fillMid: quantizedHex(biome.palette.fillMid),
+      edge: quantizedHex(biome.palette.edge),
+      accent: quantizedHex(biome.accent),
+    }));
+
+    expect(new Set(swatches.map((swatch) => JSON.stringify(swatch))).size).toBe(BIOME_IDS.length);
+    for (let i = 0; i < swatches.length; i++) {
+      for (let j = i + 1; j < swatches.length; j++) {
+        expect(rgbDistance(swatches[i].fillMid, swatches[j].fillMid)).toBeGreaterThanOrEqual(20);
+      }
+    }
+
+    expect(rgbDistance(swatches[0].edge, swatches[3].edge)).toBeGreaterThanOrEqual(12);
+    expect(rgbDistance(swatches[1].accent, swatches[3].accent)).toBeGreaterThanOrEqual(12);
+  });
+
   it('keeps background layers valid while retaining towers, decks, and biome-specific haze', () => {
     const signatures = new Set<string>();
     for (const biome of visualBiomes) {
@@ -199,6 +228,13 @@ describe('visual biome separation', () => {
     }
     expect(signatures.size).toBeGreaterThanOrEqual(2);
     expect(visualBiomes.filter((biome) => biome.bgLayers.some((layer) => layer.kind === 'haze'))).toHaveLength(2);
+
+    const layerDensity = (biome: typeof visualBiomes[number], kind: 'tower' | 'deck' | 'haze'): number =>
+      biome.bgLayers.find((layer) => layer.kind === kind)?.density ?? 0;
+    expect(layerDensity(VISUAL_BIOME.habitation, 'tower')).toBeGreaterThan(layerDensity(VISUAL_BIOME.waterVoid, 'tower'));
+    expect(layerDensity(VISUAL_BIOME.habitation, 'deck')).toBeGreaterThan(layerDensity(VISUAL_BIOME.waterVoid, 'deck'));
+    expect(layerDensity(VISUAL_BIOME.waterVoid, 'haze')).toBeGreaterThan(layerDensity(VISUAL_BIOME.habitation, 'haze'));
+    expect(layerDensity(VISUAL_BIOME.disposal, 'deck')).toBeGreaterThan(layerDensity(VISUAL_BIOME.disposal, 'tower'));
   });
 });
 
