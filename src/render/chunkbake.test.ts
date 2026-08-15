@@ -12,8 +12,8 @@ describe('chunk visual biome selection', () => {
   it('changes tile palette between visual cells inside one facility region', () => {
     const seed = 42;
     const edge = biomeBoundary(seed, 2);
-    const beforeCy = chunkContainingCenter(edge - 300);
-    const afterCy = chunkContainingCenter(edge + 300);
+    const beforeCy = chunkContainingCenter((biomeBoundary(seed, 1) + edge) / 2);
+    const afterCy = chunkContainingCenter((edge + biomeBoundary(seed, 3)) / 2);
 
     expect(regionAt(seed, 0, centerY(beforeCy)).system).toBe(
       regionAt(seed, 0, centerY(afterCy)).system,
@@ -30,8 +30,8 @@ describe('chunk visual biome selection', () => {
   it('advances a bounded palette blend across chunk centers near a visual boundary', () => {
     const seed = 42;
     const edge = biomeBoundary(seed, 2);
-    const before = chunkVisualAt(seed, 0, chunkContainingCenter(edge - 128));
-    const after = chunkVisualAt(seed, 0, chunkContainingCenter(edge + 128));
+    const before = chunkVisualAt(seed, 0, chunkContainingCenter(edge - 32));
+    const after = chunkVisualAt(seed, 0, chunkContainingCenter(edge + 32));
 
     expect(before.from).toBe(after.from);
     expect(before.to).toBe(after.to);

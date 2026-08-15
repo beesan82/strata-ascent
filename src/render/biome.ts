@@ -1,7 +1,24 @@
 import type { TilePalette } from './tileset/generate';
 import type { System } from '../world/hierarchy';
+import {
+  BIOME_BLEND_HALF_WIDTH,
+  BIOME_CELL_BASE,
+  BIOME_CELL_JITTER,
+  BIOME_IDS,
+  biomeBoundary,
+  biomeCellAt,
+  biomeIdForCell,
+  type BiomeId,
+} from '../world/biomeCells';
 import { mixHex, steelPalette, STEEL } from './steel';
 export { mixHex };
+export {
+  BIOME_BLEND_HALF_WIDTH,
+  BIOME_CELL_BASE,
+  BIOME_CELL_JITTER,
+  biomeBoundary,
+  biomeCellAt,
+};
 
 /** パララックス背景1層の定義 */
 export interface BgLayer {
@@ -34,34 +51,36 @@ const bg = (
 ): BgLayer[] =>
   defs.map(([factor, density, kind], i) => ({ factor, density, kind, color: bgColor(tint, i) }));
 
-export const BIOMES: readonly Biome[] = [
-  // BIOMES[0] is both the cold-steel fallback and a valid visual-cell biome.
-  {
+export const VISUAL_BIOME: Record<BiomeId, Biome> = {
+  coldSteel: {
     name: '最下層', ambientColor: mixHex('#2e3a44', '#020408', 0.72), ambientLevel: 0.34,
     palette: steelPalette('#6f8794'), accent: '#6f8794',
     bgLayers: bg('#6f8794', [[0.2, 0.5, 'tower'], [0.4, 0.4, 'deck']]),
   },
-  {
+  habitation: {
     name: '居住区跡', ambientColor: mixHex('#2c4a4a', '#020408', 0.72), ambientLevel: 0.5,
     palette: steelPalette('#7fc0ac'), accent: '#9fd8c2',
     bgLayers: bg('#7fc0ac', [[0.18, 0.55, 'tower'], [0.35, 0.5, 'deck'], [0.5, 0.3, 'haze']]),
   },
-  {
+  disposal: {
     name: '廃棄物層', ambientColor: mixHex('#4a3826', '#020408', 0.72), ambientLevel: 0.36,
     palette: steelPalette('#b07a45'), accent: '#c98f52',
     bgLayers: bg('#b07a45', [[0.2, 0.5, 'tower'], [0.4, 0.45, 'deck']]),
   },
-  {
+  waterVoid: {
     name: '大空洞帯', ambientColor: mixHex('#2f3f5c', '#020408', 0.66), ambientLevel: 0.72, // 最も開けた系統だけ僅かに環境色を残す
     palette: steelPalette('#8fb4e6'), accent: '#a9c6ee',
     bgLayers: bg('#8fb4e6', [[0.12, 0.7, 'tower'], [0.3, 0.5, 'deck'], [0.55, 0.35, 'haze']]),
   },
-  {
+  power: {
     name: '上層', ambientColor: mixHex('#3a3a55', '#020408', 0.72), ambientLevel: 0.6,
     palette: steelPalette('#b6b6e0'), accent: '#c9a0ff',
     bgLayers: bg('#b6b6e0', [[0.16, 0.55, 'tower'], [0.36, 0.45, 'deck']]),
   },
-];
+};
+
+/** Ordered compatibility view of visual biomes. */
+export const BIOMES: readonly Biome[] = BIOME_IDS.map((id) => VISUAL_BIOME[id]);
 
 /** 精錬炉(foundry): 溶鉱の赤熱を帯びた系統配色 */
 const FOUNDRY: Biome = {
@@ -72,10 +91,10 @@ const FOUNDRY: Biome = {
 
 /** Facility system to biome lookup; visual landscape selection uses coordinate cells below. */
 export const SYSTEM_BIOME: Record<System, Biome> = {
-  water: BIOMES[3],
-  habitation: BIOMES[1],
-  disposal: BIOMES[2],
-  power: BIOMES[4],
+  water: VISUAL_BIOME.waterVoid,
+  habitation: VISUAL_BIOME.habitation,
+  disposal: VISUAL_BIOME.disposal,
+  power: VISUAL_BIOME.power,
   foundry: FOUNDRY,
 };
 
@@ -93,41 +112,8 @@ export interface BiomeBlend {
   accent: string;
 }
 
-/** Coordinate-cell sizing and transition width in signed world-Y tiles. */
-export const BIOME_CELL_BASE = 1500;
-export const BIOME_CELL_JITTER = 150;
-export const BIOME_BLEND_HALF_WIDTH = 200;
-
-const signedHash = (seed: number, cell: number, sign: number): number => {
-  let hash = (seed | 0) ^ Math.imul(cell | 0, 0x9e3779b1);
-  hash = Math.imul(hash ^ (sign < 0 ? 0x85ebca6b : 0xc2b2ae35), 0x27d4eb2d);
-  hash ^= hash >>> 15;
-  return Math.imul(hash, 0x85ebca6b) >>> 0;
-};
-
-const cellSign = (cell: number): number => cell < 0 ? -1 : 1;
-
-const EVEN_BIOME_POOL: readonly number[] = [0, 1];
-const ODD_BIOME_POOL: readonly number[] = [2, 3, 4];
-
-const biomeJitter = (seed: number, cell: number): number =>
-  (signedHash(seed, cell, cellSign(cell)) % (BIOME_CELL_JITTER * 2 + 1)) - BIOME_CELL_JITTER;
-
-export function biomeBoundary(seed: number, cell: number): number {
-  return cell * BIOME_CELL_BASE + biomeJitter(seed, cell);
-}
-
-export function biomeCellAt(seed: number, y: number): number {
-  let cell = Math.floor(y / BIOME_CELL_BASE);
-  while (y < biomeBoundary(seed, cell)) cell--;
-  while (y >= biomeBoundary(seed, cell + 1)) cell++;
-  return cell;
-}
-
 export function biomeForCell(seed: number, cell: number): Biome {
-  const pool = ((cell % 2) + 2) % 2 === 0 ? EVEN_BIOME_POOL : ODD_BIOME_POOL;
-  const index = pool[signedHash(seed, cell, cellSign(cell)) % pool.length];
-  return biomeFromIndex(index);
+  return VISUAL_BIOME[biomeIdForCell(seed, cell)] ?? VISUAL_BIOME.coldSteel;
 }
 
 /** Resolve a selected visual-biome index, falling back to cold steel. */

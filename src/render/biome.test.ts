@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   BIOMES,
   BIOME_BLEND_HALF_WIDTH,
+  BIOME_CELL_BASE,
+  BIOME_CELL_JITTER,
+  VISUAL_BIOME,
   biomeAt,
   biomeBlend,
   biomeBoundary,
@@ -13,6 +16,7 @@ import {
   SYSTEM_BIOME,
 } from './biome';
 import { relLum } from './steel';
+import { BIOME_IDS, biomeIdForCell } from '../world/biomeCells';
 
 describe('biomeForSystem', () => {
   it('returns the matching system biome', () => {
@@ -41,11 +45,17 @@ describe('biomeForSystem', () => {
 describe('visual biome cells', () => {
   const seed = 42;
 
-  it('keeps every sampled cell width between 1,200 and 1,800 tiles', () => {
+  it('re-exports the shared short cell constants', () => {
+    expect(BIOME_CELL_BASE).toBe(375);
+    expect(BIOME_CELL_JITTER).toBe(75);
+    expect(BIOME_BLEND_HALF_WIDTH).toBe(50);
+  });
+
+  it('keeps every sampled cell width between 300 and 450 tiles', () => {
     for (let cell = -50; cell <= 50; cell++) {
       const width = biomeBoundary(seed, cell + 1) - biomeBoundary(seed, cell);
-      expect(width).toBeGreaterThanOrEqual(1200);
-      expect(width).toBeLessThanOrEqual(1800);
+      expect(width).toBeGreaterThanOrEqual(300);
+      expect(width).toBeLessThanOrEqual(450);
     }
   });
 
@@ -54,6 +64,13 @@ describe('visual biome cells', () => {
     expect(biomeForCell(seed, -12)).toBe(biomeForCell(seed, -12));
     expect(biomeAt(seed, 5000, -3000)).toBe(biomeAt(seed, 5000, -3000));
     expect(biomeAt(seed, 123, -3000)).toBe(biomeForCell(seed, biomeCellAt(seed, -3000)));
+  });
+
+  it('maps shared biome IDs to visual biomes in their stable order', () => {
+    expect(BIOMES).toEqual(BIOME_IDS.map((id) => VISUAL_BIOME[id]));
+    for (let cell = -100; cell <= 100; cell++) {
+      expect(biomeForCell(seed, cell)).toBe(VISUAL_BIOME[biomeIdForCell(seed, cell)]);
+    }
   });
 
   it('selects different biomes for every pair of adjacent cells', () => {
