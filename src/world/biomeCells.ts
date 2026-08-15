@@ -20,15 +20,8 @@ const unsignedHash = (seed: number, cell: number): number =>
 const EVEN_BIOME_POOL: readonly BiomeId[] = ['coldSteel', 'habitation'];
 const ODD_BIOME_POOL: readonly BiomeId[] = ['disposal', 'waterVoid', 'power'];
 
-const anchorJitter = (seed: number, anchor: number): number =>
-  (unsignedHash(seed, anchor) % (BIOME_CELL_JITTER * 2 + 1)) - BIOME_CELL_JITTER;
-
-const biomeJitter = (seed: number, cell: number): number => {
-  const anchor = Math.floor(cell / 2);
-  const current = anchorJitter(seed, anchor);
-  if ((cell & 1) === 0) return current;
-  return Math.trunc((current + anchorJitter(seed, anchor + 1)) / 2);
-};
+const biomeJitter = (seed: number, cell: number): number =>
+  (unsignedHash(seed, cell) % (BIOME_CELL_JITTER + 1)) - Math.floor(BIOME_CELL_JITTER / 2);
 
 export function biomeBoundary(seed: number, cell: number): number {
   return cell * BIOME_CELL_BASE + biomeJitter(seed, cell);

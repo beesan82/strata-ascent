@@ -53,3 +53,21 @@ None.
 ### Commit
 
 - `fix: normalize biome jitter range` (this commit)
+
+## Fix Round 2
+
+### Root cause and correction
+
+- The paired-anchor interpolation in Fix Round 1 used `floor(cell / 2)` and a second neighboring hash input, violating the required per-cell signed-hash boundary contract.
+- `biomeJitter` now maps only `unsignedHash(seed, cell)` to an integral, symmetric subset `[-37, +38]` of the allowed `[-75, +75]` interval. This keeps each direct, independent boundary offset within the required bounds while ensuring every adjacent boundary gap remains 300–450 tiles.
+- Added fixed observable boundary fixtures for signed negative and non-negative cells. They fail under the former paired-anchor algorithm and prove that each boundary follows its own signed hash mapping.
+
+### Verification
+
+- `npm test -- src/world/biomeCells.test.ts src/render/biome.test.ts src/render/background.test.ts src/render/chunkbake.test.ts src/render/renderer.test.ts` — passed: 5 files, 34 tests.
+- `npm test` — passed: 35 files, 287 tests.
+- `npm run build` — passed: `tsc` and Vite production build.
+
+### Commit
+
+- `fix: restore direct biome hash mapping` (this commit)

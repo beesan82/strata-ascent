@@ -44,6 +44,17 @@ describe('biome cells', () => {
     expect(Math.max(...jitters)).toBeGreaterThan(0);
   });
 
+  it('derives each boundary from that cell\'s direct signed-hash fixture', () => {
+    expect([
+      biomeBoundary(42, -2),
+      biomeBoundary(42, -1),
+      biomeBoundary(42, 0),
+      biomeBoundary(42, 1),
+      biomeBoundary(42, 2),
+      biomeBoundary(42, 3),
+    ]).toEqual([-715, -348, 2, 409, 744, 1088]);
+  });
+
   it('is deterministic, uses all supported IDs, and never repeats across adjacent cells', () => {
     const selectedIds = new Set<typeof BIOME_IDS[number]>();
     for (const seed of seeds) {
