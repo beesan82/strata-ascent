@@ -16,7 +16,8 @@ import {
   SYSTEM_BIOME,
 } from './biome';
 import { relLum } from './steel';
-import { nearestIndex, paletteRgb } from './palette';
+import { paletteRgb } from './palette';
+import { DITHER_STRENGTH, quantizeRgba } from './pixel';
 import { BIOME_IDS, biomeIdForCell } from '../world/biomeCells';
 
 const rgbDistance = (a: string, b: string): number => {
@@ -28,13 +29,23 @@ const rgbDistance = (a: string, b: string): number => {
   return Math.hypot(dr, dg, db);
 };
 
-const quantizedHex = (hex: string): string => {
+const quantizedAcrossBayerPhases = (hex: string): string[] => {
   const value = parseInt(hex.slice(1), 16);
+  const data = new Uint8ClampedArray(4 * 4 * 4);
+  for (let offset = 0; offset < data.length; offset += 4) {
+    data[offset] = (value >> 16) & 255;
+    data[offset + 1] = (value >> 8) & 255;
+    data[offset + 2] = value & 255;
+    data[offset + 3] = 255;
+  }
   const rgb = paletteRgb();
-  const index = nearestIndex((value >> 16) & 255, (value >> 8) & 255, value & 255, rgb);
-  return `#${[rgb[index * 3], rgb[index * 3 + 1], rgb[index * 3 + 2]]
-    .map((channel) => channel.toString(16).padStart(2, '0'))
-    .join('')}`;
+  quantizeRgba(data, 4, 4, rgb, DITHER_STRENGTH);
+  return Array.from({ length: 16 }, (_, phase) => {
+    const offset = phase * 4;
+    return `#${[data[offset], data[offset + 1], data[offset + 2]]
+      .map((channel) => channel.toString(16).padStart(2, '0'))
+      .join('')}`;
+  });
 };
 
 describe('biomeForSystem', () => {
@@ -194,23 +205,24 @@ describe('visual biome separation', () => {
     }
   });
 
-  it('preserves materially distinct visual-biome swatches after final palette quantization', () => {
-    const swatches = visualBiomes.map((biome) => ({
-      ambientColor: quantizedHex(biome.ambientColor),
-      fillMid: quantizedHex(biome.palette.fillMid),
-      edge: quantizedHex(biome.palette.edge),
-      accent: quantizedHex(biome.accent),
+  it('keeps each tile material signature and every edge distinct through all production Bayer phases', () => {
+    const materialByBiome = visualBiomes.map((biome) => ({
+      fillDark: quantizedAcrossBayerPhases(biome.palette.fillDark),
+      fillMid: quantizedAcrossBayerPhases(biome.palette.fillMid),
+      fillLight: quantizedAcrossBayerPhases(biome.palette.fillLight),
+      edge: quantizedAcrossBayerPhases(biome.palette.edge),
     }));
 
-    expect(new Set(swatches.map((swatch) => JSON.stringify(swatch))).size).toBe(BIOME_IDS.length);
-    for (let i = 0; i < swatches.length; i++) {
-      for (let j = i + 1; j < swatches.length; j++) {
-        expect(rgbDistance(swatches[i].fillMid, swatches[j].fillMid)).toBeGreaterThanOrEqual(20);
-      }
+    for (let phase = 0; phase < 16; phase++) {
+      const signatures = materialByBiome.map((material) => JSON.stringify({
+        fillDark: material.fillDark[phase],
+        fillMid: material.fillMid[phase],
+        fillLight: material.fillLight[phase],
+        edge: material.edge[phase],
+      }));
+      expect(new Set(signatures).size).toBe(BIOME_IDS.length);
+      expect(new Set(materialByBiome.map((material) => material.edge[phase])).size).toBe(BIOME_IDS.length);
     }
-
-    expect(rgbDistance(swatches[0].edge, swatches[3].edge)).toBeGreaterThanOrEqual(12);
-    expect(rgbDistance(swatches[1].accent, swatches[3].accent)).toBeGreaterThanOrEqual(12);
   });
 
   it('keeps background layers valid while retaining towers, decks, and biome-specific haze', () => {

@@ -60,12 +60,12 @@ export const VISUAL_BIOME: Record<BiomeId, Biome> = {
   },
   habitation: {
     name: '居住区跡', ambientColor: '#0c302a', ambientLevel: 0.56,
-    palette: steelPalette('#3f9b83', 0.23), accent: '#3c755f',
+    palette: { ...steelPalette('#3f9b83', 0.23), edge: '#3c755f' }, accent: '#3c755f',
     bgLayers: bg('#2eae79', [[0.18, 0.78, 'tower'], [0.35, 0.68, 'deck'], [0.5, 0.38, 'haze']], 0.22),
   },
   disposal: {
     name: '廃棄物層', ambientColor: '#341c0d', ambientLevel: 0.36,
-    palette: steelPalette('#a26028', 0.22), accent: '#d38a42',
+    palette: { ...steelPalette('#a26028', 0.22), edge: '#9a6d32' }, accent: '#d38a42',
     bgLayers: bg('#b16628', [[0.24, 0.33, 'tower'], [0.5, 0.72, 'deck']], 0.22),
   },
   waterVoid: {
