@@ -2,19 +2,34 @@ import { nearestIndex } from './palette';
 import { bayerOffset } from './dither';
 import { STEEL } from './steel';
 
-/** 量子化キャッシュの大きさ(2^16)。直接写像なので衝突時は上書きするだけ。 */
+/** 量子化キャッシュの大きさ(2^16)。隣り合う2枠を1組にした2-way(組の中は簡易LRU)。 */
 const QUANT_CACHE_BITS = 16;
-const QUANT_CACHE_MASK = (1 << QUANT_CACHE_BITS) - 1;
+const QUANT_CACHE_SET_MASK = ((1 << QUANT_CACHE_BITS) - 1) & ~1;
 
 /**
- * (Bayer位置0..15, r,g,b) → パレット添字 の直接写像キャッシュ。
+ * キー → 組の先頭枠。キー上位の Bayer 位置ビットまでよく混ぜる(murmur3 の fmix32)。
+ * 単純な乗算ハッシュでは Bayer 位置だけ違う同色のキーが同じ枠に集まり、毎フレーム数千回の
+ * 追い出し(=総当たり再計算)が起きていた。
+ */
+function quantSlot(key: number): number {
+  let h = key ^ (key >>> 16);
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h & QUANT_CACHE_SET_MASK;
+}
+
+/**
+ * (Bayer位置0..15, r,g,b) → 量子化後の色 の直接写像キャッシュ。
  * ディザ量は Bayer 位置ごとに16通りしかないので、このキーで nearestIndex の結果は一意に決まる
  * (総当たりと完全一致)。画面は同色が大半を占めるため、毎フレームの総当たり32色比較を避けられる。
+ * 値は書き戻す色を画素と同じ32bit配置(リトルエンディアンで r|g<<8|b<<16、アルファ0)で持つ。
  */
 interface QuantCache {
   strength: number;
   keys: Int32Array;
-  vals: Uint8Array;
+  vals: Uint32Array;
 }
 const quantCaches = new WeakMap<Uint8Array, QuantCache>();
 
@@ -24,7 +39,7 @@ function quantCacheFor(palRgb: Uint8Array, strength: number): QuantCache {
     cache = {
       strength,
       keys: new Int32Array(1 << QUANT_CACHE_BITS).fill(-1),
-      vals: new Uint8Array(1 << QUANT_CACHE_BITS),
+      vals: new Uint32Array(1 << QUANT_CACHE_BITS),
     };
     quantCaches.set(palRgb, cache);
   }
@@ -36,6 +51,7 @@ function quantCacheFor(palRgb: Uint8Array, strength: number): QuantCache {
  * strength は各チャンネルに足すディザ量(px値スケール。0で無効)。palRgb は paletteRgb()。
  * アルファは保持。パレットは [r,g,b]×N の Uint8Array。
  * 結果は画素ごとの nearestIndex 総当たりと完全一致する(キャッシュは速度のためだけ)。
+ * 画素は32bit単位で読み書きする(リトルエンディアン前提。ブラウザ/Nodeの実行環境はすべて該当)。
  */
 export function quantizeRgba(
   data: Uint8ClampedArray,
@@ -47,28 +63,45 @@ export function quantizeRgba(
   const { keys, vals } = quantCacheFor(palRgb, strength);
   const offsets = new Float64Array(16);
   for (let i = 0; i < 16; i++) offsets[i] = bayerOffset(i & 3, i >> 2) * strength;
+  const px = new Uint32Array(data.buffer, data.byteOffset, w * h);
+  const src4 = new Uint32Array(4);
+  const out4 = new Uint32Array(4);
   for (let y = 0; y < h; y++) {
     const row = (y & 3) << 2;
+    const base = y * w;
     for (let x = 0; x < w; x++) {
-      const o = (y * w + x) * 4;
-      const r = data[o];
-      const g = data[o + 1];
-      const b = data[o + 2];
+      const p = px[base + x];
+      // 同じBayer位置になる4画素左と同色なら結果も同じ(平坦な面の大半はここで済み、表を引かない)
+      if (x >= 4 && (p & 0xffffff) === (src4[x & 3] & 0xffffff)) {
+        px[base + x] = (p & 0xff000000) | out4[x & 3];
+        continue;
+      }
+      src4[x & 3] = p;
       const bi = row | (x & 3);
-      const key = (bi << 24) | (r << 16) | (g << 8) | b;
-      const slot = (Math.imul(key, 0x9e3779b1) >>> (32 - QUANT_CACHE_BITS)) & QUANT_CACHE_MASK;
-      let idx: number;
+      const key = (bi << 24) | (p & 0xffffff);
+      const slot = quantSlot(key);
+      let out: number;
       if (keys[slot] === key) {
-        idx = vals[slot];
+        out = vals[slot];
+      } else if (keys[slot + 1] === key) {
+        // 2番目で当たったら先頭と入れ替える(よく使う方を先頭に)
+        out = vals[slot + 1];
+        keys[slot + 1] = keys[slot];
+        vals[slot + 1] = vals[slot];
+        keys[slot] = key;
+        vals[slot] = out;
       } else {
         const d = offsets[bi];
-        idx = nearestIndex(r + d, g + d, b + d, palRgb);
+        const idx = nearestIndex((p & 255) + d, ((p >>> 8) & 255) + d, ((p >>> 16) & 255) + d, palRgb);
+        out = palRgb[idx * 3] | (palRgb[idx * 3 + 1] << 8) | (palRgb[idx * 3 + 2] << 16);
+        // 先頭を2番目へ押し出して先頭に入れる
+        keys[slot + 1] = keys[slot];
+        vals[slot + 1] = vals[slot];
         keys[slot] = key;
-        vals[slot] = idx;
+        vals[slot] = out;
       }
-      data[o] = palRgb[idx * 3];
-      data[o + 1] = palRgb[idx * 3 + 1];
-      data[o + 2] = palRgb[idx * 3 + 2];
+      out4[x & 3] = out;
+      px[base + x] = (p & 0xff000000) | out;
     }
   }
 }
