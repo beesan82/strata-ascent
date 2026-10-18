@@ -407,7 +407,7 @@ export class ChunkBaker {
             megaFacilityAt(this.seed, wx, wy) === TILE.AIR ||
             facilityTileAt(this.seed, wx, wy) === TILE.AIR;
           if (!inFacility) continue;
-          if (around(tx, ty + 1) !== TILE.SOLID && around(tx, ty + 2) !== TILE.SOLID) continue;
+          if (!isSolid(around(tx, ty + 1)) && !isSolid(around(tx, ty + 2))) continue;
           const y = (ty + 0.5) * P;
           ctx.beginPath();
           ctx.moveTo(tx * P, y);

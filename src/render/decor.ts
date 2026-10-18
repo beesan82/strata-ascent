@@ -261,7 +261,7 @@ function segmentOps(
       const x0 = s * 16;
       let ok = true;
       for (let i = 0; i < 16 && ok; i++) {
-        ok = t(x0 + i, wy) === TILE.SOLID && t(x0 + i, wy - 1) !== TILE.SOLID;
+        ok = t(x0 + i, wy) === TILE.SOLID && !isSolid(t(x0 + i, wy - 1));
       }
       if (!ok) continue;
       const lx0 = x0 - bx;
@@ -273,7 +273,7 @@ function segmentOps(
       }
       // 薄い床(全16タイルの直下が非SOLID)= 歩廊: H鋼+ジョイスト+落ち影+錆筋+ガセット
       let thin = true;
-      for (let i = 0; i < 16 && thin; i++) thin = t(x0 + i, wy + 1) !== TILE.SOLID;
+      for (let i = 0; i < 16 && thin; i++) thin = !isSolid(t(x0 + i, wy + 1));
       if (thin) {
         const yb = ly + 1; // 床タイル下端
         ops.push({ kind: 'rect', x: lx0, y: yb, w: 16, h: 0.38, color: PALETTE.shadow, alpha: 0.8 }); // 落ち影
@@ -295,10 +295,10 @@ function segmentOps(
         }
         // ガセット: セグメント端の外側が壁(当該行と直下がSOLID)なら三角ブレースを壁へ噛ませる
         for (const [ex, dir] of [[x0 - 1, 1], [x0 + 16, -1]] as const) {
-          if (t(ex, wy) !== TILE.SOLID || t(ex, wy + 1) !== TILE.SOLID) continue;
+          if (!isSolid(t(ex, wy)) || !isSolid(t(ex, wy + 1))) continue;
           // 三角が占める3列の2タイル下が塞がっていたら描かない(下の歩行面の上端リムを覆わない)
           let clear = true;
-          for (let i = 0; i < 3 && clear; i++) clear = t(ex + dir * (1 + i), wy + 2) !== TILE.SOLID;
+          for (let i = 0; i < 3 && clear; i++) clear = !isSolid(t(ex + dir * (1 + i), wy + 2));
           if (!clear) continue;
           const gx = ex - bx + (dir === 1 ? 1 : 0);
           const tri = [gx, yb, gx + dir * 3, yb, gx, yb + 2];
@@ -359,7 +359,7 @@ function segmentOps(
       const x0 = s * 8;
       let ok = true;
       for (let i = 0; i < 8 && ok; i++) {
-        ok = t(x0 + i, wy) === TILE.SOLID && t(x0 + i, wy + 1) !== TILE.SOLID;
+        ok = t(x0 + i, wy) === TILE.SOLID && !isSolid(t(x0 + i, wy + 1));
       }
       if (!ok) continue;
       const lx0 = x0 - bx;
@@ -380,7 +380,7 @@ function segmentOps(
         // 吊り下げ先2.2タイルまで空気が続く場合のみ(狭い通路には出さない)
         let clear = true;
         for (let i = 0; i < 8 && clear; i++) {
-          clear = t(x0 + i, wy + 2) !== TILE.SOLID && t(x0 + i, wy + 3) !== TILE.SOLID;
+          clear = !isSolid(t(x0 + i, wy + 2)) && !isSolid(t(x0 + i, wy + 3));
         }
         if (clear) {
           const ty = ly + 1 + 2.2;
@@ -415,7 +415,7 @@ function segmentOps(
       for (const dir of [-1, 1] as const) {
         let ok = true;
         for (let i = 0; i < 4 && ok; i++) {
-          ok = t(wx, y0 + i) === TILE.SOLID && t(wx + dir, y0 + i) !== TILE.SOLID;
+          ok = t(wx, y0 + i) === TILE.SOLID && !isSolid(t(wx + dir, y0 + i));
         }
         if (!ok) continue;
         const face = dir === -1 ? lx + 0.08 : lx + 0.92;
@@ -495,7 +495,7 @@ function segmentOps(
       let ok = true;
       for (let iy = -1; iy <= 7 && ok; iy++)
         for (let ix = -1; ix <= 8 && ok; ix++)
-          ok = t(x0 + ix, y0 + iy) === TILE.SOLID;
+          ok = isSolid(t(x0 + ix, y0 + iy));
       if (!ok) continue;
       const lx0 = x0 - bx;
       const ly0 = y0 - by;
