@@ -24,6 +24,42 @@ export type DecorOp =
   | { kind: 'rect'; x: number; y: number; w: number; h: number; color: string; alpha?: number; surface?: boolean }
   | { kind: 'grad'; x: number; y: number; w: number; h: number; dir: 'h' | 'v'; stops: ReadonlyArray<readonly [number, string]>; alpha?: number; surface?: boolean };
 
+/**
+ * 装飾命令が描きうる範囲(チャンクローカルのタイル単位)。保守的に広めに取る:
+ * 線は太さ(最小 minPx)の半分に加えて角の尖り(miter上限10≒太さ×5)まで、塗りはAAの1px分を足す。
+ * 部分焼き込みで、描き直す範囲に掛からない命令を省くために使う。
+ */
+export function decorOpBounds(op: DecorOp, minPx: number): { x0: number; y0: number; x1: number; y1: number } {
+  const aa = minPx;
+  const strokePad = (w: number) => Math.max(w, minPx) * 5 + aa;
+  switch (op.kind) {
+    case 'line': {
+      const p = strokePad(op.w);
+      return { x0: Math.min(op.x1, op.x2) - p, y0: Math.min(op.y1, op.y2) - p, x1: Math.max(op.x1, op.x2) + p, y1: Math.max(op.y1, op.y2) + p };
+    }
+    case 'dot': {
+      const r = Math.max(op.r, minPx) + aa;
+      return { x0: op.x - r, y0: op.y - r, x1: op.x + r, y1: op.y + r };
+    }
+    case 'poly': {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let i = 0; i < op.pts.length; i += 2) {
+        x0 = Math.min(x0, op.pts[i]); x1 = Math.max(x1, op.pts[i]);
+        y0 = Math.min(y0, op.pts[i + 1]); y1 = Math.max(y1, op.pts[i + 1]);
+      }
+      const p = op.fill ? aa : strokePad(op.w);
+      return { x0: x0 - p, y0: y0 - p, x1: x1 + p, y1: y1 + p };
+    }
+    case 'hatch':
+    case 'rect':
+    case 'grad':
+      return {
+        x0: Math.min(op.x, op.x + op.w) - aa, y0: Math.min(op.y, op.y + op.h) - aa,
+        x1: Math.max(op.x, op.x + op.w) + aa, y1: Math.max(op.y, op.y + op.h) + aa,
+      };
+  }
+}
+
 /** 装飾の色パレット(realismモックの鋼ランプSTEELから導出。暖色は錆のみリテラル) */
 export const PALETTE = {
   edgeTop: STEEL.railTop,
@@ -70,8 +106,16 @@ function mod(n: number, m: number): number {
   return ((n % m) + m) % m;
 }
 
-/** チャンク(cx, cy)の装飾を計算する純粋関数。同じ入力なら常に同じ出力 */
-export function decorateChunk(seed: number, cx: number, cy: number): DecorOp[] {
+/** decorateChunk が参照するチャンク周囲の幅(タイル) */
+export const DECOR_MARGIN = 17;
+
+/**
+ * チャンク(cx, cy)の装飾を計算する純粋関数。同じ入力なら常に同じ出力。
+ * pristine を渡すと、元地形(破壊前)を tileAt で引き直す代わりにそれを使う。並びは
+ * (CHUNK_SIZE+2*DECOR_MARGIN)² で、チャンク左上から (-DECOR_MARGIN,-DECOR_MARGIN) ずらした位置が先頭。
+ * 値は tileAt(seed, ...) と同じでなければならない(ChunkStore.pristineAround)。
+ */
+export function decorateChunk(seed: number, cx: number, cy: number, pristine?: Uint8Array): DecorOp[] {
   const ops: DecorOp[] = [];
   const bx = cx * CHUNK_SIZE;
   const by = cy * CHUNK_SIZE;
@@ -80,13 +124,18 @@ export function decorateChunk(seed: number, cx: number, cy: number): DecorOp[] {
   // 以降のタイル参照(タイルパス・セグメントパスの両方)はすべてこのバッファから読み、
   // tileAt呼び出しを 5*64*64 回から 98*98 回へ削減する。MARGIN=17 は全セグメント走査
   // (床16/天井8幅の水平走査 + 隣接1タイル確認、壁4幅の垂直走査)を範囲内に収める。
-  const MARGIN = 17;
+  const MARGIN = DECOR_MARGIN;
   const N = CHUNK_SIZE + 2 * MARGIN; // 98
-  const buf = new Int8Array(N * N);
-  for (let ly = -MARGIN; ly < CHUNK_SIZE + MARGIN; ly++) {
-    const rowBase = (ly + MARGIN) * N;
-    for (let lx = -MARGIN; lx < CHUNK_SIZE + MARGIN; lx++) {
-      buf[rowBase + (lx + MARGIN)] = tileAt(seed, bx + lx, by + ly);
+  let buf: Uint8Array | Int8Array;
+  if (pristine) {
+    buf = pristine;
+  } else {
+    buf = new Int8Array(N * N);
+    for (let ly = -MARGIN; ly < CHUNK_SIZE + MARGIN; ly++) {
+      const rowBase = (ly + MARGIN) * N;
+      for (let lx = -MARGIN; lx < CHUNK_SIZE + MARGIN; lx++) {
+        buf[rowBase + (lx + MARGIN)] = tileAt(seed, bx + lx, by + ly);
+      }
     }
   }
   // ローカル座標でバッファを読む(範囲外は AIR 扱い)
@@ -471,6 +520,40 @@ function segmentOps(
           stops: [[0, PALETTE.rust], [1, PALETTE.rust0]], alpha: 0.45,
         });
       }
+    }
+  }
+}
+
+/**
+ * 焼き込みで描く装飾(非surface)のチャンク単位メモ。decorateChunk は元地形だけを見る純関数で
+ * 破壊の影響を受けないため、ボーリング後の再焼き込みで同じ計算をやり直さずに済む。
+ */
+export class DecorCache {
+  private ops = new Map<string, DecorOp[]>();
+
+  constructor(private seed: number) {}
+
+  /** pristine は decorateChunk と同じ(省略時は tileAt で引き直す) */
+  get(cx: number, cy: number, pristine?: () => Uint8Array): DecorOp[] {
+    const key = `${cx},${cy}`;
+    let ops = this.ops.get(key);
+    if (!ops) {
+      ops = decorateChunk(this.seed, cx, cy, pristine?.()).filter((op) => !op.surface);
+      this.ops.set(key, ops);
+    }
+    return ops;
+  }
+
+  /** チャンクの装飾が計算済みか */
+  has(cx: number, cy: number): boolean {
+    return this.ops.has(`${cx},${cy}`);
+  }
+
+  /** ChunkBaker.evictFarFrom と同じ規則で破棄する */
+  evictFarFrom(cx: number, cy: number, radius: number): void {
+    for (const key of this.ops.keys()) {
+      const [kx, ky] = key.split(',').map(Number);
+      if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > radius) this.ops.delete(key);
     }
   }
 }

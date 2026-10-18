@@ -19,7 +19,7 @@ export function generateAtlas(pal: TilePalette): Atlas {
   const canvas = document.createElement('canvas');
   canvas.width = TILE_PX * BLOB_COUNT;
   canvas.height = TILE_PX;
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
   for (let id = 0; id < BLOB_COUNT; id++) {
     drawTile(ctx, id * TILE_PX, TILE_PX, pal, edgesForBlobId(id));
   }

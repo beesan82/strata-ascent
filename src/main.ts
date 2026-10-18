@@ -2,7 +2,7 @@ import { Camera } from './core/camera';
 import { Input } from './core/input';
 import { Player } from './entities/player';
 import { Graviton } from './entities/graviton';
-import { Renderer } from './render/renderer';
+import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
 import { ChunkStore } from './world/chunks';
 import { Destruction } from './world/destruction';
 import { regionAt, type System } from './world/hierarchy';
@@ -17,9 +17,6 @@ const EVICT_INTERVAL_FRAMES = 120;
 const EVICT_RADIUS = 4;
 // 開放度サンプリング間隔(フレーム)。6=約100ms。tileAt多数のため毎フレームは避ける。
 const OPENNESS_SAMPLE_INTERVAL_FRAMES = 6;
-// 焼き込みキャッシュは1枚1024×1024(~4MB)と重いので、衝突ストアより狭い半径で破棄する。
-// 半径2=5チャンク幅=320タイル > ビューポート44タイルなので視界は常にカバーされる。
-const BAKE_EVICT_RADIUS = 2;
 
 // ?seed=123 で世界を変えられる(0も有効な値として許可。未指定/非数値時のみデフォルト)
 const params = new URLSearchParams(location.search);
@@ -63,15 +60,19 @@ const BORE_RADIUS = 3;   // タイル(半径)
 const BEAM_TTL = 0.18;   // 秒: ビーム残光の寿命(切り札の一撃として一瞬だが読める長さ)
 let lastBeam: { angle: number; ttl: number } | null = null;
 
-/** チャージ完了→離した瞬間: エイム方向へ地形を貫通破壊し、両キャッシュを無効化する */
+/** チャージ完了→離した瞬間: エイム方向へ地形を貫通破壊し、タイルへ反映して焼き込みを無効化する */
 function fire(): void {
   const aim = renderer.aimAngle; // ライトコーンと同一の角度(=ビーム=破壊方向を保証)
-  const affected = destruction.bore(player.centerX, player.centerY, aim, BORE_LENGTH, BORE_RADIUS, tiles);
+  // 未生成チャンクは生成せず破壊マスクだけ記録する(発射フレームでの同期生成を避ける)
+  const affected = destruction.bore(
+    player.centerX, player.centerY, aim, BORE_LENGTH, BORE_RADIUS,
+    (tx, ty) => store.peekTileAt(tx, ty),
+  );
   for (const key of affected) {
     const [cx, cy] = key.split(',').map(Number);
-    store.invalidate(cx, cy);   // 生成チャンクを破棄→再生成で破壊反映
-    renderer.invalidate(cx, cy); // 焼き込み画像を破棄→クレーターが見えるよう再焼き込み
+    store.applyDestruction(cx, cy); // 生成済みチャンクへその場で反映(再生成しない)
   }
+  renderer.invalidateBored(affected, store); // 焼き込みを再焼き込み待ちに(境界際の隣チャンクも)
   lastBeam = { angle: aim, ttl: BEAM_TTL };
 }
 
@@ -110,7 +111,7 @@ function update(dt: number): void {
     const pcx = Math.floor(player.centerX / CHUNK_SIZE);
     const pcy = Math.floor(player.centerY / CHUNK_SIZE);
     store.evictFarFrom(pcx, pcy, EVICT_RADIUS);
-    renderer.evictFarFrom(pcx, pcy, BAKE_EVICT_RADIUS);
+    renderer.evictFarFrom(pcx, pcy, BAKE_KEEP_RADIUS);
   }
 }
 
