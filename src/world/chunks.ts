@@ -39,6 +39,11 @@ export class ChunkStore {
     if (chunk) this.destruction?.applyTo(chunk, cx, cy);
   }
 
+  /** チャンクの破壊マスク(部分再焼き込みの範囲決定用)。破壊がなければ undefined */
+  destroyedMask(cx: number, cy: number): Uint8Array | undefined {
+    return this.destruction?.maskOf(cx, cy);
+  }
+
   /** 生成済みチャンクならタイルを返し、未生成なら生成せず undefined を返す */
   peekTileAt(x: number, y: number): Tile | undefined {
     const cx = Math.floor(x / CHUNK_SIZE);

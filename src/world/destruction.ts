@@ -21,6 +21,11 @@ export class Destruction {
     return mask[(y - cy * CHUNK_SIZE) * CHUNK_SIZE + (x - cx * CHUNK_SIZE)] === 1;
   }
 
+  /** チャンク(cx,cy)の破壊マスク(CHUNK_SIZE², 1=破壊済み)。破壊がなければ undefined。読み取り専用として扱う */
+  maskOf(cx: number, cy: number): Uint8Array | undefined {
+    return this.masks.get(`${cx},${cy}`);
+  }
+
   /** チャンク(cx,cy)の生成直後のタイル配列へ破壊を反映する(in-place)。破壊がなければ何もしない */
   applyTo(chunk: Uint8Array, cx: number, cy: number): void {
     const mask = this.masks.get(`${cx},${cy}`);

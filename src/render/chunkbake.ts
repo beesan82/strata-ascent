@@ -10,6 +10,7 @@ import { megaFacilityAt } from '../world/megafacility';
 import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
 import { DecorCache, type DecorOp } from './decor';
+import { dirtyBounds, type CellRect } from './dirtyBounds';
 import { traceAt, type Trace } from './traces';
 import { STEEL } from './steel';
 
@@ -18,6 +19,11 @@ export const BAKE_PPT = 16;
 
 /** Bounds the atlas cache while retaining visible progress through the 400-tile blend band. */
 export const CHUNK_VISUAL_BLEND_STEPS = 16;
+/**
+ * 部分再焼き込みで破壊タイルから広げる幅(タイル)。破壊の影響は隣接タイルのオートタイル/
+ * 陰影、1〜2タイル上の痕跡・水面判定と、それらのはみ出し(灯の光暈≈0.5タイル)に収まる。
+ */
+const REBAKE_DILATE = 2;
 
 export interface ChunkVisual extends BiomeBlend {
   cacheKey: string;
@@ -87,14 +93,23 @@ export class ChunkBaker {
     return this.cache.has(key) && !this.stale.has(key);
   }
 
-  /** 先読み/再焼き込み: 指定チャンクを(再)焼き込みしてキャッシュする */
+  /**
+   * 先読み/再焼き込み: 指定チャンクを(再)焼き込みしてキャッシュする。
+   * 無効化済みの画像があれば、破壊タイルの外接矩形だけをクリップして同じキャンバスへ描き直す
+   * (新規キャンバス全面のラスタ化を避ける)。クリップ内は全面焼き込みとほぼ同じ画素になる
+   * (クリップ端でGPUラスタの丸めによる数/255程度の差が出ることがある)。
+   */
   refresh(cx: number, cy: number, store: ChunkStore): void {
     const key = `${cx},${cy}`;
-    this.cache.set(key, this.bake(cx, cy, store));
+    const old = this.cache.get(key);
+    const mask = store.destroyedMask(cx, cy);
+    const clip = old && this.stale.has(key) && mask ? dirtyBounds(mask, CHUNK_SIZE, REBAKE_DILATE) : null;
+    if (old && clip) this.bake(cx, cy, store, old, clip);
+    else this.cache.set(key, this.bake(cx, cy, store));
     this.stale.delete(key);
   }
 
-  /** このフレームで get が同期焼き込みをしたか。読むとリセットされる */
+  /** このフレームで重い仕事(get の同期焼き込み・無効化)があったか。読むとリセットされる */
   takeBakedThisFrame(): boolean {
     const v = this.bakedThisFrame;
     this.bakedThisFrame = false;
@@ -108,6 +123,8 @@ export class ChunkBaker {
   invalidate(cx: number, cy: number): void {
     const key = `${cx},${cy}`;
     if (this.cache.has(key)) this.stale.add(key);
+    // 発射フレームは破壊計算を済ませた後なので、再焼き込みは次フレームから始める
+    this.bakedThisFrame = true;
   }
 
   /** ChunkStoreのevictFarFromと同じ規則でキャッシュを破棄する(main側で対で呼ぶ) */
@@ -122,12 +139,28 @@ export class ChunkBaker {
     this.decor.evictFarFrom(cx, cy, radius);
   }
 
-  private bake(cx: number, cy: number, store: ChunkStore): HTMLCanvasElement {
+  /** target を渡すとそのキャンバスの clip 矩形(タイル単位)だけを消して描き直す */
+  private bake(
+    cx: number, cy: number, store: ChunkStore,
+    target?: HTMLCanvasElement, clip?: CellRect,
+  ): HTMLCanvasElement {
     const px = CHUNK_SIZE * BAKE_PPT;
-    const canvas = document.createElement('canvas');
-    canvas.width = px;
-    canvas.height = px;
+    const canvas = target ?? document.createElement('canvas');
+    if (!target) {
+      canvas.width = px;
+      canvas.height = px;
+    }
     const ctx = canvas.getContext('2d')!;
+    // 再利用時に前回の描画状態を持ち越さないよう、焼き込み全体を save/restore で囲む
+    ctx.save();
+    if (clip) {
+      ctx.beginPath();
+      ctx.rect(clip.x * BAKE_PPT, clip.y * BAKE_PPT, clip.w * BAKE_PPT, clip.h * BAKE_PPT);
+      ctx.clip();
+      // パスは save/restore の対象外。残すと以降の stroke/fill がクリップ矩形まで描いてしまう
+      ctx.beginPath();
+      ctx.clearRect(0, 0, px, px);
+    }
     // タイルは滑らかに陰影付けされているが、境界で隣接アトラスセルを拾わないよう
     // スムージングを無効化してエッジをこの解像度で明瞭に保つ。
     ctx.imageSmoothingEnabled = false;
@@ -291,6 +324,7 @@ export class ChunkBaker {
         }
       }
     }
+    ctx.restore();
     return canvas;
   }
 

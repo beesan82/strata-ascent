@@ -106,4 +106,14 @@ describe('ChunkStore(Destruction 注入)', () => {
     expect(store.has(cx + 50, cy + 50)).toBe(false);
   });
 
+  it('destroyedMask は注入された Destruction のチャンクマスクを返す', () => {
+    const d = new Destruction();
+    const { x, y } = findSolid(42);
+    d.bore(x, y, 0, 0, 0, (ax, ay) => tileAt(42, ax, ay));
+    const store = new ChunkStore(42, d);
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cy = Math.floor(y / CHUNK_SIZE);
+    expect(store.destroyedMask(cx, cy)).toBe(d.maskOf(cx, cy));
+    expect(new ChunkStore(42).destroyedMask(cx, cy)).toBeUndefined();
+  });
 });

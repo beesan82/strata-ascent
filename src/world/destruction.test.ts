@@ -90,4 +90,12 @@ describe('Destruction', () => {
     expect(d.isDestroyed(10, 5)).toBe(true);
   });
 
+  it('maskOf はチャンクの破壊マスク(1=破壊)を返し、破壊のないチャンクは undefined', () => {
+    const d = new Destruction();
+    d.bore(0, 5, 0, 20, 0, testTiles);
+    const mask = d.maskOf(0, 0)!;
+    expect(mask[5 * CHUNK_SIZE + 7]).toBe(1);
+    expect(mask[4 * CHUNK_SIZE + 7]).toBe(0);
+    expect(d.maskOf(3, 3)).toBeUndefined();
+  });
 });
