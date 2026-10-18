@@ -33,6 +33,21 @@ export class ChunkStore {
     this.chunks.delete(`${cx},${cy}`);
   }
 
+  /** 生成済みチャンクのキャッシュへ破壊を反映する(再生成しない)。未生成なら何もしない(生成時に反映される) */
+  applyDestruction(cx: number, cy: number): void {
+    const chunk = this.chunks.get(`${cx},${cy}`);
+    if (chunk) this.destruction?.applyTo(chunk, cx, cy);
+  }
+
+  /** 生成済みチャンクならタイルを返し、未生成なら生成せず undefined を返す */
+  peekTileAt(x: number, y: number): Tile | undefined {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cy = Math.floor(y / CHUNK_SIZE);
+    const chunk = this.chunks.get(`${cx},${cy}`);
+    if (!chunk) return undefined;
+    return chunk[(y - cy * CHUNK_SIZE) * CHUNK_SIZE + (x - cx * CHUNK_SIZE)] as Tile;
+  }
+
   /** ワールドタイル座標でタイルを引く(必要なチャンクは自動生成) */
   tileAt(x: number, y: number): Tile {
     const cx = Math.floor(x / CHUNK_SIZE);

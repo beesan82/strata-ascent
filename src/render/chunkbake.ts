@@ -98,7 +98,7 @@ export class ChunkBaker {
   }
 
   /**
-   * 指定チャンクの焼き込み画像を無効化する。ChunkStore.invalidateと対で呼ぶ。
+   * 指定チャンクの焼き込み画像を無効化する。ChunkStore.applyDestructionと対で呼ぶ。
    * 画像は再焼き込みまで古いものを表示し続け、発射フレームに焼き込みが集中するのを避ける。
    */
   invalidate(cx: number, cy: number): void {

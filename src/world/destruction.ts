@@ -31,9 +31,14 @@ export class Destruction {
   /**
    * (x0,y0) から angle 方向へ length タイル、太さ radius(半径)のビームで
    * 経路上の非AIRタイルを破壊集合へ追加する。tiles は現在のタイル取得関数。
+   * tiles が undefined を返す位置(未生成チャンク)は判定せずに記録する。生成時に applyTo で
+   * 反映され、元がAIRでもAIRのままなので見た目は変わらない。発射時の同期生成を避けるため。
    * 影響を受けたチャンク座標("cx,cy")の集合を返す(キャッシュ無効化用)。
    */
-  bore(x0: number, y0: number, angle: number, length: number, radius: number, tiles: (x: number, y: number) => Tile): Set<string> {
+  bore(
+    x0: number, y0: number, angle: number, length: number, radius: number,
+    tiles: (x: number, y: number) => Tile | undefined,
+  ): Set<string> {
     const chunks = new Set<string>();
     const dx = Math.cos(angle);
     const dy = Math.sin(angle);

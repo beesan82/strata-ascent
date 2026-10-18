@@ -27,6 +27,21 @@ describe('Destruction', () => {
     expect(d.isDestroyed(3, 8)).toBe(false); // 経路外
   });
 
+  it('bore はタイル不明(undefined=未生成チャンク)の位置を判定せず破壊集合へ入れる', () => {
+    const d = new Destruction();
+    // x>=64(チャンク1以降)は未生成扱い。生成せずに済ませ、生成時に applyTo で反映する
+    const partial = (x: number, y: number): Tile | undefined => (x >= CHUNK_SIZE ? undefined : testTiles(x, y));
+    const chunks = d.bore(0, 5, 0, 100, 1, partial);
+    expect(d.isDestroyed(3, 5)).toBe(true);
+    expect(d.isDestroyed(3, 6)).toBe(false); // 既知のAIRは従来どおり無視
+    expect(d.isDestroyed(80, 6)).toBe(true); // 未生成側は元がAIRでも記録(反映してもAIRのまま)
+    expect(chunks.has('1,0')).toBe(true);
+    const chunk = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE).fill(TILE.SOLID);
+    d.applyTo(chunk, 1, 0);
+    expect(chunk[6 * CHUNK_SIZE + (80 - CHUNK_SIZE)]).toBe(TILE.AIR);
+    expect(chunk[9 * CHUNK_SIZE + (80 - CHUNK_SIZE)]).toBe(TILE.SOLID);
+  });
+
   it('isDestroyed は破壊した座標で true、それ以外 false(決定論)', () => {
     const d = new Destruction();
     d.bore(0, 5, 0, 20, 0, testTiles); // radius0=中心線のみ
@@ -74,4 +89,5 @@ describe('Destruction', () => {
     expect(d.isDestroyed(10, 3)).toBe(true);
     expect(d.isDestroyed(10, 5)).toBe(true);
   });
+
 });

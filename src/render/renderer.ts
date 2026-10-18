@@ -119,7 +119,7 @@ export class Renderer {
     this.baker.evictFarFrom(cx, cy, radius);
   }
 
-  /** ChunkStore.invalidateと対で呼ぶ(ボーリングされたチャンクの焼き込み画像を破棄) */
+  /** ChunkStore.applyDestructionと対で呼ぶ(ボーリングされたチャンクの焼き込み画像を再焼き込み待ちにする) */
   invalidate(cx: number, cy: number): void {
     this.baker.invalidate(cx, cy);
   }

@@ -60,13 +60,17 @@ const BORE_RADIUS = 3;   // タイル(半径)
 const BEAM_TTL = 0.18;   // 秒: ビーム残光の寿命(切り札の一撃として一瞬だが読める長さ)
 let lastBeam: { angle: number; ttl: number } | null = null;
 
-/** チャージ完了→離した瞬間: エイム方向へ地形を貫通破壊し、両キャッシュを無効化する */
+/** チャージ完了→離した瞬間: エイム方向へ地形を貫通破壊し、タイルへ反映して焼き込みを無効化する */
 function fire(): void {
   const aim = renderer.aimAngle; // ライトコーンと同一の角度(=ビーム=破壊方向を保証)
-  const affected = destruction.bore(player.centerX, player.centerY, aim, BORE_LENGTH, BORE_RADIUS, tiles);
+  // 未生成チャンクは生成せず破壊マスクだけ記録する(発射フレームでの同期生成を避ける)
+  const affected = destruction.bore(
+    player.centerX, player.centerY, aim, BORE_LENGTH, BORE_RADIUS,
+    (tx, ty) => store.peekTileAt(tx, ty),
+  );
   for (const key of affected) {
     const [cx, cy] = key.split(',').map(Number);
-    store.invalidate(cx, cy);   // 生成チャンクを破棄→再生成で破壊反映
+    store.applyDestruction(cx, cy); // 生成済みチャンクへその場で反映(再生成しない)
     renderer.invalidate(cx, cy); // 焼き込み画像を破棄→クレーターが見えるよう再焼き込み
   }
   lastBeam = { angle: aim, ttl: BEAM_TTL };

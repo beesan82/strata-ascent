@@ -81,4 +81,29 @@ describe('ChunkStore(Destruction 注入)', () => {
     // 再取得しても破壊は Destruction 側に残るため AIR
     expect(store.tileAt(x, y)).toBe(TILE.AIR);
   });
+
+  it('peekTileAt は未生成チャンクを生成せず undefined を返し、生成済みならタイルを返す', () => {
+    const store = new ChunkStore(42);
+    const { x, y } = findSolid(42);
+    expect(store.peekTileAt(x, y)).toBeUndefined();
+    expect(store.size).toBe(0);
+    store.tileAt(x, y);
+    expect(store.peekTileAt(x, y)).toBe(TILE.SOLID);
+  });
+
+  it('applyDestruction は生成済みチャンクへ再生成なしで破壊を反映する(未生成なら何もしない)', () => {
+    const d = new Destruction();
+    const store = new ChunkStore(42, d);
+    const { x, y } = findSolid(42);
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cy = Math.floor(y / CHUNK_SIZE);
+    const before = store.getChunk(cx, cy);
+    d.bore(x, y, 0, 0, 0, (ax, ay) => store.peekTileAt(ax, ay));
+    store.applyDestruction(cx, cy);
+    expect(store.getChunk(cx, cy)).toBe(before); // 同一インスタンス(再生成していない)
+    expect(store.tileAt(x, y)).toBe(TILE.AIR);
+    store.applyDestruction(cx + 50, cy + 50);
+    expect(store.has(cx + 50, cy + 50)).toBe(false);
+  });
+
 });
