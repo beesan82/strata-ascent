@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dirtyBoundsAround, rebakeTargets } from './dirtyBounds';
+import { dirtyBoundsAround, expandRect, rebakeTargets } from './dirtyBounds';
 
 /** 隣チャンクに破壊がない場合 */
 const dirtyBounds = (mask: Uint8Array, size: number, dilate: number) =>
@@ -73,5 +73,11 @@ describe('rebakeTargets', () => {
     m[4 * size + 4] = 1;
     const got = rebakeTargets(['2,3'], () => m, size, 2);
     expect([...got]).toEqual(['2,3']);
+  });
+});
+
+describe('expandRect', () => {
+  it('margin だけ広げて size 内に切り詰める', () => {
+    expect(expandRect({ x: 3, y: 0, w: 2, h: 8 }, 1, 8)).toEqual({ x: 2, y: 0, w: 4, h: 8 });
   });
 });

@@ -72,3 +72,12 @@ export function rebakeTargets(affected: Iterable<string>, maskAt: MaskAt, size: 
   }
   return out;
 }
+
+/** rect を margin セルだけ広げ、[0,size) に切り詰める */
+export function expandRect(r: CellRect, margin: number, size: number): CellRect {
+  const x0 = Math.max(0, r.x - margin);
+  const y0 = Math.max(0, r.y - margin);
+  const x1 = Math.min(size, r.x + r.w + margin);
+  const y1 = Math.min(size, r.y + r.h + margin);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}

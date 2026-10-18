@@ -10,7 +10,7 @@ import { megaFacilityAt } from '../world/megafacility';
 import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
 import { DecorCache, type DecorOp } from './decor';
-import { dirtyBoundsAround, type CellRect } from './dirtyBounds';
+import { dirtyBoundsAround, expandRect, type CellRect } from './dirtyBounds';
 import { traceAt, type Trace } from './traces';
 import { STEEL } from './steel';
 
@@ -165,6 +165,9 @@ export class ChunkBaker {
     // タイルは滑らかに陰影付けされているが、境界で隣接アトラスセルを拾わないよう
     // スムージングを無効化してエッジをこの解像度で明瞭に保つ。
     ctx.imageSmoothingEnabled = false;
+    // タイル単位の描画はタイルから最大0.5タイル程度しかはみ出さないので、部分再焼き込みでは
+    // クリップ+1タイルのタイルだけを回す(範囲外のタイルはクリップ内の画素に影響しない)
+    const span = clip ? expandRect(clip, 1, CHUNK_SIZE) : { x: 0, y: 0, w: CHUNK_SIZE, h: CHUNK_SIZE };
     const chunk = store.getChunk(cx, cy);
     const bx = cx * CHUNK_SIZE;
     const by = cy * CHUNK_SIZE;
@@ -179,9 +182,9 @@ export class ChunkBaker {
 
     // ベース: SOLIDタイルを8近傍から求めたブロブIDでオートタイル描画する。
     // 近傍参照はstore.tileAt(純粋)経由でチャンクをまたいでも継ぎ目なく一致する。
-    for (let ty = 0; ty < CHUNK_SIZE; ty++) {
+    for (let ty = span.y; ty < span.y + span.h; ty++) {
       const wy = by + ty;
-      for (let tx = 0; tx < CHUNK_SIZE; tx++) {
+      for (let tx = span.x; tx < span.x + span.w; tx++) {
         if (chunk[ty * CHUNK_SIZE + tx] !== TILE.SOLID) continue;
         const wx = bx + tx;
         const nb = {
@@ -210,9 +213,9 @@ export class ChunkBaker {
     const reliefDepth = 0.24 + (1 - biome.ambientLevel) * 0.12; // 0.24〜0.36 タイル
     const bandAlpha = 0.32 + (1 - biome.ambientLevel) * 0.34;   // 0.32〜0.66
     const rimTopColor = mixHex(biome.palette.edge, '#ffffff', 0.4);
-    for (let ty = 0; ty < CHUNK_SIZE; ty++) {
+    for (let ty = span.y; ty < span.y + span.h; ty++) {
       const wy = by + ty;
-      for (let tx = 0; tx < CHUNK_SIZE; tx++) {
+      for (let tx = span.x; tx < span.x + span.w; tx++) {
         if (chunk[ty * CHUNK_SIZE + tx] !== TILE.SOLID) continue;
         const wx = bx + tx;
         const edges = reliefEdges(
@@ -257,9 +260,9 @@ export class ChunkBaker {
     // 配管コリドーの線は鋼基調+系統accentを微量ティント(暖色の氾濫を防ぐ。系統識別は残す)
     ctx.strokeStyle = mixHex(STEEL.post, biome.accent, 0.25);
     ctx.lineWidth = Math.max(1, 0.14 * P);
-    for (let ty = 0; ty < CHUNK_SIZE; ty++) {
+    for (let ty = span.y; ty < span.y + span.h; ty++) {
       const wy = by + ty;
-      for (let tx = 0; tx < CHUNK_SIZE; tx++) {
+      for (let tx = span.x; tx < span.x + span.w; tx++) {
         const wx = bx + tx;
         const c = conduitAt(this.seed, wx, wy);
         if (!c) continue;
@@ -286,9 +289,9 @@ export class ChunkBaker {
     if (system === 'water') {
       ctx.strokeStyle = 'rgba(90,150,200,0.15)';
       ctx.lineWidth = Math.max(1, 0.12 * P);
-      for (let ty = 0; ty < CHUNK_SIZE; ty++) {
+      for (let ty = span.y; ty < span.y + span.h; ty++) {
         const wy = by + ty;
-        for (let tx = 0; tx < CHUNK_SIZE; tx++) {
+        for (let tx = span.x; tx < span.x + span.w; tx++) {
           if (chunk[ty * CHUNK_SIZE + tx] !== TILE.AIR) continue;
           const wx = bx + tx;
           const inFacility =
@@ -307,9 +310,9 @@ export class ChunkBaker {
 
     // 人の痕跡(環境ストーリーテリング)。床の縁(AIRかつ直下SOLID)と壁面(SOLIDかつ左右空気)に
     // 決定論的に散らす。焼き込みのみ・非衝突。ライトに照らされて初めて読める暗い色調。
-    for (let ty = 0; ty < CHUNK_SIZE; ty++) {
+    for (let ty = span.y; ty < span.y + span.h; ty++) {
       const wy = by + ty;
-      for (let tx = 0; tx < CHUNK_SIZE; tx++) {
+      for (let tx = span.x; tx < span.x + span.w; tx++) {
         const wx = bx + tx;
         const here = chunk[ty * CHUNK_SIZE + tx];
         if (here === TILE.AIR) {
