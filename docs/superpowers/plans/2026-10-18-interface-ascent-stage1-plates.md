@@ -589,3 +589,10 @@ README の「URLパラメータ」表の下に次を追加:
 git add README.md
 git commit -m "docs: note interface coordinates for screenshots"
 ```
+
+## 実装時の裁定
+
+- 開始地点: 孔からの距離を 24→12 タイルに縮め、前室の床の行から上へ走査して最初に立てる位置を選ぶ(床に立つと開放度が低くズームが 1 のままで、横 ±17 タイルしか見えないため、24 では孔の梯子が画面外になる)。列が 32 タイル梯子列に当たる場合は左へ最大 4 ずらす(床の行では梯子列が抑止されず足元が LADDER になるため)。
+- 破壊: Task 1 の「未生成 `undefined` は従来どおり記録」は誤り。HARD は生成状態に関わらず不壊なので、`bore` は未生成チャンクでも界面判定(`interfaceTileAt === HARD`)が真の位置を記録しない。`applyTo`・`tileAtLive` も HARD を消さない(多層防御)。
+- Task 3 のテスト幾何の訂正: `interfaceTileAt(px, top−5)` は見晴らし台(top−8..top)の中なので null ではなく AIR(null は top−9)。板の上面行の HARD 検査は縦坑の脇 `|x−px| ≤ half` を除外する(脇は AIR)。
+- `interfaceTileAt` の候補の孔は cell ごとに最寄りの 1 つで足りる(孔の持つタイルは x ∈ [p−12, p+72)、孔間隔は 256 以上)。計画の x−30 側の第 2 候補は削除した。

@@ -13,7 +13,11 @@ function mod(n: number, m: number): number {
   return ((n % m) + m) % m;
 }
 
-/** シード+ワールドタイル座標 → 素のノイズ躯体タイル種。純粋関数(同じ入力なら常に同じ出力) */
+/**
+ * シード+ワールドタイル座標 → ノイズ躯体タイル種(施設オーバーレイ・界面タイルは含まない)。
+ * 界面の地形変調(前室・圧縮帯)は含む。純粋関数(同じ入力なら常に同じ出力)。
+ * 本体の合成は tileAt 内の noiseTileWith を使うため、主にテストが参照する。
+ */
 export function noiseTileAt(seed: number, x: number, y: number): Tile {
   const cell = biomeCellAt(seed, y);
   return noiseTileWith(seed, x, y, cell, terrainModsAt(seed, x, y, cell));
@@ -56,7 +60,9 @@ function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: T
 }
 
 /**
- * 最終タイル = 施設オーバーレイ + 素のノイズ躯体。
+ * 最終タイル。優先順位:
+ *   界面タイル(板・縦坑・見晴らし台・大穴) > 前室内(内側・底)はオーバーレイなしで躯体 >
+ *   ノイズ LADDER 保持 > 施設・幹線オーバーレイ > 躯体(地形変調込みのノイズ)。
  * 不変条件: ノイズが LADDER のタイルは施設で上書きしない(上昇路を保持し到達可能性を守る)。
  */
 export function tileAt(seed: number, x: number, y: number): Tile {

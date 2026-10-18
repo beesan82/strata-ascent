@@ -126,15 +126,14 @@ describe('tileAt', () => {
     // 回帰テスト: 梯子判定は巨大空洞・質量ノイズ・床のいずれよりも先に行われるため、
     // 梯子列は空洞の有無に関わらず全行LADDERであることを固定する
     // (将来のパラメータ調整で退行させない)。
-    // ladderXは実装(tileAt)の式をそのまま再現している。実装と鏡写しの結合だが、
-    // 「梯子は常にどんな地形も貫通する」性質を固定する目的で意図的に許容する。
+    // ladderX は実装と同じ groupLadderX(interface.ts)で求める。
+    // 「梯子は常にどんな地形も貫通する」性質を固定する。
     const TEST_RANGE_UNIT = 8;
     for (const seed of [1, 42, 20260711]) {
       for (let group = 0; group < 8; group++) {
         // The same signed-X column must be a ladder throughout all Y values.
         for (let y = -TEST_RANGE_UNIT * 40; y < TEST_RANGE_UNIT * 41; y++) {
-          const ladderX =
-            group * 32 + Math.floor(hash2(seed + 404, group, 0) * 32);
+          const ladderX = groupLadderX(seed, group * 32);
           if (inInterfaceZone(seed, ladderX, y)) continue;
           expect(tileAt(seed, ladderX, y)).toBe(TILE.LADDER);
         }
@@ -404,7 +403,7 @@ describe('界面と前室の合成', () => {
       }
     }
   });
-  it('前室の内側は空洞(床帯を除いて空気率 0.9 以上)、圧縮帯は通常より固体が多い', () => {
+  it('前室の内側は空気率 0.9 以上、圧縮帯は通常より固体が多い', () => {
     const seed = 20260711, cell = 0;
     const bottom = interfaceBottom(seed, cell), px = passageX(seed, cell, 0);
     let air = 0, n = 0;
