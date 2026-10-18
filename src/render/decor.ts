@@ -495,7 +495,12 @@ function segmentOps(
       let ok = true;
       for (let iy = -1; iy <= 7 && ok; iy++)
         for (let ix = -1; ix <= 8 && ok; ix++)
-          ok = isSolid(t(x0 + ix, y0 + iy));
+          {
+            // 内側 8x7 は板(HARD)に被せない。外周 1 タイルの縁だけ固体なら閉じているとみなす
+            const ring = ix === -1 || ix === 8 || iy === -1 || iy === 7;
+            const tt = t(x0 + ix, y0 + iy);
+            ok = ring ? isSolid(tt) : tt === TILE.SOLID;
+          }
       if (!ok) continue;
       const lx0 = x0 - bx;
       const ly0 = y0 - by;
