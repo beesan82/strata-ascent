@@ -10,7 +10,7 @@ import {
 import { terrainProfileFor } from './biomeTerrain';
 import { hash2 } from './noise';
 import { CHUNK_SIZE, isSolid, TILE } from './tiles';
-import { findSpawn, generateChunk, noiseTileAt, tileAt, tileAtLive } from './worldgen';
+import { SPAWN_OFFSET_FROM_PASSAGE, findSpawn, generateChunk, noiseTileAt, tileAt, tileAtLive } from './worldgen';
 import { Destruction } from './destruction';
 import { ANTECHAMBER_DEPTH, interfaceBottom, interfaceTileAt, interfaceTop, passageX, terrainModsAt } from './interface';
 
@@ -207,14 +207,14 @@ describe('biome-driven terrain', () => {
 
 describe('findSpawn', () => {
   const seeds = [1, 42, 20260711];
-  it('スポーンは固体の中ではなく、cell 0 の前室の中(孔の左 24 タイル)', () => {
+  it('スポーンは固体の中ではなく、cell 0 の前室の中(孔の左 12 タイル)', () => {
     for (const seed of seeds) {
       const { x, y } = findSpawn(seed);
       expect(isSolid(tileAt(seed, Math.floor(x), Math.floor(y)))).toBe(false);
       expect(isSolid(tileAt(seed, Math.floor(x), Math.floor(y) + 1))).toBe(false);
       expect(isSolid(tileAt(seed, Math.floor(x), Math.floor(y) + 2))).toBe(true);
       const px = passageX(seed, 0, 0);
-      expect(Math.floor(x)).toBe(px - 24);
+      expect(Math.floor(x)).toBe(px - SPAWN_OFFSET_FROM_PASSAGE);
       expect(y).toBeGreaterThan(interfaceBottom(seed, 0));
       expect(y).toBeLessThan(interfaceBottom(seed, 0) + ANTECHAMBER_DEPTH);
     }

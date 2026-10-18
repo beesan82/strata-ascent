@@ -96,10 +96,13 @@ export function generateChunk(seed: number, cx: number, cy: number): Uint8Array 
   return data;
 }
 
-/** 開始地点: cell 0 の前室の中、孔の左 24 タイルの列を床(最下段)から上へ走査し、最初の「足元が床・体の入る空間」を返す。通常は連続した床の行そのもの */
+/** 開始時のズームは 1 で横 ±17 タイルしか見えないため、孔の梯子が必ず画面に入る距離 */
+export const SPAWN_OFFSET_FROM_PASSAGE = 12;
+
+/** 開始地点: cell 0 の前室の中、孔の左 SPAWN_OFFSET_FROM_PASSAGE タイルの列を床(最下段)から上へ走査し、最初の「足元が床・体の入る空間」を返す。通常は連続した床の行そのもの */
 export function findSpawn(seed: number): { x: number; y: number } {
   const px = passageX(seed, 0, 0);
-  const sx = px - 24;
+  const sx = px - SPAWN_OFFSET_FROM_PASSAGE;
   const bottom = interfaceBottom(seed, 0);
   for (let y = bottom + ANTECHAMBER_DEPTH - 1; y >= bottom + 1; y--) {
     const head = tileAt(seed, sx, y - 1);
