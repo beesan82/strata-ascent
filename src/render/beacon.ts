@@ -134,6 +134,56 @@ export function beaconGlowAt(seed: number, camX: number, camY: number): BeaconGl
   };
 }
 
+/**
+ * 滲みの中心アルファ(強度 1 のとき)。滲みは暗幕(最大 0.62)の下にあり、さらに 32 色へ量子化される。
+ * 0.22 では消え、0.45 では塔の矩形と空で量子化先が割れて紫の斑になった(スクリーンショットで確認)。
+ */
+export const GLOW_ALPHA = 0.6;
+/** 滲みの帯の最小幅(内部バッファ px)と、帯のアルファの刻み(1/64) */
+export const GLOW_STRIP_PX = 8;
+export const GLOW_ALPHA_STEPS = 64;
+
+/** 滲みの平坦な帯(内部バッファの x 範囲 [x0, x1) とアルファ) */
+export interface GlowStrip {
+  x0: number;
+  x1: number;
+  alpha: number;
+}
+
+/**
+ * 画面幅 w(内部バッファ px)を覆う滲みの帯。最寄りの大穴の X を頂点に、水平距離 0→1、256→0.15
+ * (glowStrength の折れ線)を追従率 0.9 で横に並べ、縦は層の下へ行くほど弱める(板の下面で 1、
+ * 次の板の上面で 0.4)。この折れ線をそのまま横の形にするので、最寄りの大穴(最大 256 タイル先)
+ * までの範囲なら画面の中に必ず明るさの勾配があり、孔が画面外でも方角が読める(矢印は置かない)。
+ * 設計書の「幅 300 タイル」の楕円は 1 画面(34 タイル)内の勾配が約 1 割で、暗幕と量子化の後に
+ * 偏りが残らなかった。
+ * グラデではなく平坦な帯にするのは present の量子化のため(列ごとに色が変わると「4 px 左と同色」
+ * の近道が効かず、空の縦グラデとの組で色数がキャッシュを溢れさせた)。アルファは 1/64 刻みに量子化し
+ * 同じ刻みの隣接帯は 1 本にまとめる(1 画面で 5 段前後)。帯は空のフィルに焼き込む(renderer.drawSky)。
+ */
+export function glowStrips(seed: number, camX: number, camY: number, w: number, ppt: number): { color: string; strips: GlowStrip[] } {
+  const g = beaconGlowAt(seed, camX, camY);
+  const depth = clamp01((camY - g.top) / (g.layerBottom - g.top));
+  const a = GLOW_ALPHA * (1 - 0.6 * depth);
+  const sx = (g.x - camX) * GLOW_FACTOR * ppt + w / 2;
+  const strips: GlowStrip[] = [];
+  let x0 = 0;
+  let level = -1;
+  // w が帯幅の倍数でなくても最後の帯が w で閉じるよう、終端は x >= w で明示的に扱う
+  for (let x = 0; ; x += GLOW_STRIP_PX) {
+    const atEnd = x >= w;
+    const dxTiles = (x + GLOW_STRIP_PX / 2 - sx) / (GLOW_FACTOR * ppt);
+    const next = atEnd ? -1 : Math.round(a * glowStrength(dxTiles) * GLOW_ALPHA_STEPS);
+    if (next !== level) {
+      if (level >= 0) strips.push({ x0, x1: Math.min(x, w), alpha: level / GLOW_ALPHA_STEPS });
+      x0 = Math.min(x, w);
+      level = next;
+    }
+    if (atEnd) break;
+  }
+  return { color: g.color, strips };
+}
+
 export interface InterfaceBand {
   cell: number;
   top: number;
@@ -169,12 +219,6 @@ export function ambientDelta(seed: number, x: number, y: number): number {
   return fade * (AMBIENT_IN_POOL + (AMBIENT_OUT_POOL - AMBIENT_IN_POOL) * u);
 }
 
-/** #rrggbb → rgba() 文字列 */
-function withAlpha(hex: string, a: number): string {
-  const p = parseInt(hex.slice(1), 16);
-  return `rgba(${(p >> 16) & 255},${(p >> 8) & 255},${p & 255},${a})`;
-}
-
 /**
  * 光柱の基準アルファ(脈動前)。lighter 合成で暗幕の上に乗せる。柱(柔らかい縁)+芯+光溜まりが
  * 重なる軸上で合計 ≈ 0.3 になり、0.28 では accent が画面全体を飽和させた。
@@ -183,7 +227,21 @@ const BEACON_ALPHA = 0.1;
 /** 光柱の芯の半幅(タイル)。縁をぼかさない硬い部分 */
 const CORE_HALF_WIDTH = 4;
 /** 光溜まりの縦横比(床に寝た楕円) */
-const POOL_ASPECT = 0.22;
+const POOL_ASPECT = 0.18;
+/** 柱の柔らかい縁の段数 */
+const SOFT_STEPS = 3;
+/** 柱の芯の縦の段数と、上端・下端のアルファ倍率 */
+const CORE_STEPS = 4;
+const CORE_TOP = 1.4;
+const CORE_BOTTOM = 0.6;
+/** 光溜まりの楕円を近似する矩形の行数(上下それぞれ) */
+const POOL_ROWS = 6;
+/** 光溜まりの段(外側から): [半径(タイル), アルファ倍率]。裾 0.2、芯の外 0.6、芯 1.3(重ねない) */
+const POOL_RINGS: ReadonlyArray<readonly [number, number]> = [
+  [POOL_FRINGE_RADIUS, 0.2],
+  [(POOL_CORE_RADIUS + POOL_FRINGE_RADIUS) / 2, 0.6],
+  [POOL_CORE_RADIUS, 1.3],
+];
 
 /**
  * 光柱と光溜まりの描画(§6.2)。Lighting の暗幕の後に lighter で描く(§6.3: 暗幕で消えない)。
@@ -212,37 +270,64 @@ export class BeaconLights {
       // 画面内の縦範囲だけ塗る(グラデ座標は板の下面〜床のまま)
       const yA = Math.max(sy0, 0);
       const yB = Math.min(sy1, h);
+      // グラデは使わず平坦な段で塗る。グラデは画素ごとに色が変わり、present の量子化キャッシュ
+      // (色×Bayer 位置のキー 2^16)を溢れさせて、柱 1 本で約 6 ms 増えた。
+      ctx.fillStyle = b.color;
       if (yB > yA) {
-        // 柱(柔らかい縁): 横方向グラデ、中央 40% は一定
+        // 柱(柔らかい縁): 芯の外側を 3 段(0.25/0.5/0.75)で広げる
         const half = BEACON_HALF_WIDTH * ppt;
-        const soft = ctx.createLinearGradient(sx - half, 0, sx + half, 0);
-        soft.addColorStop(0, withAlpha(b.color, 0));
-        soft.addColorStop(0.3, withAlpha(b.color, a));
-        soft.addColorStop(0.7, withAlpha(b.color, a));
-        soft.addColorStop(1, withAlpha(b.color, 0));
-        ctx.fillStyle = soft;
-        ctx.fillRect(sx - half, yA, half * 2, yB - yA);
-        // 柱の芯(硬い縁): 上で強く床へ向かって弱まる
-        const core = ctx.createLinearGradient(0, sy0, 0, sy1);
-        core.addColorStop(0, withAlpha(b.color, a * 0.9));
-        core.addColorStop(1, withAlpha(b.color, a * 0.35));
-        ctx.fillStyle = core;
         const ch = CORE_HALF_WIDTH * ppt;
-        ctx.fillRect(sx - ch, yA, ch * 2, yB - yA);
+        const step = (half - ch) / SOFT_STEPS;
+        for (let i = 0; i < SOFT_STEPS; i++) {
+          ctx.globalAlpha = a * ((i + 1) / (SOFT_STEPS + 1));
+          const inner = half - step * (i + 1);
+          ctx.fillRect(sx - inner - step, yA, step, yB - yA);
+          ctx.fillRect(sx + inner, yA, step, yB - yA);
+        }
+        // 柱の芯(硬い縁): 板の下面で強く、床へ向かって 4 段で弱まる
+        const segH = (sy1 - sy0) / CORE_STEPS;
+        for (let i = 0; i < CORE_STEPS; i++) {
+          const y0 = Math.max(yA, sy0 + segH * i);
+          const y1 = Math.min(yB, sy0 + segH * (i + 1));
+          if (y1 <= y0) continue;
+          ctx.globalAlpha = a * (CORE_TOP - (CORE_TOP - CORE_BOTTOM) * (i / (CORE_STEPS - 1)));
+          ctx.fillRect(sx - ch, y0, ch * 2, y1 - y0);
+        }
       }
-      // 光溜まり: 床の行の上端に寝た楕円。芯(20)は明るく、裾(48)は孔の梯子まで届く
+      // 光溜まり: 床の行の上端に寝た楕円を 3 重の平坦な段で描く。芯(20)は明るく、裾(48)は孔の梯子まで届く。
+      // 楕円パスは lighter だと矩形の数倍遅い(3 枚で約 3.5 ms)ので、楕円を横長の矩形の階段で近似する
+      // (ドット絵なので階段は馴染む)。
       const rx = POOL_FRINGE_RADIUS * ppt;
       const ry = rx * POOL_ASPECT;
       if (sy1 + ry >= 0 && sy1 - ry <= h && sx + rx >= 0 && sx - rx <= w) {
-        const pool = ctx.createRadialGradient(sx, sy1, 0, sx, sy1, rx);
-        pool.addColorStop(0, withAlpha(b.color, a * 1.3));
-        pool.addColorStop(POOL_CORE_RADIUS / POOL_FRINGE_RADIUS, withAlpha(b.color, a * 0.6));
-        pool.addColorStop(1, withAlpha(b.color, 0));
-        ctx.fillStyle = pool;
-        ctx.beginPath();
-        ctx.ellipse(sx, sy1, rx, ry, 0, 0, Math.PI * 2);
-        ctx.fill();
+        // 段は重ねず、外側の環から順に「外の楕円 − 内の楕円」の帯だけを塗る(各画素を 1 回しか合成しない)。
+        // 行の高さは一番外の楕円で決め、各行の中央高さでの半幅を外・内それぞれ求める。
+        const rowH = ry / POOL_ROWS;
+        for (let i = 0; i < POOL_RINGS.length; i++) {
+          const [rOut, alpha] = POOL_RINGS[i];
+          const rIn = i + 1 < POOL_RINGS.length ? POOL_RINGS[i + 1][0] : 0;
+          ctx.globalAlpha = a * alpha;
+          const rxOut = rOut * ppt;
+          const rxIn = rIn * ppt;
+          for (let j = 0; j < POOL_ROWS; j++) {
+            const yMid = rowH * (j + 0.5);
+            const tOut = yMid / (rxOut * POOL_ASPECT);
+            if (tOut >= 1) continue;
+            const hwOut = rxOut * Math.sqrt(1 - tOut * tOut);
+            const tIn = rxIn > 0 ? yMid / (rxIn * POOL_ASPECT) : 1;
+            const hwIn = tIn < 1 ? rxIn * Math.sqrt(1 - tIn * tIn) : 0;
+            for (const yTop of [sy1 - rowH * (j + 1), sy1 + rowH * j]) {
+              if (hwIn > 0) {
+                ctx.fillRect(sx - hwOut, yTop, hwOut - hwIn, rowH);
+                ctx.fillRect(sx + hwIn, yTop, hwOut - hwIn, rowH);
+              } else {
+                ctx.fillRect(sx - hwOut, yTop, hwOut * 2, rowH);
+              }
+            }
+          }
+        }
       }
+      ctx.globalAlpha = 1;
     }
     ctx.restore();
   }

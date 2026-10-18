@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ambientDelta, beaconGlowAt, beaconPulse, beaconsInView, glowStrength, interfaceBandsNear, nearestHoleX,
-  AMBIENT_IN_POOL, AMBIENT_OUT_POOL, GLOW_MIN, POOL_CORE_RADIUS, POOL_FRINGE_RADIUS, PULSE_AMPLITUDE, PULSE_PERIOD,
+  ambientDelta, beaconGlowAt, beaconPulse, beaconsInView, glowStrength, glowStrips, interfaceBandsNear, nearestHoleX,
+  AMBIENT_IN_POOL, AMBIENT_OUT_POOL, GLOW_ALPHA, GLOW_ALPHA_STEPS, GLOW_MIN, POOL_CORE_RADIUS, POOL_FRINGE_RADIUS,
+  PULSE_AMPLITUDE, PULSE_PERIOD, type GlowStrip,
 } from './beacon';
 import { ANTECHAMBER_DEPTH, interfaceBottom, interfaceTop, passageX } from '../world/interface';
 import { biomeForCell } from './biome';
@@ -76,6 +77,37 @@ describe('glow', () => {
   it('見晴らし台(板の上)では 1 つ上の板の大穴を指す', () => {
     const g = beaconGlowAt(SEED, px0, top0 - 3);
     expect(g.top).toBe(interfaceBottom(SEED, -1));
+  });
+});
+
+describe('glowStrips', () => {
+  // 内部バッファ幅 427 px、ppt 12(ズーム 1)。大穴 244 がカメラの右 60 タイルにある
+  const w = 427;
+  const ppt = 12;
+
+  it('帯は画面幅を隙間なく覆い、アルファは 1/64 刻み', () => {
+    const { strips } = glowStrips(SEED, px0 - 12, bottom0 + 46, w, ppt);
+    expect(strips.length).toBeGreaterThanOrEqual(2);
+    expect(strips[0].x0).toBe(0);
+    expect(strips[strips.length - 1].x1).toBe(w);
+    for (let i = 1; i < strips.length; i++) expect(strips[i].x0).toBe(strips[i - 1].x1);
+    for (const s of strips) expect(Math.round(s.alpha * GLOW_ALPHA_STEPS)).toBeCloseTo(s.alpha * GLOW_ALPHA_STEPS);
+  });
+
+  it('大穴が右にあれば右端の帯ほど明るく、左にあれば逆', () => {
+    const right = glowStrips(SEED, px0 - 12, bottom0 + 46, w, ppt).strips;
+    expect(right[right.length - 1].alpha).toBeGreaterThan(right[0].alpha);
+    const left = glowStrips(SEED, px0 + 120, bottom0 + 46, w, ppt).strips;
+    expect(left[0].alpha).toBeGreaterThan(left[left.length - 1].alpha);
+  });
+
+  it('色は上の層の accent、層の下へ行くほど弱い', () => {
+    const near = glowStrips(SEED, px0 + 48, bottom0 + 10, w, ppt);
+    const deep = glowStrips(SEED, px0 + 48, bottom0 + 300, w, ppt);
+    expect(near.color).toBe(biomeForCell(SEED, -1).accent);
+    const peak = (s: GlowStrip[]) => Math.max(...s.map((x) => x.alpha));
+    expect(peak(near.strips)).toBeCloseTo(GLOW_ALPHA, 1);
+    expect(peak(deep.strips)).toBeLessThan(peak(near.strips));
   });
 });
 

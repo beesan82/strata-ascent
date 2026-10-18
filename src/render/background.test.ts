@@ -94,27 +94,21 @@ describe('Background biome transitions', () => {
   });
 });
 
-describe('Background beacon glow and interface bands', () => {
+describe('Background interface bands', () => {
   // seed 20260711 の cell 0: 板は top −9, bottom 23(厚み 32)。w=680px, ppt=20 → 横 34 タイル、縦 19 タイル
   const SEED = 20260711;
   const BAND_H = 32 * 0.6 * 20;
 
-  /** 滲みは画面全体を lighter で塗る */
-  const glowDrawn = (ctx: RecordingContext): boolean =>
-    ctx.compositeOps.includes('lighter') && ctx.fillRects.some(([x, y, w, h]) => x === 0 && y === 0 && w === 680 && h === 380);
-
-  it('前室の中では滲み(lighter の全面塗り)と板の帯(追従率 0.6)を描く', () => {
+  it('前室の中では板の帯(追従率 0.6、全幅)を描く', () => {
     const ctx = new RecordingContext();
     new Background(SEED).render(ctx as unknown as CanvasRenderingContext2D, 196, 40, 680, 380, 20, testBlend(0));
-    expect(glowDrawn(ctx)).toBe(true);
-    expect(ctx.fillRects.some(([, , , h]) => Math.abs(h - BAND_H) < 1)).toBe(true);
+    expect(ctx.fillRects.some(([x, , w, h]) => x === 0 && w === 680 && Math.abs(h - BAND_H) < 1)).toBe(true);
   });
 
-  it('板から 1 画面以上離れると帯を描かないが、滲みは描く', () => {
+  it('板から 1 画面以上離れると帯を描かない', () => {
     const ctx = new RecordingContext();
     new Background(SEED).render(ctx as unknown as CanvasRenderingContext2D, 196, 200, 680, 380, 20, testBlend(0));
     expect(ctx.fillRects.some(([, , , h]) => Math.abs(h - BAND_H) < 1)).toBe(false);
-    expect(glowDrawn(ctx)).toBe(true);
   });
 });
 

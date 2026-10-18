@@ -20,11 +20,15 @@ export class Lighting {
    * px,py: プレイヤー画面座標、angle: 補助光の向き、ppt: 1タイルpx、timeSec: 揺らぎ。
    * 1) 画面全体を「(1-ambientLevel)に比例する薄いバイオーム色の暗幕」で覆う(全体は必ず見える)
    * 2) プレイヤー周囲と前方の暗幕を destination-out で消して局所的に明るく
+   * 3) overlay があれば暗幕の「上」に加算する光(光柱など)を半解像度のこのキャンバスへ描かせる。
+   *    暗幕と一緒に 1 回で主バッファへ乗るので、全画面の lighter パスを 1 つ節約できる
+   *    (主バッファの拡大は最近傍なので縁は硬いまま)。overlay は (ctx, scale=0.5) を受け取る。
    */
   render(
     mainCtx: CanvasRenderingContext2D,
     px: number, py: number, angle: number, ppt: number, timeSec: number,
     ambientColor: string, ambientLevel: number,
+    overlay?: (ctx: CanvasRenderingContext2D, scale: number) => void,
   ): void {
     const w = this.canvas.width;
     const h = this.canvas.height;
@@ -60,6 +64,9 @@ export class Lighting {
     ctx.arc(hx, hy, coneR, angle - half, angle + half); ctx.closePath(); ctx.fill();
 
     ctx.globalCompositeOperation = 'source-over';
+    // 3) 暗幕の上の加算光。premultiplied なこのキャンバスへ lighter で足すと、主バッファへの合成で
+    //    scene×(1−暗幕−光α)+暗幕色+光 になる(光の α ぶんだけ下地が僅かに減るが、加算が勝つ)。
+    overlay?.(ctx, 0.5);
     mainCtx.drawImage(this.canvas, 0, 0, this.outW, this.outH);
   }
 }

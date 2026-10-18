@@ -39,6 +39,7 @@ npm test            # Vitest
 npx tsc --noEmit    # 型チェック
 npm run build       # 本番ビルド
 node scripts/screenshot.mjs --seed=20260711 --out=screenshots/shot.png
+node scripts/frametime.mjs --seed=20260711 --pos=244,66   # rAF 間隔と描画時間の p50/p95(ヘッドレス=ソフトウェア描画)
 ```
 
 構成:
