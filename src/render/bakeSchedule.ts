@@ -2,10 +2,11 @@
  * チャンク焼き込みの先読みスケジューラ(純関数)。
  * 1フレームに1仕事だけ返し、歩行中に「生成+焼き込み」が一度に集中して止まるのを防ぐ。
  * 焼き込みは隣接8チャンクのタイルを参照するため、先にそれらのデータ生成を1つずつ要求する。
+ * 装飾の計算(焼き込みの約4割)もキャンバスを使わない純粋な計算なので、焼き込みとは別の仕事にする。
  */
 
 export interface BakeTask {
-  kind: 'generate' | 'bake';
+  kind: 'generate' | 'decor' | 'bake';
   cx: number;
   cy: number;
 }
@@ -25,6 +26,8 @@ export interface BakeScheduleInput {
   isBaked: (cx: number, cy: number) => boolean;
   /** タイルデータが生成済みか */
   isGenerated: (cx: number, cy: number) => boolean;
+  /** 焼き込みに使う装飾が計算済みか(省略時は確認しない) */
+  isDecorReady?: (cx: number, cy: number) => boolean;
 }
 
 /** 次にやるべき仕事。可視チャンクを優先し、次に可視範囲の周囲1チャンクを中心から近い順に。 */
@@ -59,5 +62,6 @@ function taskFor(s: BakeScheduleInput, cx: number, cy: number): BakeTask | null 
       if (!s.isGenerated(cx + dx, cy + dy)) return { kind: 'generate', cx: cx + dx, cy: cy + dy };
     }
   }
+  if (s.isDecorReady && !s.isDecorReady(cx, cy)) return { kind: 'decor', cx, cy };
   return { kind: 'bake', cx, cy };
 }

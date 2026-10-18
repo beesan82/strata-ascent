@@ -9,7 +9,7 @@ import { facilityTileAt } from '../world/facility';
 import { megaFacilityAt } from '../world/megafacility';
 import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
-import { DecorCache, type DecorOp } from './decor';
+import { DECOR_MARGIN, DecorCache, type DecorOp } from './decor';
 import { dirtyBoundsAround, expandRect, type CellRect } from './dirtyBounds';
 import { traceAt, type Trace } from './traces';
 import { STEEL } from './steel';
@@ -110,6 +110,21 @@ export class ChunkBaker {
     this.stale.delete(key);
   }
 
+  /** 焼き込みに使う装飾が計算済みか(先読みスケジューラ用) */
+  isDecorReady(cx: number, cy: number): boolean {
+    return this.decor.has(cx, cy);
+  }
+
+  /** 焼き込みの前に装飾だけを計算しておく(焼き込みとは別フレームの仕事にするため) */
+  prepareDecor(cx: number, cy: number, store: ChunkStore): void {
+    this.decorFor(cx, cy, store);
+  }
+
+  /** 装飾(元地形は ChunkStore の生成済みチャンクから取り、worldgen を引き直さない) */
+  private decorFor(cx: number, cy: number, store: ChunkStore): DecorOp[] {
+    return this.decor.get(cx, cy, () => store.pristineAround(cx, cy, DECOR_MARGIN));
+  }
+
   /** このフレームで重い仕事(get の同期焼き込み・無効化)があったか。読むとリセットされる */
   takeBakedThisFrame(): boolean {
     const v = this.bakedThisFrame;
@@ -171,6 +186,12 @@ export class ChunkBaker {
     const chunk = store.getChunk(cx, cy);
     const bx = cx * CHUNK_SIZE;
     const by = cy * CHUNK_SIZE;
+    // 近傍参照(最大2タイル下)はチャンク+周囲2タイルの配列から読む。タイルごとの store.tileAt は
+    // Map を文字列キーで引くため、焼き込み1回で数万回になり重かった。
+    const NEAR_PAD = 2;
+    const nearN = CHUNK_SIZE + NEAR_PAD * 2;
+    const near = store.tilesAround(cx, cy, NEAR_PAD);
+    const around = (lx: number, ly: number): number => near[(ly + NEAR_PAD) * nearN + lx + NEAR_PAD];
 
     // Tile palette and accent follow the visual-cell blend at the chunk center.
     // Facility-only effects still consult the independent hierarchy system below.
@@ -181,21 +202,19 @@ export class ChunkBaker {
     const atlas = this.atlasFor(biome.cacheKey, biome.palette);
 
     // ベース: SOLIDタイルを8近傍から求めたブロブIDでオートタイル描画する。
-    // 近傍参照はstore.tileAt(純粋)経由でチャンクをまたいでも継ぎ目なく一致する。
+    // 近傍参照は周囲込みの配列経由なのでチャンクをまたいでも継ぎ目なく一致する。
     for (let ty = span.y; ty < span.y + span.h; ty++) {
-      const wy = by + ty;
       for (let tx = span.x; tx < span.x + span.w; tx++) {
         if (chunk[ty * CHUNK_SIZE + tx] !== TILE.SOLID) continue;
-        const wx = bx + tx;
         const nb = {
-          n: store.tileAt(wx, wy - 1) === TILE.SOLID,
-          e: store.tileAt(wx + 1, wy) === TILE.SOLID,
-          s: store.tileAt(wx, wy + 1) === TILE.SOLID,
-          w: store.tileAt(wx - 1, wy) === TILE.SOLID,
-          ne: store.tileAt(wx + 1, wy - 1) === TILE.SOLID,
-          se: store.tileAt(wx + 1, wy + 1) === TILE.SOLID,
-          sw: store.tileAt(wx - 1, wy + 1) === TILE.SOLID,
-          nw: store.tileAt(wx - 1, wy - 1) === TILE.SOLID,
+          n: around(tx, ty - 1) === TILE.SOLID,
+          e: around(tx + 1, ty) === TILE.SOLID,
+          s: around(tx, ty + 1) === TILE.SOLID,
+          w: around(tx - 1, ty) === TILE.SOLID,
+          ne: around(tx + 1, ty - 1) === TILE.SOLID,
+          se: around(tx + 1, ty + 1) === TILE.SOLID,
+          sw: around(tx - 1, ty + 1) === TILE.SOLID,
+          nw: around(tx - 1, ty - 1) === TILE.SOLID,
         };
         const r = atlas.rect(blobId(nb));
         ctx.drawImage(
@@ -214,15 +233,13 @@ export class ChunkBaker {
     const bandAlpha = 0.32 + (1 - biome.ambientLevel) * 0.34;   // 0.32〜0.66
     const rimTopColor = mixHex(biome.palette.edge, '#ffffff', 0.4);
     for (let ty = span.y; ty < span.y + span.h; ty++) {
-      const wy = by + ty;
       for (let tx = span.x; tx < span.x + span.w; tx++) {
         if (chunk[ty * CHUNK_SIZE + tx] !== TILE.SOLID) continue;
-        const wx = bx + tx;
         const edges = reliefEdges(
-          store.tileAt(wx, wy - 1) === TILE.SOLID,
-          store.tileAt(wx + 1, wy) === TILE.SOLID,
-          store.tileAt(wx, wy + 1) === TILE.SOLID,
-          store.tileAt(wx - 1, wy) === TILE.SOLID,
+          around(tx, ty - 1) === TILE.SOLID,
+          around(tx + 1, ty) === TILE.SOLID,
+          around(tx, ty + 1) === TILE.SOLID,
+          around(tx - 1, ty) === TILE.SOLID,
         );
         ctx.globalAlpha = 1; // 前タイルのリムで変えたalphaを帯描画前にリセット
         for (const b of reliefBands(edges, reliefDepth)) {
@@ -252,7 +269,7 @@ export class ChunkBaker {
     // モックの色構成に合わせ、物理装飾は鋼ランプ由来のPALETTE色のまま焼く
     // (旧accent置換は廃止。暖色は錆・灯のみに限定する)。
     ctx.lineCap = 'round';
-    for (const op of this.decor.get(cx, cy)) this.draw(ctx, op);
+    for (const op of this.decorFor(cx, cy, store)) this.draw(ctx, op);
 
     // 配管コリドー: 全系統のconduitに配管ラインを重ね、通路が「配管」として読めるようにする。
     // networkTileAtと同じ条件なので、conduitが歩けるタイルを生む場所と正確に一致する。
@@ -298,7 +315,7 @@ export class ChunkBaker {
             megaFacilityAt(this.seed, wx, wy) === TILE.AIR ||
             facilityTileAt(this.seed, wx, wy) === TILE.AIR;
           if (!inFacility) continue;
-          if (store.tileAt(wx, wy + 1) !== TILE.SOLID && store.tileAt(wx, wy + 2) !== TILE.SOLID) continue;
+          if (around(tx, ty + 1) !== TILE.SOLID && around(tx, ty + 2) !== TILE.SOLID) continue;
           const y = (ty + 0.5) * P;
           ctx.beginPath();
           ctx.moveTo(tx * P, y);
@@ -316,12 +333,12 @@ export class ChunkBaker {
         const wx = bx + tx;
         const here = chunk[ty * CHUNK_SIZE + tx];
         if (here === TILE.AIR) {
-          if (store.tileAt(wx, wy + 1) !== TILE.SOLID) continue;
+          if (around(tx, ty + 1) !== TILE.SOLID) continue;
           const tr = traceAt(this.seed, wx, wy, 'floor');
           if (tr) this.drawFloorTrace(ctx, tr, tx, ty);
         } else if (here === TILE.SOLID) {
-          const faceLeft = store.tileAt(wx - 1, wy) !== TILE.SOLID;
-          const faceRight = store.tileAt(wx + 1, wy) !== TILE.SOLID;
+          const faceLeft = around(tx - 1, ty) !== TILE.SOLID;
+          const faceRight = around(tx + 1, ty) !== TILE.SOLID;
           if (!faceLeft && !faceRight) continue;
           const tr = traceAt(this.seed, wx, wy, 'wall');
           if (tr) this.drawWallTrace(ctx, tr, tx, ty, faceLeft ? -1 : 1);

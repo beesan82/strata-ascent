@@ -285,8 +285,10 @@ export class Renderer {
         keepRadius: BAKE_KEEP_RADIUS,
         isBaked: (x, y) => this.baker.isFresh(x, y),
         isGenerated: (x, y) => store.has(x, y),
+        isDecorReady: (x, y) => this.baker.isDecorReady(x, y),
       });
       if (task?.kind === 'generate') store.getChunk(task.cx, task.cy);
+      else if (task?.kind === 'decor') this.baker.prepareDecor(task.cx, task.cy, store);
       else if (task?.kind === 'bake') this.baker.refresh(task.cx, task.cy, store);
     }
   }

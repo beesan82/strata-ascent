@@ -116,4 +116,40 @@ describe('ChunkStore(Destruction 注入)', () => {
     expect(store.destroyedMask(cx, cy)).toBe(d.maskOf(cx, cy));
     expect(new ChunkStore(42).destroyedMask(cx, cy)).toBeUndefined();
   });
+
+  it('tilesAround はチャンクと周囲 pad タイルを tileAt と同じ値で並べる(破壊・負座標も)', () => {
+    const d = new Destruction();
+    const store = new ChunkStore(42, d);
+    const { x, y } = findSolid(42);
+    d.bore(x, y, 0, 3, 1, (ax, ay) => store.tileAt(ax, ay));
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cy = Math.floor(y / CHUNK_SIZE);
+    for (const [px, py] of [[cx, cy], [-1, -1]]) {
+      const pad = 2;
+      const n = CHUNK_SIZE + pad * 2;
+      const buf = store.tilesAround(px, py, pad);
+      expect(buf.length).toBe(n * n);
+      for (let ly = -pad; ly < CHUNK_SIZE + pad; ly++)
+        for (let lx = -pad; lx < CHUNK_SIZE + pad; lx++)
+          expect(buf[(ly + pad) * n + lx + pad]).toBe(store.tileAt(px * CHUNK_SIZE + lx, py * CHUNK_SIZE + ly));
+    }
+  });
+
+  it('pristineAround は破壊を反映しない元地形を tileAt(worldgen) と同じ値で並べる', () => {
+    const d = new Destruction();
+    const store = new ChunkStore(42, d);
+    const { x, y } = findSolid(42);
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cy = Math.floor(y / CHUNK_SIZE);
+    store.getChunk(cx, cy);
+    d.bore(x, y, 0, 3, 1, (ax, ay) => store.peekTileAt(ax, ay));
+    store.applyDestruction(cx, cy);
+    expect(store.tileAt(x, y)).toBe(TILE.AIR);
+    const pad = 17;
+    const n = CHUNK_SIZE + pad * 2;
+    const buf = store.pristineAround(cx, cy, pad);
+    for (let ly = -pad; ly < CHUNK_SIZE + pad; ly++)
+      for (let lx = -pad; lx < CHUNK_SIZE + pad; lx++)
+        expect(buf[(ly + pad) * n + lx + pad]).toBe(tileAt(42, cx * CHUNK_SIZE + lx, cy * CHUNK_SIZE + ly));
+  });
 });

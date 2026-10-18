@@ -52,4 +52,17 @@ describe('nextBakeTask', () => {
     const baked = new Set([key(2, 0), key(1, -1), key(1, 0), key(1, 1), key(2, -1), key(2, 1)]);
     expect(nextBakeTask(input(baked, all(4), over))).toBeNull();
   });
+
+  it('データが揃っても装飾が未準備なら、焼き込みの前に装飾の準備を要求する', () => {
+    const baked = all(1);
+    baked.delete(key(1, 0));
+    const task = nextBakeTask(input(baked, all(2), { isDecorReady: (cx, cy) => !(cx === 1 && cy === 0) }));
+    expect(task).toEqual({ kind: 'decor', cx: 1, cy: 0 });
+  });
+
+  it('装飾が準備済みなら焼き込みを要求する', () => {
+    const baked = all(1);
+    baked.delete(key(1, 0));
+    expect(nextBakeTask(input(baked, all(2), { isDecorReady: () => true }))).toEqual({ kind: 'bake', cx: 1, cy: 0 });
+  });
 });

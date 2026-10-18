@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { TILE } from '../world/tiles';
+import { CHUNK_SIZE, TILE } from '../world/tiles';
 import { tileAt } from '../world/worldgen';
-import { DecorCache, decorateChunk, hatchSpacingAt, PALETTE } from './decor';
+import { DECOR_MARGIN, DecorCache, decorateChunk, hatchSpacingAt, PALETTE } from './decor';
 
 // decorateChunk は (seed,cx,cy) の純関数。段階Fの広域スキャンは同じチャンクを
 // 複数テストで走査するため、seed=42 の結果をメモ化して再計算を避ける(挙動不変・高速化)。
@@ -393,5 +393,23 @@ describe('DecorCache', () => {
     cache.evictFarFrom(0, 0, 4);
     expect(cache.get(0, 0)).toBe(near);
     expect(cache.get(5, 0)).not.toBe(far);
+  });
+
+  it('has は計算済みのチャンクだけ true', () => {
+    const cache = new DecorCache(42);
+    expect(cache.has(2, 2)).toBe(false);
+    cache.get(2, 2);
+    expect(cache.has(2, 2)).toBe(true);
+  });
+
+  it('元地形の配列(周囲 DECOR_MARGIN 込み)を渡しても、渡さない場合と同じ装飾になる', () => {
+    const n = CHUNK_SIZE + DECOR_MARGIN * 2;
+    for (const [cx, cy] of [[1, 1], [-2, -1]]) {
+      const buf = new Uint8Array(n * n);
+      for (let ly = 0; ly < n; ly++)
+        for (let lx = 0; lx < n; lx++)
+          buf[ly * n + lx] = tileAt(42, cx * CHUNK_SIZE + lx - DECOR_MARGIN, cy * CHUNK_SIZE + ly - DECOR_MARGIN);
+      expect(decorateChunk(42, cx, cy, buf)).toEqual(decorateChunk(42, cx, cy));
+    }
   });
 });

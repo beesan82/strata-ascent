@@ -70,8 +70,16 @@ function mod(n: number, m: number): number {
   return ((n % m) + m) % m;
 }
 
-/** チャンク(cx, cy)の装飾を計算する純粋関数。同じ入力なら常に同じ出力 */
-export function decorateChunk(seed: number, cx: number, cy: number): DecorOp[] {
+/** decorateChunk が参照するチャンク周囲の幅(タイル) */
+export const DECOR_MARGIN = 17;
+
+/**
+ * チャンク(cx, cy)の装飾を計算する純粋関数。同じ入力なら常に同じ出力。
+ * pristine を渡すと、元地形(破壊前)を tileAt で引き直す代わりにそれを使う。並びは
+ * (CHUNK_SIZE+2*DECOR_MARGIN)² で、チャンク左上から (-DECOR_MARGIN,-DECOR_MARGIN) ずらした位置が先頭。
+ * 値は tileAt(seed, ...) と同じでなければならない(ChunkStore.pristineAround)。
+ */
+export function decorateChunk(seed: number, cx: number, cy: number, pristine?: Uint8Array): DecorOp[] {
   const ops: DecorOp[] = [];
   const bx = cx * CHUNK_SIZE;
   const by = cy * CHUNK_SIZE;
@@ -80,13 +88,18 @@ export function decorateChunk(seed: number, cx: number, cy: number): DecorOp[] {
   // 以降のタイル参照(タイルパス・セグメントパスの両方)はすべてこのバッファから読み、
   // tileAt呼び出しを 5*64*64 回から 98*98 回へ削減する。MARGIN=17 は全セグメント走査
   // (床16/天井8幅の水平走査 + 隣接1タイル確認、壁4幅の垂直走査)を範囲内に収める。
-  const MARGIN = 17;
+  const MARGIN = DECOR_MARGIN;
   const N = CHUNK_SIZE + 2 * MARGIN; // 98
-  const buf = new Int8Array(N * N);
-  for (let ly = -MARGIN; ly < CHUNK_SIZE + MARGIN; ly++) {
-    const rowBase = (ly + MARGIN) * N;
-    for (let lx = -MARGIN; lx < CHUNK_SIZE + MARGIN; lx++) {
-      buf[rowBase + (lx + MARGIN)] = tileAt(seed, bx + lx, by + ly);
+  let buf: Uint8Array | Int8Array;
+  if (pristine) {
+    buf = pristine;
+  } else {
+    buf = new Int8Array(N * N);
+    for (let ly = -MARGIN; ly < CHUNK_SIZE + MARGIN; ly++) {
+      const rowBase = (ly + MARGIN) * N;
+      for (let lx = -MARGIN; lx < CHUNK_SIZE + MARGIN; lx++) {
+        buf[rowBase + (lx + MARGIN)] = tileAt(seed, bx + lx, by + ly);
+      }
     }
   }
   // ローカル座標でバッファを読む(範囲外は AIR 扱い)
@@ -484,14 +497,20 @@ export class DecorCache {
 
   constructor(private seed: number) {}
 
-  get(cx: number, cy: number): DecorOp[] {
+  /** pristine は decorateChunk と同じ(省略時は tileAt で引き直す) */
+  get(cx: number, cy: number, pristine?: () => Uint8Array): DecorOp[] {
     const key = `${cx},${cy}`;
     let ops = this.ops.get(key);
     if (!ops) {
-      ops = decorateChunk(this.seed, cx, cy).filter((op) => !op.surface);
+      ops = decorateChunk(this.seed, cx, cy, pristine?.()).filter((op) => !op.surface);
       this.ops.set(key, ops);
     }
     return ops;
+  }
+
+  /** チャンクの装飾が計算済みか */
+  has(cx: number, cy: number): boolean {
+    return this.ops.has(`${cx},${cy}`);
   }
 
   /** ChunkBaker.evictFarFrom と同じ規則で破棄する */
