@@ -1,4 +1,4 @@
-import { CHUNK_SIZE, TILE, type Tile } from './tiles';
+import { CHUNK_SIZE, type Tile } from './tiles';
 import type { Destruction } from './destruction';
 import { generateChunk } from './worldgen';
 
@@ -17,19 +17,10 @@ export class ChunkStore {
     let chunk = this.chunks.get(key);
     if (!chunk) {
       chunk = generateChunk(this.seed, cx, cy);
-      if (this.destruction) this.applyDestruction(chunk, cx, cy, this.destruction);
+      this.destruction?.applyTo(chunk, cx, cy);
       this.chunks.set(key, chunk);
     }
     return chunk;
-  }
-
-  private applyDestruction(chunk: Uint8Array, cx: number, cy: number, destruction: Destruction): void {
-    if (destruction.size === 0) return;
-    const base = cx * CHUNK_SIZE;
-    const baseY = cy * CHUNK_SIZE;
-    for (let ty = 0; ty < CHUNK_SIZE; ty++)
-      for (let tx = 0; tx < CHUNK_SIZE; tx++)
-        if (destruction.isDestroyed(base + tx, baseY + ty)) chunk[ty * CHUNK_SIZE + tx] = TILE.AIR;
   }
 
   /** キャッシュから該当チャンクを削除(次回getChunkで再生成→破壊適用) */

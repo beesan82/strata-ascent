@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Destruction } from './destruction';
-import { TILE, type Tile } from './tiles';
+import { CHUNK_SIZE, TILE, type Tile } from './tiles';
 
 /** y=5行が床、x=10列が壁、他はAIRのテストワールド */
 const testTiles = (x: number, y: number): Tile => {
@@ -41,6 +41,31 @@ describe('Destruction', () => {
     expect(chunks.size).toBeGreaterThan(0);
     // 破壊タイル (100,5) が属するチャンク (1,0) が含まれる (CHUNK_SIZE=64)
     expect(chunks.has('1,0')).toBe(true);
+  });
+
+  it('applyTo はそのチャンク内の破壊タイルだけをAIRにする(負座標チャンクも)', () => {
+    const d = new Destruction();
+    // 左向きに床(y=5)を横切る → 負のチャンク(-1,0)にも破壊が入る
+    d.bore(5, 5, Math.PI, 20, 0, testTiles);
+    expect(d.isDestroyed(-3, 5)).toBe(true);
+    const chunk = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE).fill(TILE.SOLID);
+    d.applyTo(chunk, -1, 0);
+    // (-3,5) はチャンク(-1,0)のローカル(61,5)
+    expect(chunk[5 * CHUNK_SIZE + 61]).toBe(TILE.AIR);
+    expect(chunk[4 * CHUNK_SIZE + 61]).toBe(TILE.SOLID);
+    // 破壊のないチャンクには触らない
+    const untouched = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE).fill(TILE.SOLID);
+    d.applyTo(untouched, 3, 3);
+    expect(untouched.every((t) => t === TILE.SOLID)).toBe(true);
+  });
+
+  it('size は破壊タイル数(同じタイルを二度数えない)', () => {
+    const d = new Destruction();
+    d.bore(0, 5, 0, 20, 0, testTiles);
+    const n = d.size;
+    expect(n).toBeGreaterThan(0);
+    d.bore(0, 5, 0, 20, 0, testTiles);
+    expect(d.size).toBe(n);
   });
 
   it('縦方向・斜め方向でも破壊が経路に沿う', () => {
