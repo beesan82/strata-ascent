@@ -1,3 +1,5 @@
+import { TILE } from '../world/tiles';
+
 export interface CellRect {
   x: number;
   y: number;
@@ -78,4 +80,25 @@ export function expandRect(r: CellRect, margin: number, size: number): CellRect 
   const x1 = Math.min(size, r.x + r.w + margin);
   const y1 = Math.min(size, r.y + r.h + margin);
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/**
+ * クレーターとして描画から切り抜くセル(破壊済み かつ 元地形が空気でない)を、行ごとの連続区間の
+ * 矩形で返す。未生成チャンクへの破壊は元が空気のセルも記録されるので、元地形で絞ることで
+ * 撃った時点でチャンクが生成済みだったかどうかに結果が左右されないようにする。
+ * mask/pristine は size×size。
+ */
+export function craterCells(mask: Uint8Array, pristine: Uint8Array, size: number): CellRect[] {
+  const rects: CellRect[] = [];
+  for (let y = 0; y < size; y++) {
+    let x = 0;
+    while (x < size) {
+      const i = y * size + x;
+      if (mask[i] !== 1 || pristine[i] === TILE.AIR) { x++; continue; }
+      const start = x;
+      while (x < size && mask[y * size + x] === 1 && pristine[y * size + x] !== TILE.AIR) x++;
+      rects.push({ x: start, y, w: x - start, h: 1 });
+    }
+  }
+  return rects;
 }

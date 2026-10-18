@@ -10,7 +10,7 @@ import { megaFacilityAt } from '../world/megafacility';
 import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
 import { DECOR_MARGIN, DecorCache, decorOpBounds, type DecorOp } from './decor';
-import { dirtyBoundsAround, expandRect, type CellRect } from './dirtyBounds';
+import { craterCells, dirtyBoundsAround, expandRect, type CellRect } from './dirtyBounds';
 import { traceAt, type Trace } from './traces';
 import { STEEL } from './steel';
 
@@ -60,6 +60,8 @@ export class ChunkBaker {
   private decor: DecorCache;
   /** 部分再焼き込みの作業用キャンバス(全面サイズ、使い回す) */
   private scratch: HTMLCanvasElement | null = null;
+  /** 装飾・配管の作業レイヤー(decorLayer) */
+  private layer: HTMLCanvasElement | null = null;
   /** 帯ごとに焼いている途中の先読みチャンク(次に焼く帯の先頭行)。完成するまで cache には入れない */
   private pending = new Map<string, { canvas: HTMLCanvasElement; nextRow: number }>();
 
@@ -136,6 +138,21 @@ export class ChunkBaker {
       this.cache.set(key, this.bake(cx, cy, store));
     }
     this.stale.delete(key);
+  }
+
+  /** 装飾・配管を描く作業レイヤー(全面サイズ、使い回す) */
+  private decorLayer(): HTMLCanvasElement {
+    if (!this.layer) {
+      this.layer = document.createElement('canvas');
+      this.layer.width = this.layer.height = CHUNK_SIZE * BAKE_PPT;
+    }
+    return this.layer;
+  }
+
+  /** 装飾・配管を切り抜くクレーターのセル(破壊済み かつ 元地形が空気でない) */
+  private craterOf(cx: number, cy: number, store: ChunkStore): CellRect[] {
+    const destroyed = store.destroyedMask(cx, cy);
+    return destroyed ? craterCells(destroyed, store.pristineAround(cx, cy, 0), CHUNK_SIZE) : [];
   }
 
   /**
@@ -315,43 +332,55 @@ export class ChunkBaker {
     // 装飾(アトラスが描く表面線画=surfaceタグ付きはスキップ、物理装飾は残す)。
     // モックの色構成に合わせ、物理装飾は鋼ランプ由来のPALETTE色のまま焼く
     // (旧accent置換は廃止。暖色は錆・灯のみに限定する)。
-    ctx.lineCap = 'round';
+    // 装飾と配管は元地形から決まるので、破壊で消えたセル(元が空気でないもの)を消してから重ねる。
+    // クリップで切り抜くと、穴と同じ行に掛かる命令まで描き方(縁のAA)が変わり、部分再焼き込みと
+    // 食い違う。そこで別の透明なレイヤーへ描き、クレーターのセルを clearRect(16px単位で正確)で
+    // 消してから焼き込みへ等倍で重ねる。クレーターの外の画素は破壊の有無に左右されない。
+    const layer = this.decorLayer();
+    const dctx = layer.getContext('2d', { willReadFrequently: true })!;
+    dctx.save();
+    dctx.clearRect(span.x * P, span.y * P, span.w * P, span.h * P);
+    dctx.lineCap = 'round';
     for (const op of this.decorFor(cx, cy, store)) {
       if (tiles) {
         // 部分焼き込みでは、描く範囲に掛からない命令を省く(範囲内の画素には影響しない)
         const b = decorOpBounds(op, 1 / P);
         if (b.x1 < span.x || b.x0 > span.x + span.w || b.y1 < span.y || b.y0 > span.y + span.h) continue;
       }
-      this.draw(ctx, op);
+      this.draw(dctx, op);
     }
 
     // 配管コリドー: 全系統のconduitに配管ラインを重ね、通路が「配管」として読めるようにする。
     // networkTileAtと同じ条件なので、conduitが歩けるタイルを生む場所と正確に一致する。
     // 装飾は焼き込みキャンバスへの描画のみ。tileAt/ゲームプレイには一切影響しない。
     // 配管コリドーの線は鋼基調+系統accentを微量ティント(暖色の氾濫を防ぐ。系統識別は残す)
-    ctx.strokeStyle = mixHex(STEEL.post, biome.accent, 0.25);
-    ctx.lineWidth = Math.max(1, 0.14 * P);
+    dctx.strokeStyle = mixHex(STEEL.post, biome.accent, 0.25);
+    dctx.lineWidth = Math.max(1, 0.14 * P);
     for (let ty = span.y; ty < span.y + span.h; ty++) {
       const wy = by + ty;
       for (let tx = span.x; tx < span.x + span.w; tx++) {
         const wx = bx + tx;
         const c = conduitAt(this.seed, wx, wy);
         if (!c) continue;
-        ctx.beginPath();
+        dctx.beginPath();
         if (c.role === 'vertical') {
           // 縦シャフト: タイル中央に縦配管/ケーブルを1本
           const x = (tx + 0.5) * P;
-          ctx.moveTo(x, ty * P);
-          ctx.lineTo(x, (ty + 1) * P);
+          dctx.moveTo(x, ty * P);
+          dctx.lineTo(x, (ty + 1) * P);
         } else {
           // 水平コリドー(floor/inside): タイル上部に水平配管を1本
           const y = (ty + 0.18) * P;
-          ctx.moveTo(tx * P, y);
-          ctx.lineTo((tx + 1) * P, y);
+          dctx.moveTo(tx * P, y);
+          dctx.lineTo((tx + 1) * P, y);
         }
-        ctx.stroke();
+        dctx.stroke();
       }
     }
+    for (const r of this.craterOf(cx, cy, store)) dctx.clearRect(r.x * P, r.y * P, r.w * P, r.h * P);
+    dctx.restore();
+    ctx.drawImage(layer, span.x * P, span.y * P, span.w * P, span.h * P, span.x * P, span.y * P, span.w * P, span.h * P);
+    ctx.lineCap = 'round'; // 以降の水面・痕跡は従来どおり丸い線端で描く
 
     // 水系統の施設内部にだけ「たまり水の水面」を淡く描く(視覚のみ)。
     // ゲート: 水地域 かつ そのタイルが施設/メガ施設の内部空間(=facility/megaがAIRを返す)、

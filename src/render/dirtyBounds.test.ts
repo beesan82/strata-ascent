@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dirtyBoundsAround, expandRect, rebakeTargets } from './dirtyBounds';
+import { craterCells, dirtyBoundsAround, expandRect, rebakeTargets } from './dirtyBounds';
 
 /** 隣チャンクに破壊がない場合 */
 const dirtyBounds = (mask: Uint8Array, size: number, dilate: number) =>
@@ -79,5 +79,27 @@ describe('rebakeTargets', () => {
 describe('expandRect', () => {
   it('margin だけ広げて size 内に切り詰める', () => {
     expect(expandRect({ x: 3, y: 0, w: 2, h: 8 }, 1, 8)).toEqual({ x: 2, y: 0, w: 4, h: 8 });
+  });
+});
+
+describe('craterCells', () => {
+  it('破壊済みかつ元地形が空気でないセルを、行ごとの連続区間の矩形で返す', () => {
+    const size = 4;
+    const mask = new Uint8Array(size * size);
+    const pristine = new Uint8Array(size * size); // 0=AIR
+    // 行1: x=0..2 を破壊。元地形は x=0,1 がSOLID(1)、x=2 は元から空気
+    mask[1 * size + 0] = mask[1 * size + 1] = mask[1 * size + 2] = 1;
+    pristine[1 * size + 0] = pristine[1 * size + 1] = 1;
+    // 行3: x=3 を破壊(元SOLID)
+    mask[3 * size + 3] = 1;
+    pristine[3 * size + 3] = 1;
+    expect(craterCells(mask, pristine, size)).toEqual([
+      { x: 0, y: 1, w: 2, h: 1 },
+      { x: 3, y: 3, w: 1, h: 1 },
+    ]);
+  });
+
+  it('破壊がなければ空', () => {
+    expect(craterCells(new Uint8Array(16), new Uint8Array(16).fill(1), 4)).toEqual([]);
   });
 });
