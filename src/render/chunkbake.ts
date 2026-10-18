@@ -9,7 +9,7 @@ import { facilityTileAt } from '../world/facility';
 import { megaFacilityAt } from '../world/megafacility';
 import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
-import { decorateChunk, type DecorOp } from './decor';
+import { DecorCache, type DecorOp } from './decor';
 import { traceAt, type Trace } from './traces';
 import { STEEL } from './steel';
 
@@ -45,8 +45,12 @@ export class ChunkBaker {
   private patterns = new Map<string, CanvasPattern>();
   /** バイオーム名 → タイルアトラス(生成は高価なのでキャッシュ) */
   private atlasByBiome = new Map<string, Atlas>();
+  /** 装飾はボーリング後の再焼き込みでも変わらないので使い回す */
+  private decor: DecorCache;
 
-  constructor(private seed: number) {}
+  constructor(private seed: number) {
+    this.decor = new DecorCache(seed);
+  }
 
   /** バイオームに対応する色付きアトラスを取得(なければ生成してキャッシュ) */
   private atlasFor(key: string, palette: TilePalette): Atlas {
@@ -115,6 +119,7 @@ export class ChunkBaker {
         this.stale.delete(key);
       }
     }
+    this.decor.evictFarFrom(cx, cy, radius);
   }
 
   private bake(cx: number, cy: number, store: ChunkStore): HTMLCanvasElement {
@@ -210,10 +215,7 @@ export class ChunkBaker {
     // モックの色構成に合わせ、物理装飾は鋼ランプ由来のPALETTE色のまま焼く
     // (旧accent置換は廃止。暖色は錆・灯のみに限定する)。
     ctx.lineCap = 'round';
-    for (const op of decorateChunk(this.seed, cx, cy)) {
-      if (op.surface) continue;
-      this.draw(ctx, op);
-    }
+    for (const op of this.decor.get(cx, cy)) this.draw(ctx, op);
 
     // 配管コリドー: 全系統のconduitに配管ラインを重ね、通路が「配管」として読めるようにする。
     // networkTileAtと同じ条件なので、conduitが歩けるタイルを生む場所と正確に一致する。

@@ -474,3 +474,31 @@ function segmentOps(
     }
   }
 }
+
+/**
+ * 焼き込みで描く装飾(非surface)のチャンク単位メモ。decorateChunk は元地形だけを見る純関数で
+ * 破壊の影響を受けないため、ボーリング後の再焼き込みで同じ計算をやり直さずに済む。
+ */
+export class DecorCache {
+  private ops = new Map<string, DecorOp[]>();
+
+  constructor(private seed: number) {}
+
+  get(cx: number, cy: number): DecorOp[] {
+    const key = `${cx},${cy}`;
+    let ops = this.ops.get(key);
+    if (!ops) {
+      ops = decorateChunk(this.seed, cx, cy).filter((op) => !op.surface);
+      this.ops.set(key, ops);
+    }
+    return ops;
+  }
+
+  /** ChunkBaker.evictFarFrom と同じ規則で破棄する */
+  evictFarFrom(cx: number, cy: number, radius: number): void {
+    for (const key of this.ops.keys()) {
+      const [kx, ky] = key.split(',').map(Number);
+      if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > radius) this.ops.delete(key);
+    }
+  }
+}

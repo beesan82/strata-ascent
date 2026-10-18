@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TILE } from '../world/tiles';
 import { tileAt } from '../world/worldgen';
-import { decorateChunk, hatchSpacingAt, PALETTE } from './decor';
+import { DecorCache, decorateChunk, hatchSpacingAt, PALETTE } from './decor';
 
 // decorateChunk は (seed,cx,cy) の純関数。段階Fの広域スキャンは同じチャンクを
 // 複数テストで走査するため、seed=42 の結果をメモ化して再計算を避ける(挙動不変・高速化)。
@@ -375,5 +375,23 @@ describe('歩廊の弐瓶化(段階F)', () => {
     }
     // 恒真の排除: 境界近傍の歩廊装飾が少なくとも1つは実在すること(決定論なので安定)
     expect(found).toBeGreaterThan(0);
+  });
+});
+
+describe('DecorCache', () => {
+  it('焼き込みで描く非surface装飾だけを返し、同じチャンクは再計算しない', () => {
+    const cache = new DecorCache(42);
+    const ops = cache.get(1, 1);
+    expect(ops).toEqual(decorateChunk(42, 1, 1).filter((op) => !op.surface));
+    expect(cache.get(1, 1)).toBe(ops);
+  });
+
+  it('evictFarFrom はチェビシェフ距離 radius を超えるチャンクだけ破棄する', () => {
+    const cache = new DecorCache(42);
+    const near = cache.get(0, 0);
+    const far = cache.get(5, 0);
+    cache.evictFarFrom(0, 0, 4);
+    expect(cache.get(0, 0)).toBe(near);
+    expect(cache.get(5, 0)).not.toBe(far);
   });
 });
