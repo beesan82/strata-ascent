@@ -9,7 +9,7 @@ import {
 } from './biomeCells';
 import { terrainProfileFor } from './biomeTerrain';
 import { hash2 } from './noise';
-import { CHUNK_SIZE, TILE } from './tiles';
+import { CHUNK_SIZE, isSolid, TILE } from './tiles';
 import { findSpawn, generateChunk, noiseTileAt, tileAt, tileAtLive } from './worldgen';
 import { Destruction } from './destruction';
 import { ANTECHAMBER_DEPTH, interfaceBottom, interfaceTileAt, interfaceTop, passageX, terrainModsAt } from './interface';
@@ -206,45 +206,50 @@ describe('biome-driven terrain', () => {
 });
 
 describe('findSpawn', () => {
-  it('スポーン位置はSOLIDの中ではない', () => {
-    for (const seed of [1, 42, 20260711]) {
+  const seeds = [1, 42, 20260711];
+  it('スポーンは固体の中ではなく、cell 0 の前室の中(孔の左 24 タイル)', () => {
+    for (const seed of seeds) {
       const { x, y } = findSpawn(seed);
-      expect(tileAt(seed, Math.floor(x), Math.floor(y))).not.toBe(TILE.SOLID);
+      expect(isSolid(tileAt(seed, Math.floor(x), Math.floor(y)))).toBe(false);
+      expect(isSolid(tileAt(seed, Math.floor(x), Math.floor(y) + 1))).toBe(false);
+      const px = passageX(seed, 0, 0);
+      expect(Math.floor(x)).toBe(px - 24);
+      expect(y).toBeGreaterThan(interfaceBottom(seed, 0));
+      expect(y).toBeLessThan(interfaceBottom(seed, 0) + ANTECHAMBER_DEPTH);
     }
   });
+});
 
-  it('上方向ルートの存在: スポーンから実際にPlayerで梯子を登り、床帯を1つ以上突破できる', () => {
-    // 結合テスト(意図的): 単体テストだけではプレイヤーの足元判定とワールド生成の
-    // 統合契約(梯子が床帯を貫通し、実際に登り切れること)を検証できない。
-    // このテストはそのレビューの見落としを固定するための回帰テスト。
-    const seed = 20260711;
-    const spawn = findSpawn(seed);
-    const floorSpacing = terrainProfileFor(
-      biomeIdForCell(seed, biomeCellAt(seed, spawn.y)),
-    ).floorSpacing;
-
-    // スポーンが属する32タイル幅の列グループの梯子x座標を求める(tileAtの式を再現)。
-    // 実装と鏡写しの結合だが、「スポーン地点の近くに必ず梯子がある」ことを固定する
-    // 目的で意図的に許容する。
-    const group = Math.floor(spawn.x / 32);
-    const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, 0) * 32);
-
-    const tiles = (tx: number, ty: number) => tileAt(seed, tx, ty);
-    // Place the player above the ladder column at the spawn's Y coordinate.
-    const player = new Player(ladderX + 0.1, spawn.y);
-    const startFeet = player.body.y + player.body.h;
-
-    const upInput = { left: false, right: false, jump: false, up: true, down: false };
-    let maxRise = 0;
-    for (let i = 0; i < 1800; i++) {
-      // 30秒(dt=1/60)まで登り続ける
-      player.update(upInput, 1 / 60, tiles);
-      maxRise = Math.max(maxRise, startFeet - (player.body.y + player.body.h));
+describe('孔の到達可能性', () => {
+  it('前室の底から孔の梯子を登り切ると板の上面に立てる(Player 結合)', () => {
+    for (const seed of [1, 42, 20260711]) for (const cell of [0, -1, 2]) {
+      const top = interfaceTop(seed, cell), bottom = interfaceBottom(seed, cell);
+      const px = passageX(seed, cell, 0);
+      const tiles = (tx: number, ty: number) => tileAt(seed, tx, ty);
+      const player = new Player(px + 0.125, bottom + ANTECHAMBER_DEPTH - 1.75 - 0.05);
+      const up = { left: false, right: false, jump: false, up: true, down: false };
+      const idle = { ...up, up: false };
+      const right = { ...idle, right: true };
+      for (let i = 0; i < 3600; i++) player.update(up, 1 / 60, tiles);
+      // 梯子の上端(top-4)にぶら下がった状態から右へ歩いて板の上面に降りる
+      expect(player.body.y + player.body.h).toBeLessThanOrEqual(top - 2);
+      for (let i = 0; i < 60; i++) player.update(right, 1 / 60, tiles);
+      for (let i = 0; i < 60; i++) player.update(idle, 1 / 60, tiles);
+      const feet = player.body.y + player.body.h;
+      expect(feet).toBeLessThanOrEqual(top + 1e-6);
+      expect(feet).toBeGreaterThan(top - 1 / 16 - 1e-6);
+      expect(player.body.onGround).toBe(true);
     }
-
-    // 足元が最低でも1床帯分(floorSpacing)は上昇できているはず。
-    // 旧・中心のみのonLadder判定では自bandの床行で頭打ちになり、これが破綻する。
-    expect(maxRise).toBeGreaterThanOrEqual(floorSpacing);
+  });
+  it('板の上面から上へ続く 32 タイル梯子列が見晴らし台の中にある、または板の上面に接している', () => {
+    for (const seed of [1, 42, 20260711]) for (const cell of [0, -1, 2]) {
+      const top = interfaceTop(seed, cell), px = passageX(seed, cell, 0);
+      let found = false;
+      for (let x = px - 12; x < px + 72 && !found; x++) {
+        found = tileAt(seed, x, top - 1) === TILE.LADDER && tileAt(seed, x, top - 9) === TILE.LADDER;
+      }
+      expect(found).toBe(true);
+    }
   });
 });
 

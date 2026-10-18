@@ -2,10 +2,10 @@ import { facilityTileAt } from './facility';
 import { megaFacilityAt } from './megafacility';
 import { networkTileAt, sectorTrunkTileAt } from './network';
 import { biomeCellAt, biomeIdForCell } from './biomeCells';
-import { groupLadderX, interfaceTileAt, terrainModsAt, type TerrainMods } from './interface';
+import { ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceTileAt, passageX, terrainModsAt, type TerrainMods } from './interface';
 import { terrainProfileFor } from './biomeTerrain';
 import { hash2, valueNoise2 } from './noise';
-import { CHUNK_SIZE, TILE, type Tile } from './tiles';
+import { CHUNK_SIZE, isSolid, TILE, type Tile } from './tiles';
 import type { Destruction } from './destruction';
 
 /** 負数でも正しく回る剰余 */
@@ -63,8 +63,9 @@ export function tileAt(seed: number, x: number, y: number): Tile {
   // 界面(板・縦坑・見晴らし台・大穴)が最優先。
   const iface = interfaceTileAt(seed, x, y);
   if (iface !== null) return iface;
-  const mods = terrainModsAt(seed, x, y);
-  const base = noiseTileWith(seed, x, y, biomeCellAt(seed, y), mods);
+  const cell = biomeCellAt(seed, y);
+  const mods = terrainModsAt(seed, x, y, cell);
+  const base = noiseTileWith(seed, x, y, cell, mods);
   // 前室の内側は施設・幹線のオーバーレイを適用しない(空洞を壁で埋めない)。
   // 前室の底(forceFloor)も同様: 施設の内部(AIR)で連続した床が欠けないようにする。
   if (mods?.suppressLadder || mods?.forceFloor) return base;
@@ -95,18 +96,21 @@ export function generateChunk(seed: number, cx: number, cy: number): Uint8Array 
   return data;
 }
 
-/** 開始地点: x=8付近で「足元が床・体の入る空間」を上から探す */
+/** 開始地点: cell 0 の前室の中、孔の左 24 タイルの列で「足元が床・体の入る空間」を上から探す */
 export function findSpawn(seed: number): { x: number; y: number } {
-  for (let y = -1; y < 400; y++) {
-    const head = tileAt(seed, 8, y - 1);
-    const body = tileAt(seed, 8, y);
-    const below = tileAt(seed, 8, y + 1);
-    if (head !== TILE.SOLID && body !== TILE.SOLID && below === TILE.SOLID) {
+  const px = passageX(seed, 0, 0);
+  const sx = px - 24;
+  const bottom = interfaceBottom(seed, 0);
+  for (let y = bottom + 1; y <= bottom + ANTECHAMBER_DEPTH; y++) {
+    const head = tileAt(seed, sx, y - 1);
+    const body = tileAt(seed, sx, y);
+    const below = tileAt(seed, sx, y + 1);
+    if (!isSolid(head) && !isSolid(body) && isSolid(below)) {
       // 床の上面(y+1の上端)に高さ1.75の体を置く。少し浮かせて重力で着地させる
-      // 体(幅0.75)が検証済みのx=8列に収まるようx=8.1に置く
-      return { x: 8.1, y: y + 1 - 1.9 };
+      // 体(幅0.75)が検証済みの列 sx に収まるよう sx+0.1 に置く
+      return { x: sx + 0.1, y: y + 1 - 1.9 };
     }
   }
   console.warn('findSpawn: フォールバック位置を使用');
-  return { x: 8.1, y: 0 };
+  return { x: sx + 0.1, y: bottom + 1 };
 }
