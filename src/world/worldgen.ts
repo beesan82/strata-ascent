@@ -102,10 +102,12 @@ export function generateChunk(seed: number, cx: number, cy: number): Uint8Array 
 /** 開始時のズームは 1 で横 ±17 タイルしか見えないため、孔の梯子が必ず画面に入る距離 */
 export const SPAWN_OFFSET_FROM_PASSAGE = 12;
 
-/** 開始地点: cell 0 の前室の中、孔の左 SPAWN_OFFSET_FROM_PASSAGE タイルの列を床(最下段)から上へ走査し、最初の「足元が床・体の入る空間」を返す。通常は連続した床の行そのもの */
+/** 開始地点: cell 0 の前室の中、孔の左 SPAWN_OFFSET_FROM_PASSAGE タイル(梯子列なら左へずらした)列を床(最下段)から上へ走査し、最初の「足元が床・体の入る空間」を返す。通常は連続した床の行そのもの */
 export function findSpawn(seed: number): { x: number; y: number } {
   const px = passageX(seed, 0, 0);
-  const sx = px - SPAWN_OFFSET_FROM_PASSAGE;
+  let sx = px - SPAWN_OFFSET_FROM_PASSAGE;
+  // 床の行では 32 タイル梯子列が抑止されないため、その列だと足元が LADDER になる。左へ最大 4 ずらす
+  for (let i = 0; i < 4 && groupLadderX(seed, sx) === sx; i++) sx--;
   const bottom = interfaceBottom(seed, 0);
   for (let y = bottom + ANTECHAMBER_DEPTH - 1; y >= bottom + 1; y--) {
     const head = tileAt(seed, sx, y - 1);
@@ -118,5 +120,6 @@ export function findSpawn(seed: number): { x: number; y: number } {
     }
   }
   console.warn('findSpawn: フォールバック位置を使用');
-  return { x: sx + 0.1, y: bottom + 1 };
+  // フォールバックも前室の床の上(空中ではなく)
+  return { x: sx + 0.1, y: bottom + ANTECHAMBER_DEPTH - 1.9 };
 }

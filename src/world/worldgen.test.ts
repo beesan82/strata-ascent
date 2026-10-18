@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Player } from '../entities/player';
 import {
   BIOME_IDS,
@@ -12,7 +12,7 @@ import { hash2 } from './noise';
 import { CHUNK_SIZE, isSolid, TILE } from './tiles';
 import { SPAWN_OFFSET_FROM_PASSAGE, findSpawn, generateChunk, noiseTileAt, tileAt, tileAtLive } from './worldgen';
 import { Destruction } from './destruction';
-import { ANTECHAMBER_DEPTH, interfaceBottom, interfaceTileAt, interfaceTop, passageX, terrainModsAt } from './interface';
+import { ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceTileAt, interfaceTop, passageX, terrainModsAt } from './interface';
 
 /** 界面の地物・前室の内側ではノイズ梯子の不変条件を適用しない */
 function inInterfaceZone(seed: number, x: number, y: number): boolean {
@@ -214,9 +214,28 @@ describe('findSpawn', () => {
       expect(isSolid(tileAt(seed, Math.floor(x), Math.floor(y) + 1))).toBe(false);
       expect(isSolid(tileAt(seed, Math.floor(x), Math.floor(y) + 2))).toBe(true);
       const px = passageX(seed, 0, 0);
-      expect(Math.floor(x)).toBe(px - SPAWN_OFFSET_FROM_PASSAGE);
+      // 列が 32 タイル梯子列に当たる場合は左へずらす(最大 4)
+      const sx = Math.floor(x);
+      expect(px - sx).toBeGreaterThanOrEqual(SPAWN_OFFSET_FROM_PASSAGE);
+      expect(px - sx).toBeLessThanOrEqual(SPAWN_OFFSET_FROM_PASSAGE + 4);
+      expect(groupLadderX(seed, sx)).not.toBe(sx);
       expect(y).toBeGreaterThan(interfaceBottom(seed, 0));
       expect(y).toBeLessThan(interfaceBottom(seed, 0) + ANTECHAMBER_DEPTH);
+    }
+  });
+  it('seed 1..300 の全てで前室の床の上に立ち、フォールバックを使わない', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (let seed = 1; seed <= 300; seed++) {
+        const { x, y } = findSpawn(seed);
+        const sx = Math.floor(x), fy = Math.floor(y);
+        expect(isSolid(tileAt(seed, sx, fy))).toBe(false);
+        expect(isSolid(tileAt(seed, sx, fy + 1))).toBe(false);
+        expect(isSolid(tileAt(seed, sx, fy + 2))).toBe(true);
+      }
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
     }
   });
 });
