@@ -6,6 +6,7 @@ import {
   quantizeRgba,
 } from './pixel';
 import { paletteRgb, PIXEL_PALETTE, nearestIndex } from './palette';
+import { bayerOffset } from './dither';
 
 describe('quantizeRgba', () => {
   const rgb = paletteRgb();
@@ -41,6 +42,34 @@ describe('quantizeRgba', () => {
     quantizeRgba(a, 1, 1, rgb, 1);
     quantizeRgba(b, 1, 1, rgb, 1);
     expect([...a]).toEqual([...b]);
+  });
+
+  it('キャッシュ経由でも総当たりの参照実装と全画素一致する(強度を跨いでも)', () => {
+    const w = 37;
+    const h = 23;
+    const src = new Uint8ClampedArray(w * h * 4);
+    let s = 12345;
+    for (let i = 0; i < src.length; i++) {
+      s = (s * 1103515245 + 12345) >>> 0;
+      // 同色の繰り返し(キャッシュヒット)と多様な色(ミス)の両方を混ぜる
+      src[i] = i % 8 < 4 ? (s >>> 24) : (i * 7) & 255;
+    }
+    for (const strength of [0, 1, DITHER_STRENGTH, DITHER_STRENGTH, 40]) {
+      const fast = src.slice();
+      quantizeRgba(fast, w, h, rgb, strength);
+      const ref = src.slice();
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const o = (y * w + x) * 4;
+          const d = bayerOffset(x, y) * strength;
+          const idx = nearestIndex(ref[o] + d, ref[o + 1] + d, ref[o + 2] + d, rgb);
+          ref[o] = rgb[idx * 3];
+          ref[o + 1] = rgb[idx * 3 + 1];
+          ref[o + 2] = rgb[idx * 3 + 2];
+        }
+      }
+      expect([...fast]).toEqual([...ref]);
+    }
   });
 
   it('production strength disperses a representative color band', () => {
