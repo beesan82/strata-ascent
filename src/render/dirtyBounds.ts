@@ -10,9 +10,7 @@ type MaskAt = (cx: number, cy: number) => Uint8Array | undefined;
 /**
  * チャンク(cx,cy)の再焼き込み範囲。自チャンクの破壊に加え、隣接チャンクの破壊のうち境界から
  * dilate セル以内のもの(オートタイルや痕跡判定でこのチャンクの見た目に効く)も含めた外接矩形を
- * dilate だけ広げ、チャンク内へ切り詰める。何もなければ null。部分再焼き込みのクリップ領域に使う。
- * 複数矩形のクリップはGPUキャンバスで継ぎ目やタイル端の画素が全面焼き込みと食い違うため、
- * 1矩形に限っている。
+ * dilate だけ広げ、チャンク内へ切り詰める。何もなければ null。部分再焼き込みで描き直す範囲に使う。
  */
 export function dirtyBoundsAround(maskAt: MaskAt, cx: number, cy: number, size: number, dilate: number): CellRect | null {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;

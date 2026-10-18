@@ -53,6 +53,8 @@ export class ChunkBaker {
   private atlasByBiome = new Map<string, Atlas>();
   /** 装飾はボーリング後の再焼き込みでも変わらないので使い回す */
   private decor: DecorCache;
+  /** 部分再焼き込みの作業用キャンバス(全面サイズ、使い回す) */
+  private scratch: HTMLCanvasElement | null = null;
 
   constructor(private seed: number) {
     this.decor = new DecorCache(seed);
@@ -95,9 +97,8 @@ export class ChunkBaker {
 
   /**
    * 先読み/再焼き込み: 指定チャンクを(再)焼き込みしてキャッシュする。
-   * 無効化済みの画像があれば、破壊タイル(境界際の隣チャンク分を含む)の外接矩形だけをクリップして同じキャンバスへ描き直す
-   * (新規キャンバス全面のラスタ化を避ける)。クリップ内は全面焼き込みとほぼ同じ画素になる
-   * (クリップ端でGPUラスタの丸めによる数/255程度の差が出ることがある)。
+   * 無効化済みの画像があれば、破壊タイル(境界際の隣チャンク分を含む)の外接矩形だけを描き直して
+   * 同じキャンバスへ写す(新規キャンバスを作らない)。写した範囲は全面焼き込みと同じ画素になる。
    */
   refresh(cx: number, cy: number, store: ChunkStore): void {
     const key = `${cx},${cy}`;
@@ -105,8 +106,21 @@ export class ChunkBaker {
     const clip = old && this.stale.has(key)
       ? dirtyBoundsAround((x, y) => store.destroyedMask(x, y), cx, cy, CHUNK_SIZE, REBAKE_DILATE)
       : null;
-    if (old && clip) this.bake(cx, cy, store, old, clip);
-    else this.cache.set(key, this.bake(cx, cy, store));
+    if (old && clip) {
+      // クリップは使わない(クリップ端の画素が全面焼き込みと食い違う)。範囲の周辺だけを作業キャンバスへ
+      // 描き、範囲の矩形を等倍・整数座標で写す。CPUキャンバス同士なので写すのは単なる画素コピー。
+      if (!this.scratch) {
+        this.scratch = document.createElement('canvas');
+        this.scratch.width = this.scratch.height = CHUNK_SIZE * BAKE_PPT;
+      }
+      this.bake(cx, cy, store, this.scratch, expandRect(clip, 1, CHUNK_SIZE));
+      const P = BAKE_PPT;
+      const octx = old.getContext('2d', { willReadFrequently: true })!;
+      octx.clearRect(clip.x * P, clip.y * P, clip.w * P, clip.h * P);
+      octx.drawImage(this.scratch, clip.x * P, clip.y * P, clip.w * P, clip.h * P, clip.x * P, clip.y * P, clip.w * P, clip.h * P);
+    } else {
+      this.cache.set(key, this.bake(cx, cy, store));
+    }
     this.stale.delete(key);
   }
 
@@ -155,10 +169,13 @@ export class ChunkBaker {
     this.decor.evictFarFrom(cx, cy, radius);
   }
 
-  /** target を渡すとそのキャンバスの clip 矩形(タイル単位)だけを消して描き直す */
+  /**
+   * target を渡すとそのキャンバスの tiles(タイル単位)の範囲を消し、その中のタイルだけを描く
+   * (部分再焼き込み用。装飾は全体を描く)。正しい画素になるのは tiles の外周1タイル幅を除いた内側だけ。
+   */
   private bake(
     cx: number, cy: number, store: ChunkStore,
-    target?: HTMLCanvasElement, clip?: CellRect,
+    target?: HTMLCanvasElement, tiles?: CellRect,
   ): HTMLCanvasElement {
     const px = CHUNK_SIZE * BAKE_PPT;
     const canvas = target ?? document.createElement('canvas');
@@ -166,23 +183,16 @@ export class ChunkBaker {
       canvas.width = px;
       canvas.height = px;
     }
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
     // 再利用時に前回の描画状態を持ち越さないよう、焼き込み全体を save/restore で囲む
     ctx.save();
-    if (clip) {
-      ctx.beginPath();
-      ctx.rect(clip.x * BAKE_PPT, clip.y * BAKE_PPT, clip.w * BAKE_PPT, clip.h * BAKE_PPT);
-      ctx.clip();
-      // パスは save/restore の対象外。残すと以降の stroke/fill がクリップ矩形まで描いてしまう
-      ctx.beginPath();
-      ctx.clearRect(0, 0, px, px);
-    }
+    const span = tiles ?? { x: 0, y: 0, w: CHUNK_SIZE, h: CHUNK_SIZE };
+    if (target) ctx.clearRect(span.x * BAKE_PPT, span.y * BAKE_PPT, span.w * BAKE_PPT, span.h * BAKE_PPT);
     // タイルは滑らかに陰影付けされているが、境界で隣接アトラスセルを拾わないよう
     // スムージングを無効化してエッジをこの解像度で明瞭に保つ。
     ctx.imageSmoothingEnabled = false;
     // タイル単位の描画はタイルから最大0.5タイル程度しかはみ出さないので、部分再焼き込みでは
-    // クリップ+1タイルのタイルだけを回す(範囲外のタイルはクリップ内の画素に影響しない)
-    const span = clip ? expandRect(clip, 1, CHUNK_SIZE) : { x: 0, y: 0, w: CHUNK_SIZE, h: CHUNK_SIZE };
+    // 写す範囲+1タイルのタイルだけを回せば、写す範囲の画素は全面焼き込みと同じになる
     const chunk = store.getChunk(cx, cy);
     const bx = cx * CHUNK_SIZE;
     const by = cy * CHUNK_SIZE;
@@ -510,7 +520,7 @@ export class ChunkBaker {
       const c = document.createElement('canvas');
       c.width = s;
       c.height = s;
-      const pctx = c.getContext('2d')!;
+      const pctx = c.getContext('2d', { willReadFrequently: true })!;
       pctx.lineWidth = 1;
       // 主方向の45°線(タイル境界で連続するようセル内で完結する複数本)
       pctx.strokeStyle = color;
