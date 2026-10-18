@@ -74,6 +74,7 @@ describe('interfaceTileAt', () => {
     expect(interfaceTileAt(seed, px2 + 3, top2 + 5)).toBe(TILE.HARD);
     expect(interfaceTileAt(seed, px2 + 2, top2 + 32)).toBe(TILE.HARD);
     expect(interfaceTileAt(seed, px2, top2 + 32)).toBe(TILE.LADDER);
+    expect(interfaceTileAt(seed, px2 + 2, top2 + Math.round((2 * 96) / 3))).toBe(TILE.HARD); // 2 段目の踊り場
   });
   it('見晴らし台は板の上 8 行が空気、大穴は板を貫通、梯子列は板の上で残る', () => {
     for (const { seed, cell, k } of cases) {
@@ -88,6 +89,7 @@ describe('interfaceTileAt', () => {
       const half = isGreatInterface(cell) ? 2 : 1;
       for (let x = px - 12; x < px + 24; x++) if (Math.abs(x - px) > half) expect(interfaceTileAt(seed, x, top)).toBe(TILE.HARD);
       expect(interfaceTileAt(seed, px - 13, top - 1)).toBe(null);
+      expect(interfaceTileAt(seed, px + 72, top - 1)).toBe(null); // 見晴らし台の右端(排他)
     }
   });
 });

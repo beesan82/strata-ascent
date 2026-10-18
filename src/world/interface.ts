@@ -70,10 +70,8 @@ export function groupLadderX(seed: number, x: number): number {
 }
 
 /** 1 つの cell・1 つの孔 px について (x, y) のタイルを判定する(該当なしは null)。 */
-function tileForPassage(seed: number, cell: number, px: number, x: number, y: number): Tile | null {
-  const top = interfaceTop(seed, cell);
-  const t = interfaceThickness(cell);
-  const bottom = top + t;
+function tileForPassage(seed: number, cell: number, top: number, bottom: number, px: number, x: number, y: number): Tile | null {
+  const t = bottom - top;
   // 孔の梯子列(最優先)
   if (x === px && y >= top - SHAFT_OVERHANG && y < bottom + ANTECHAMBER_DEPTH) return TILE.LADDER;
   // 大穴(板の上の梯子列は切らない)
@@ -103,15 +101,16 @@ function tileForPassage(seed: number, cell: number, px: number, x: number, y: nu
 export function interfaceTileAt(seed: number, x: number, y: number): Tile | null {
   const c = biomeCellAt(seed, y);
   for (let cell = c; cell <= c + 1; cell++) {
-    // 見晴らし台・大穴は孔の右 72 まで伸びるので x−30 側の孔も候補に入れる
-    const a = nearestPassage(seed, cell, x).x;
-    const b = nearestPassage(seed, cell, x - 30).x;
-    const r = tileForPassage(seed, cell, a, x, y);
+    const top = interfaceTop(seed, cell);
+    const bottom = top + interfaceThickness(cell);
+    // 早期棄却: 界面タイルは全て [top − 見晴らし台, bottom + 前室) の行に収まる
+    if (y < top - OVERLOOK_HEIGHT || y >= bottom + ANTECHAMBER_DEPTH) continue;
+    // 候補は最寄りの孔 1 つで足りる。孔 p が持つタイルは x ∈ [p−12, p+72)、すなわち p ∈ (x−72, x+12]。
+    // 他の孔は p から 256 以上離れているので x から 184 以上離れ、p より遠い。
+    // よって nearestPassage(x) は常にその持ち主(板の HARD だけは孔によらず同じ値)。
+    const px = nearestPassage(seed, cell, x).x;
+    const r = tileForPassage(seed, cell, top, bottom, px, x, y);
     if (r !== null) return r;
-    if (b !== a) {
-      const r2 = tileForPassage(seed, cell, b, x, y);
-      if (r2 !== null) return r2;
-    }
   }
   return null;
 }
