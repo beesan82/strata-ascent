@@ -1,5 +1,21 @@
 import { hash2 } from '../world/noise';
 import { mixHex, type BiomeBlend, type BgLayer } from './biome';
+import { BAND_FACTOR, GLOW_FACTOR, GLOW_FALLOFF, GLOW_MIN, beaconGlowAt, interfaceBandsNear } from './beacon';
+import { STEEL } from './steel';
+
+/**
+ * 滲みの中心アルファ(強度 1 のとき)と、帯の不透明度。滲みは暗幕(最大 0.62)の下にあり、さらに
+ * 32 色へ量子化される。0.22 では消え、0.45 では塔の矩形と空で量子化先が割れて紫の斑になった
+ * (スクリーンショットで確認)。大穴の近く(約 100 タイル)は空も塔もまとめて accent 側の色に
+ * 落ち、遠くでは灰色の明度差だけが残る強さにする。
+ */
+const GLOW_ALPHA = 0.6;
+const BAND_ALPHA = 0.7;
+
+function withAlpha(hex: string, a: number): string {
+  const p = parseInt(hex.slice(1), 16);
+  return `rgba(${(p >> 16) & 255},${(p >> 8) & 255},${p & 255},${a})`;
+}
 
 export interface FarSil { kind: 'tower' | 'dome' | 'gantry' | 'ring'; x: number; w: number; h: number; color: string }
 
@@ -97,7 +113,54 @@ export class Background {
         case 'haze': this.haze(ctx, L, layerIndex, camY, w, h, ppt, opacity); break;
       }
     }
+
+    // 光の滲み(§6.2): 最寄りの大穴へ向かう横長グロー。構造群の手前のかすみとして乗せる
+    // (背後に置くと塔のシルエットに隠れて明るさの偏りが読めなかった)。
+    this.glow(ctx, camX, camY, w, h, ppt);
+
+    // 界面の帯(§6.1): 上下 1 画面以内の板を、最も手前の遠景層(追従率 0.6)として先に見せる。
+    this.bands(ctx, camY, w, h, ppt);
     ctx.globalAlpha = 1;
+  }
+
+  /**
+   * 滲み。最寄りの大穴の X を頂点に、水平距離 0→1、256→0.15(glowStrength と同じ折れ線)の
+   * 横グラデを追従率 0.9 で画面全体に lighter で乗せる。この折れ線をそのまま横の形にするので、
+   * 最寄りの大穴(最大 256 タイル先)までの範囲なら画面の中に必ず明るさの勾配があり、孔が
+   * 画面外でも方角が読める(矢印やマーカーは置かない)。設計書の「幅 300 タイル」の楕円は、
+   * 1 画面(34 タイル)の中では勾配が約 1 割しかなく暗幕と量子化の後に偏りが残らなかった。
+   * 縦は層の全高にわたり、板の下面で 1、次の板の上面で 0.4 に弱める(カメラ Y で一様)。
+   */
+  private glow(ctx: CanvasRenderingContext2D, camX: number, camY: number, w: number, h: number, ppt: number): void {
+    const g = beaconGlowAt(this.seed, camX, camY);
+    const depth = Math.max(0, Math.min(1, (camY - g.top) / (g.layerBottom - g.top)));
+    const a = GLOW_ALPHA * (1 - 0.6 * depth);
+    const sx = (g.x - camX) * GLOW_FACTOR * ppt + w / 2;
+    const span = GLOW_FALLOFF * GLOW_FACTOR * ppt;
+    const grad = ctx.createLinearGradient(sx - span, 0, sx + span, 0);
+    grad.addColorStop(0, withAlpha(g.color, a * GLOW_MIN));
+    grad.addColorStop(0.5, withAlpha(g.color, a));
+    grad.addColorStop(1, withAlpha(g.color, a * GLOW_MIN));
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+
+  /** 板の帯。追従率 0.6 で板と同じ Y に置き、暗い帯と下端の細い線で天井の存在を先に読ませる */
+  private bands(ctx: CanvasRenderingContext2D, camY: number, w: number, h: number, ppt: number): void {
+    for (const b of interfaceBandsNear(this.seed, camY, h / ppt)) {
+      const y0 = (b.top - camY) * BAND_FACTOR * ppt + h / 2;
+      const bh = (b.bottom - b.top) * BAND_FACTOR * ppt;
+      ctx.globalAlpha = BAND_ALPHA;
+      ctx.fillStyle = STEEL.black;
+      ctx.fillRect(0, y0, w, bh);
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = STEEL.shadow;
+      ctx.fillRect(0, y0 + bh, w, Math.max(1, 0.1 * ppt));
+    }
   }
 
   /** 近い層ほど不透明(0.2〜0.45に収める) */

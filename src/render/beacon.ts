@@ -23,8 +23,10 @@ export const POOL_FRINGE_RADIUS = 48;
 /** 脈動の周期(秒)と振幅 */
 export const PULSE_PERIOD = 7;
 export const PULSE_AMPLITUDE = 0.15;
-/** 背景の滲み: 幅(タイル)、追従率、強度が最小になる水平距離、最小強度 */
-export const GLOW_WIDTH = 300;
+/**
+ * 背景の滲み: 追従率、強度が最小になる水平距離、最小強度。横の形は glowStrength の折れ線そのもの
+ * (設計書の「幅 300」の楕円は 1 画面内の勾配が小さすぎて方角が読めなかった。Background.glow 参照)。
+ */
 export const GLOW_FACTOR = 0.9;
 export const GLOW_FALLOFF = 256;
 export const GLOW_MIN = 0.15;

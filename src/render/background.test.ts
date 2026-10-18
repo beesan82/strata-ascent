@@ -18,6 +18,21 @@ class RecordingContext {
     return this.currentFillStyle;
   }
 
+  /** fillRect の引数(x, y, w, h)の記録 */
+  readonly fillRects: [number, number, number, number][] = [];
+  /** globalCompositeOperation に代入された値の記録(滲みは lighter) */
+  readonly compositeOps: string[] = [];
+  private currentComposite = 'source-over';
+
+  set globalCompositeOperation(value: string) {
+    this.currentComposite = value;
+    this.compositeOps.push(value);
+  }
+
+  get globalCompositeOperation(): string {
+    return this.currentComposite;
+  }
+
   beginPath(): void {}
   moveTo(): void {}
   lineTo(): void {}
@@ -25,7 +40,14 @@ class RecordingContext {
   fill(): void {}
   stroke(): void {}
   arc(): void {}
-  fillRect(): void {}
+  ellipse(): void {}
+  save(): void {}
+  restore(): void {}
+  translate(): void {}
+  scale(): void {}
+  fillRect(x: number, y: number, w: number, h: number): void {
+    this.fillRects.push([x, y, w, h]);
+  }
   createLinearGradient(): CanvasGradient {
     return { addColorStop: () => {} } as unknown as CanvasGradient;
   }
@@ -69,6 +91,30 @@ describe('Background biome transitions', () => {
 
     expect(ctx.assignedFillStyles).toContain(BIOMES[0].bgLayers[0].color);
     expect(ctx.assignedFillStyles).toContain(BIOMES[1].bgLayers[0].color);
+  });
+});
+
+describe('Background beacon glow and interface bands', () => {
+  // seed 20260711 の cell 0: 板は top −9, bottom 23(厚み 32)。w=680px, ppt=20 → 横 34 タイル、縦 19 タイル
+  const SEED = 20260711;
+  const BAND_H = 32 * 0.6 * 20;
+
+  /** 滲みは画面全体を lighter で塗る */
+  const glowDrawn = (ctx: RecordingContext): boolean =>
+    ctx.compositeOps.includes('lighter') && ctx.fillRects.some(([x, y, w, h]) => x === 0 && y === 0 && w === 680 && h === 380);
+
+  it('前室の中では滲み(lighter の全面塗り)と板の帯(追従率 0.6)を描く', () => {
+    const ctx = new RecordingContext();
+    new Background(SEED).render(ctx as unknown as CanvasRenderingContext2D, 196, 40, 680, 380, 20, testBlend(0));
+    expect(glowDrawn(ctx)).toBe(true);
+    expect(ctx.fillRects.some(([, , , h]) => Math.abs(h - BAND_H) < 1)).toBe(true);
+  });
+
+  it('板から 1 画面以上離れると帯を描かないが、滲みは描く', () => {
+    const ctx = new RecordingContext();
+    new Background(SEED).render(ctx as unknown as CanvasRenderingContext2D, 196, 200, 680, 380, 20, testBlend(0));
+    expect(ctx.fillRects.some(([, , , h]) => Math.abs(h - BAND_H) < 1)).toBe(false);
+    expect(glowDrawn(ctx)).toBe(true);
   });
 });
 
