@@ -1,5 +1,6 @@
-import { biomeBoundary } from './biomeCells';
+import { biomeBoundary, biomeCellAt } from './biomeCells';
 import { hash2 } from './noise';
+import { TILE, type Tile } from './tiles';
 
 // 階層界面(各景観セルの上端にある不壊の水平板)の幾何。
 
@@ -66,4 +67,51 @@ export function nearestPassage(seed: number, cell: number, x: number): { k: numb
 export function groupLadderX(seed: number, x: number): number {
   const group = Math.floor(x / 32);
   return group * 32 + Math.floor(hash2(seed + 404, group, 0) * 32);
+}
+
+/** 1 つの cell・1 つの孔 px について (x, y) のタイルを判定する(該当なしは null)。 */
+function tileForPassage(seed: number, cell: number, px: number, x: number, y: number): Tile | null {
+  const top = interfaceTop(seed, cell);
+  const t = interfaceThickness(cell);
+  const bottom = top + t;
+  // 孔の梯子列(最優先)
+  if (x === px && y >= top - SHAFT_OVERHANG && y < bottom + ANTECHAMBER_DEPTH) return TILE.LADDER;
+  // 大穴(板の上の梯子列は切らない)
+  if (x >= px + HOLE_OFFSET && x < px + OVERLOOK_RIGHT && y >= top - SHAFT_OVERHANG && y < bottom + SHAFT_OVERHANG) {
+    return y < top && x === groupLadderX(seed, x) ? TILE.LADDER : TILE.AIR;
+  }
+  // 見晴らし台
+  if (x >= px - OVERLOOK_LEFT && x < px + OVERLOOK_RIGHT && y >= top - OVERLOOK_HEIGHT && y < top) {
+    return x === groupLadderX(seed, x) ? TILE.LADDER : TILE.AIR;
+  }
+  if (y >= top && y < bottom) {
+    // 縦坑の脇(大界面は踊り場の行だけ HARD)
+    const half = isGreatInterface(cell) ? GREAT_PASSAGE_HALF : PASSAGE_HALF;
+    if (Math.abs(x - px) <= half) {
+      if (isGreatInterface(cell) && (y === top + Math.round(t / 3) || y === top + Math.round((2 * t) / 3))) return TILE.HARD;
+      return TILE.AIR;
+    }
+    return TILE.HARD; // 板
+  }
+  return null;
+}
+
+/**
+ * 界面(板・縦坑・見晴らし台・大穴)のタイル。界面に属さなければ null。
+ * 板上の見晴らし台は biomeCellAt 上では 1 つ上の cell に入るため、cell と cell+1 の両方を調べる。
+ */
+export function interfaceTileAt(seed: number, x: number, y: number): Tile | null {
+  const c = biomeCellAt(seed, y);
+  for (let cell = c; cell <= c + 1; cell++) {
+    // 見晴らし台・大穴は孔の右 72 まで伸びるので x−30 側の孔も候補に入れる
+    const a = nearestPassage(seed, cell, x).x;
+    const b = nearestPassage(seed, cell, x - 30).x;
+    const r = tileForPassage(seed, cell, a, x, y);
+    if (r !== null) return r;
+    if (b !== a) {
+      const r2 = tileForPassage(seed, cell, b, x, y);
+      if (r2 !== null) return r2;
+    }
+  }
+  return null;
 }
