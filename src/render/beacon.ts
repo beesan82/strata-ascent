@@ -166,3 +166,82 @@ export function ambientDelta(seed: number, x: number, y: number): number {
   const u = clamp01((d - POOL_CORE_RADIUS) / (POOL_FRINGE_RADIUS - POOL_CORE_RADIUS));
   return fade * (AMBIENT_IN_POOL + (AMBIENT_OUT_POOL - AMBIENT_IN_POOL) * u);
 }
+
+/** #rrggbb → rgba() 文字列 */
+function withAlpha(hex: string, a: number): string {
+  const p = parseInt(hex.slice(1), 16);
+  return `rgba(${(p >> 16) & 255},${(p >> 8) & 255},${p & 255},${a})`;
+}
+
+/**
+ * 光柱の基準アルファ(脈動前)。lighter 合成で暗幕の上に乗せる。柱(柔らかい縁)+芯+光溜まりが
+ * 重なる軸上で合計 ≈ 0.3 になり、0.28 では accent が画面全体を飽和させた。
+ */
+const BEACON_ALPHA = 0.1;
+/** 光柱の芯の半幅(タイル)。縁をぼかさない硬い部分 */
+const CORE_HALF_WIDTH = 4;
+/** 光溜まりの縦横比(床に寝た楕円) */
+const POOL_ASPECT = 0.22;
+
+/**
+ * 光柱と光溜まりの描画(§6.2)。Lighting の暗幕の後に lighter で描く(§6.3: 暗幕で消えない)。
+ * テスト対象外(Canvas)。幾何は beaconsInView、脈動は beaconPulse。
+ */
+export class BeaconLights {
+  constructor(private seed: number) {}
+
+  render(
+    ctx: CanvasRenderingContext2D,
+    cam: { x: number; y: number },
+    w: number,
+    h: number,
+    ppt: number,
+    timeSec: number,
+  ): void {
+    const beacons = beaconsInView(this.seed, cam.x, cam.y, w / ppt, h / ppt);
+    if (beacons.length === 0) return;
+    const a = BEACON_ALPHA * beaconPulse(timeSec);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const b of beacons) {
+      const sx = (b.x - cam.x) * ppt + w / 2;
+      const sy0 = (b.top - cam.y) * ppt + h / 2;
+      const sy1 = (b.floor - cam.y) * ppt + h / 2;
+      // 画面内の縦範囲だけ塗る(グラデ座標は板の下面〜床のまま)
+      const yA = Math.max(sy0, 0);
+      const yB = Math.min(sy1, h);
+      if (yB > yA) {
+        // 柱(柔らかい縁): 横方向グラデ、中央 40% は一定
+        const half = BEACON_HALF_WIDTH * ppt;
+        const soft = ctx.createLinearGradient(sx - half, 0, sx + half, 0);
+        soft.addColorStop(0, withAlpha(b.color, 0));
+        soft.addColorStop(0.3, withAlpha(b.color, a));
+        soft.addColorStop(0.7, withAlpha(b.color, a));
+        soft.addColorStop(1, withAlpha(b.color, 0));
+        ctx.fillStyle = soft;
+        ctx.fillRect(sx - half, yA, half * 2, yB - yA);
+        // 柱の芯(硬い縁): 上で強く床へ向かって弱まる
+        const core = ctx.createLinearGradient(0, sy0, 0, sy1);
+        core.addColorStop(0, withAlpha(b.color, a * 0.9));
+        core.addColorStop(1, withAlpha(b.color, a * 0.35));
+        ctx.fillStyle = core;
+        const ch = CORE_HALF_WIDTH * ppt;
+        ctx.fillRect(sx - ch, yA, ch * 2, yB - yA);
+      }
+      // 光溜まり: 床の行の上端に寝た楕円。芯(20)は明るく、裾(48)は孔の梯子まで届く
+      const rx = POOL_FRINGE_RADIUS * ppt;
+      const ry = rx * POOL_ASPECT;
+      if (sy1 + ry >= 0 && sy1 - ry <= h && sx + rx >= 0 && sx - rx <= w) {
+        const pool = ctx.createRadialGradient(sx, sy1, 0, sx, sy1, rx);
+        pool.addColorStop(0, withAlpha(b.color, a * 1.3));
+        pool.addColorStop(POOL_CORE_RADIUS / POOL_FRINGE_RADIUS, withAlpha(b.color, a * 0.6));
+        pool.addColorStop(1, withAlpha(b.color, 0));
+        ctx.fillStyle = pool;
+        ctx.beginPath();
+        ctx.ellipse(sx, sy1, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+}

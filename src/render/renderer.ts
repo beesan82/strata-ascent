@@ -14,6 +14,7 @@ import { drawHierarchyDebug } from './debugHierarchy';
 import { drawBeam, drawCharge } from './beam';
 import { MegaStructure } from './megastructure';
 import { LightShafts } from './lightshaft';
+import { BeaconLights, ambientDelta } from './beacon';
 import { HIGH_FIDELITY_TILE_PX, PixelPipeline } from './pixel';
 import { paletteRgb } from './palette';
 import { quantizeZoom } from '../core/zoom';
@@ -37,6 +38,10 @@ const SHAKE_MAX = 6;
  * そろうよう16の倍数にする(6だと量子化後に空の画素が約0.4%入れ替わった)。
  */
 const SKY_PAD = 16;
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
 
 /** 溜め中/発射ビームの演出パラメータ(main→renderへ毎フレーム渡す) */
 export interface GravitonFx {
@@ -83,6 +88,7 @@ export class Renderer {
   private background: Background;
   private megastructure: MegaStructure;
   private lightShafts: LightShafts;
+  private beacons: BeaconLights;
   private debugMode: string | null = null;
   /**
    * 直近フレームで算出したエイム角(ワールド空間・マウス方向)。
@@ -107,6 +113,7 @@ export class Renderer {
     this.background = new Background(seed);
     this.megastructure = new MegaStructure(seed);
     this.lightShafts = new LightShafts(seed);
+    this.beacons = new BeaconLights(seed);
   }
 
   setDebug(mode: string | null): void {
@@ -192,6 +199,9 @@ export class Renderer {
 
     // バイオーム混合(背景・環境光で共有)
     const bb = biomeBlend(this.seed, player.centerX, player.body.y);
+    // §6.3 の補正: 前室の光溜まりの中で +0.15、外で −0.1(距離補間)。暗幕・光条・ビネットにだけ掛け、
+    // 空のフィルには掛けない(フィルは色キーで作業キャンバスを再生成するため、歩くたびに再描画が走る)。
+    const ambient = clamp01(bb.ambientLevel + ambientDelta(this.seed, player.centerX, player.body.y));
 
     // 背景(最初のフィル): ほぼ黒の鋼基準色をベースに、バイオーム環境色でわずかに持ち上げる。
     // ambientLevelが高いほど明るく色づき(水系統=大空洞帯は暗青の空気に)、
@@ -252,17 +262,21 @@ export class Renderer {
     );
 
     // バイオーム環境光+プレイヤー補助光
-    this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, bb.ambientLevel);
+    this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, ambient);
+
+    // 光柱と光溜まり(§6.2)。§6.3 により暗幕の上に lighter で描く(暗幕で消えない)。
+    // §6 の合成順ではプレイヤーの前だが、暗幕の上に置く規則を優先する。
+    this.beacons.render(ctx, renderCam, w, h, ppt, timeSec);
 
     // 光条(場所依存の体積光)。ライトの後・FX/postの前。暗く開けた空間だけに硬い光条が差す。
-    this.lightShafts.render(ctx, renderCam, w, h, ppt, bb.ambientLevel);
+    this.lightShafts.render(ctx, renderCam, w, h, ppt, ambient);
 
     // 重力子砲の演出: ライトの「上」に描いて発光体として読ませる。
     // ただし post(グレイン+ビネット)の「前」に描くことで画面全体の質感と馴染ませる。
     drawGravitonEffects(ctx, visualAnchors.muzzle, fx, w, h);
 
     // ポストプロセス(グレイン+ビネット)
-    this.post.render(ctx, w, h, bb.ambientLevel);
+    this.post.render(ctx, w, h, ambient);
 
     if (this.debugMode && this.debugMode.startsWith('hierarchy')) {
       // 'hierarchy' または 'hierarchy:<tilesAcross>'。既定は広域俯瞰(40000タイル)。
