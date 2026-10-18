@@ -7,6 +7,7 @@ import { regionAt } from '../world/hierarchy';
 import { conduitAt } from '../world/network';
 import { facilityTileAt } from '../world/facility';
 import { megaFacilityAt } from '../world/megafacility';
+import { terrainModsAt } from '../world/interface';
 import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
 import { DECOR_MARGIN, DecorCache, decorOpBounds, type DecorOp } from './decor';
@@ -407,6 +408,9 @@ export class ChunkBaker {
             megaFacilityAt(this.seed, wx, wy) === TILE.AIR ||
             facilityTileAt(this.seed, wx, wy) === TILE.AIR;
           if (!inFacility) continue;
+          // 前室(内側・底)では tileAt が施設オーバーレイを抑止するので、そこは施設内部ではない
+          const mods = terrainModsAt(this.seed, wx, wy);
+          if (mods?.suppressLadder || mods?.forceFloor) continue;
           if (!isSolid(around(tx, ty + 1)) && !isSolid(around(tx, ty + 2))) continue;
           const y = (ty + 0.5) * P;
           ctx.beginPath();
