@@ -16,10 +16,18 @@ import { LightShafts } from './lightshaft';
 import { HIGH_FIDELITY_TILE_PX, PixelPipeline } from './pixel';
 import { paletteRgb } from './palette';
 import { quantizeZoom } from '../core/zoom';
+import { nextBakeTask } from './bakeSchedule';
 import type { Vec2 } from './playerPose';
 
 /** 画面の横幅に収めるタイル数(スケール感の基準) */
 const VIEW_TILES_X = 34;
+
+/**
+ * 焼き込みキャッシュの保持半径(プレイヤーのチャンクからのチェビシェフ距離)。
+ * 1枚1024×1024(~4MB)と重いので衝突ストアより狭くする。半径2=5チャンク幅=320タイル >
+ * 最大ズームアウト時の視界(約68タイル)なので、可視範囲+先読み1チャンクが常に収まる。
+ */
+export const BAKE_KEEP_RADIUS = 2;
 
 /** 発射直後の画面シェイク最大振幅(px) */
 const SHAKE_MAX = 6;
@@ -235,5 +243,19 @@ export class Renderer {
     // update側がボーリング/ビーム方向として読めるよう、算出したエイム角を公開する
     this.aimAngle = angle;
     this.pipeline.present(this.screenCtx, this.canvas.width, this.canvas.height);
+
+    // 同期焼き込みのなかったフレームだけ、先読み/再焼き込みを1仕事進める
+    if (!this.baker.takeBakedThisFrame()) {
+      const task = nextBakeTask({
+        cx0, cx1, cy0, cy1,
+        centerCx: Math.floor(player.centerX / CHUNK_SIZE),
+        centerCy: Math.floor(player.centerY / CHUNK_SIZE),
+        keepRadius: BAKE_KEEP_RADIUS,
+        isBaked: (x, y) => this.baker.isFresh(x, y),
+        isGenerated: (x, y) => store.has(x, y),
+      });
+      if (task?.kind === 'generate') store.getChunk(task.cx, task.cy);
+      else if (task?.kind === 'bake') this.baker.refresh(task.cx, task.cy, store);
+    }
   }
 }

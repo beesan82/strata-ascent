@@ -39,6 +39,9 @@ export function chunkVisualAt(seed: number, cx: number, cy: number): ChunkVisual
 /** チャンク1枚を一度だけオフスクリーンCanvasへ焼き込み、以後はdrawImageで貼る */
 export class ChunkBaker {
   private cache = new Map<string, HTMLCanvasElement>();
+  /** 無効化済みで再焼き込み待ちのチャンク(画像は cache に古いまま残す) */
+  private stale = new Set<string>();
+  private bakedThisFrame = false;
   private patterns = new Map<string, CanvasPattern>();
   /** バイオーム名 → タイルアトラス(生成は高価なのでキャッシュ) */
   private atlasByBiome = new Map<string, Atlas>();
@@ -59,19 +62,48 @@ export class ChunkBaker {
     return this.cache.size;
   }
 
+  /**
+   * 焼き込み画像を返す。未焼き込みならその場で焼く(可視チャンクに穴を開けないため)。
+   * 無効化済み(stale)の画像は、再焼き込みされるまで古いまま返す。
+   */
   get(cx: number, cy: number, store: ChunkStore): HTMLCanvasElement {
     const key = `${cx},${cy}`;
     let canvas = this.cache.get(key);
     if (!canvas) {
       canvas = this.bake(cx, cy, store);
       this.cache.set(key, canvas);
+      this.bakedThisFrame = true;
     }
     return canvas;
   }
 
-  /** 指定チャンクの焼き込み画像を破棄(次回getで再焼き込み)。ChunkStore.invalidateと対で呼ぶ */
+  /** 最新の焼き込み画像があるか(未焼き込み・無効化済みなら false) */
+  isFresh(cx: number, cy: number): boolean {
+    const key = `${cx},${cy}`;
+    return this.cache.has(key) && !this.stale.has(key);
+  }
+
+  /** 先読み/再焼き込み: 指定チャンクを(再)焼き込みしてキャッシュする */
+  refresh(cx: number, cy: number, store: ChunkStore): void {
+    const key = `${cx},${cy}`;
+    this.cache.set(key, this.bake(cx, cy, store));
+    this.stale.delete(key);
+  }
+
+  /** このフレームで get が同期焼き込みをしたか。読むとリセットされる */
+  takeBakedThisFrame(): boolean {
+    const v = this.bakedThisFrame;
+    this.bakedThisFrame = false;
+    return v;
+  }
+
+  /**
+   * 指定チャンクの焼き込み画像を無効化する。ChunkStore.invalidateと対で呼ぶ。
+   * 画像は再焼き込みまで古いものを表示し続け、発射フレームに焼き込みが集中するのを避ける。
+   */
   invalidate(cx: number, cy: number): void {
-    this.cache.delete(`${cx},${cy}`);
+    const key = `${cx},${cy}`;
+    if (this.cache.has(key)) this.stale.add(key);
   }
 
   /** ChunkStoreのevictFarFromと同じ規則でキャッシュを破棄する(main側で対で呼ぶ) */
@@ -80,6 +112,7 @@ export class ChunkBaker {
       const [kx, ky] = key.split(',').map(Number);
       if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > radius) {
         this.cache.delete(key);
+        this.stale.delete(key);
       }
     }
   }

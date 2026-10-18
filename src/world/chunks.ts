@@ -12,6 +12,11 @@ export class ChunkStore {
     return this.chunks.size;
   }
 
+  /** チャンクのタイルデータが生成済み(キャッシュ中)か */
+  has(cx: number, cy: number): boolean {
+    return this.chunks.has(`${cx},${cy}`);
+  }
+
   getChunk(cx: number, cy: number): Uint8Array {
     const key = `${cx},${cy}`;
     let chunk = this.chunks.get(key);

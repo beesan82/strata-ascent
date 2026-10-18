@@ -2,7 +2,7 @@ import { Camera } from './core/camera';
 import { Input } from './core/input';
 import { Player } from './entities/player';
 import { Graviton } from './entities/graviton';
-import { Renderer } from './render/renderer';
+import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
 import { ChunkStore } from './world/chunks';
 import { Destruction } from './world/destruction';
 import { regionAt, type System } from './world/hierarchy';
@@ -17,9 +17,6 @@ const EVICT_INTERVAL_FRAMES = 120;
 const EVICT_RADIUS = 4;
 // 開放度サンプリング間隔(フレーム)。6=約100ms。tileAt多数のため毎フレームは避ける。
 const OPENNESS_SAMPLE_INTERVAL_FRAMES = 6;
-// 焼き込みキャッシュは1枚1024×1024(~4MB)と重いので、衝突ストアより狭い半径で破棄する。
-// 半径2=5チャンク幅=320タイル > ビューポート44タイルなので視界は常にカバーされる。
-const BAKE_EVICT_RADIUS = 2;
 
 // ?seed=123 で世界を変えられる(0も有効な値として許可。未指定/非数値時のみデフォルト)
 const params = new URLSearchParams(location.search);
@@ -110,7 +107,7 @@ function update(dt: number): void {
     const pcx = Math.floor(player.centerX / CHUNK_SIZE);
     const pcy = Math.floor(player.centerY / CHUNK_SIZE);
     store.evictFarFrom(pcx, pcy, EVICT_RADIUS);
-    renderer.evictFarFrom(pcx, pcy, BAKE_EVICT_RADIUS);
+    renderer.evictFarFrom(pcx, pcy, BAKE_KEEP_RADIUS);
   }
 }
 
