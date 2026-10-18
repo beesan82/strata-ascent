@@ -40,7 +40,14 @@ npx tsc --noEmit    # 型チェック
 npm run build       # 本番ビルド
 node scripts/screenshot.mjs --seed=20260711 --out=screenshots/shot.png
 node scripts/frametime.mjs --seed=20260711 --pos=244,66   # rAF 間隔と描画時間の p50/p95(ヘッドレス=ソフトウェア描画)
+node scripts/frametime.mjs --seed=20260711 --stages       # 描画段階ごとの同期ラスタ化時間(どの層が重いか)
+node scripts/dumpframe.mjs --out=frames/start.bin         # 量子化前の 1 フレームを保存 → quantbench.ts で量子化を比べる
+npx vite-node scripts/quantbench.ts frames/start.bin      # quantizeRgba の ms/フレームと近道の内訳(機械ノイズ無し)
+npx vite-node scripts/quantties.ts                        # 整数距離と浮動小数距離の同距離入力の列挙(パレット変更時)
 ```
+
+frametime の `present` は getImageData が描画コマンドを同期ラスタ化させる時間を含むので、present 単体の重さは
+`getImageData`(読み戻しだけ)+`quantize` の行で見る。層ごとの重さは `--stages` で見る。
 
 構成:
 

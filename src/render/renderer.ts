@@ -100,6 +100,35 @@ export class Renderer {
    * 描画コマンドはここで初めてラスタ化されるので、描画パスの重さもこの値に現れる。
    */
   lastPresentMs = 0;
+  /** 直近 present の内訳 [getImageData, quantize, putImageData, 転写](ms)。PixelPipeline.lastParts。 */
+  get lastPresentParts(): Float64Array {
+    return this.pipeline.lastParts;
+  }
+  /** 次フレームの量子化前の生画素を複写させる(scripts/dumpframe.mjs)。複写後は lastRawFrame で読む。 */
+  captureRawFrame(): void {
+    this.pipeline.captureRaw = true;
+  }
+  get lastRawFrame(): Uint8ClampedArray | null {
+    return this.pipeline.lastRaw;
+  }
+  get bufferSize(): { w: number; h: number } {
+    return { w: this.pipeline.bufW, h: this.pipeline.bufH };
+  }
+  /**
+   * true のとき描画段階ごとに 1×1 の getImageData で同期ラスタ化させ、段階ごとの所要時間(ms)を
+   * stageMs に残す(main の ?stats=2 → scripts/frametime.mjs --stages)。バッチ化が崩れるので
+   * 合計は通常より少し重くなるが、どの段階が重いかは分かる。
+   */
+  profileStages = false;
+  stageMs: Record<string, number> = {};
+  private stageT = 0;
+  private mark(name: string): void {
+    if (!this.profileStages) return;
+    this.ctx.getImageData(0, 0, 1, 1);
+    const t = performance.now();
+    this.stageMs[name] = t - this.stageT;
+    this.stageT = t;
+  }
   /** drawSky の作業キャンバスと、その色・寸法のキー */
   private sky: { key: string; canvas: HTMLCanvasElement } | null = null;
 
@@ -211,6 +240,7 @@ export class Renderer {
     // 発射直後の画面シェイク: シーン全体を微小にずらす。ビームの残光(alpha)に比例。
     // ctxを丸ごと平行移動するので各レイヤーは一貫してずれる。restoreで必ず戻す。
     const shake = fx.beam ? fx.beam.alpha * SHAKE_MAX : 0;
+    if (this.profileStages) this.stageT = performance.now();
     ctx.save();
     if (shake > 0.01) {
       const internalShake = Math.max(1, Math.round(shake / this.pipeline.scale));
@@ -234,12 +264,15 @@ export class Renderer {
     // 光の滲み(§6.2): 最寄りの大穴へ向かう横の明るさの偏りを空のフィルに焼き込む(遠景の背後)
     const glow = glowStrips(this.seed, renderCam.x, renderCam.y, w, ppt);
     this.drawSky(ctx, w, h, mixHex(lit, '#ffffff', 0.05 * bb.ambientLevel), mixHex(lit, '#000000', 0.45), glow);
+    this.mark('sky');
 
     // パララックス遠景(バイオーム配色の多層構造)
     this.background.render(ctx, renderCam.x, renderCam.y, w, h, ppt, bb);
+    this.mark('background');
 
     // 意味を持つ超構造(遠→中→近の深度＋かすみ)。焼き込みチャンクより背後、遠景パララックスより手前。
     this.megastructure.render(ctx, renderCam, w, h, ppt, bb);
+    this.mark('megastructure');
 
     // 可視チャンクの焼き込み画像を貼る
     const chunkPx = CHUNK_SIZE * ppt;
@@ -255,6 +288,7 @@ export class Renderer {
         ctx.drawImage(baked, sx, sy, chunkPx, chunkPx);
       }
     }
+    this.mark('chunks');
 
     // プレイヤー(コートの人影)
     const px = Math.round((player.centerX - renderCam.x) * ppt + w / 2);
@@ -285,6 +319,7 @@ export class Renderer {
       bb.ambientColor,
       timeSec,
     );
+    this.mark('player');
 
     // バイオーム環境光+プレイヤー補助光
     // 光柱と光溜まり(§6.2)は §6.3 により暗幕の上に lighter で描く(暗幕で消えない)。
@@ -292,16 +327,20 @@ export class Renderer {
     // 描いて一緒に乗せる(全画面 lighter を 1 パス節約。lighter の矩形は画素数に比例して重い)。
     this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, ambient, (lctx, s) =>
       this.beacons.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec));
+    this.mark('lighting');
 
     // 光条(場所依存の体積光)。ライトの後・FX/postの前。暗く開けた空間だけに硬い光条が差す。
     this.lightShafts.render(ctx, renderCam, w, h, ppt, ambient);
+    this.mark('shafts');
 
     // 重力子砲の演出: ライトの「上」に描いて発光体として読ませる。
     // ただし post(グレイン+ビネット)の「前」に描くことで画面全体の質感と馴染ませる。
     drawGravitonEffects(ctx, visualAnchors.muzzle, fx, w, h);
+    this.mark('fx');
 
     // ポストプロセス(グレイン+ビネット)
     this.post.render(ctx, w, h, ambient);
+    this.mark('post');
 
     if (this.debugMode && this.debugMode.startsWith('hierarchy')) {
       // 'hierarchy' または 'hierarchy:<tilesAcross>'。既定は広域俯瞰(40000タイル)。

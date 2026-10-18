@@ -2,8 +2,12 @@ import { nearestIndex } from './palette';
 import { bayerOffset } from './dither';
 import { STEEL } from './steel';
 
-/** 量子化キャッシュの大きさ(2^16)。隣り合う2枠を1組にした2-way(組の中は簡易LRU)。 */
-const QUANT_CACHE_BITS = 16;
+/**
+ * 量子化キャッシュの大きさ(2^18)。隣り合う2枠を1組にした2-way(組の中は簡易LRU)。
+ * 2^16 ではポストのグレイン(毎フレーム違う 3 枚、画素の半分を +1 する)が (色×Bayer) のキーを
+ * 3 倍に増やして溢れ、光溜まりの下で 1 フレーム約 4000 回の総当たりが起きていた。2^18 で約 1/10 になる。
+ */
+const QUANT_CACHE_BITS = 18;
 const QUANT_CACHE_SET_MASK = ((1 << QUANT_CACHE_BITS) - 1) & ~1;
 
 /**
@@ -20,30 +24,92 @@ function quantSlot(key: number): number {
   return h & QUANT_CACHE_SET_MASK;
 }
 
+/** 整数距離のスケール。Bayer オフセット×強度 12 は 3/8 刻みなので ×8 で整数になる。 */
+const INT_SCALE = 8;
+
 /**
  * (Bayer位置0..15, r,g,b) → 量子化後の色 の直接写像キャッシュ。
  * ディザ量は Bayer 位置ごとに16通りしかないので、このキーで nearestIndex の結果は一意に決まる
  * (総当たりと完全一致)。画面は同色が大半を占めるため、毎フレームの総当たり32色比較を避けられる。
  * 値は書き戻す色を画素と同じ32bit配置(リトルエンディアンで r|g<<8|b<<16、アルファ0)で持つ。
+ * offsets は Bayer 位置ごとのディザ量。intOffsets/palInt はミス時の整数距離用(全オフセット×8 が
+ * 整数のときだけ使う。そうでない強度では nearestIndex に落ちる)。
  */
 interface QuantCache {
   strength: number;
   keys: Int32Array;
   vals: Uint32Array;
+  offsets: Float64Array;
+  intExact: boolean;
+  intOffsets: Int32Array;
+  palInt: Int32Array;
 }
 const quantCaches = new WeakMap<Uint8Array, QuantCache>();
 
 function quantCacheFor(palRgb: Uint8Array, strength: number): QuantCache {
   let cache = quantCaches.get(palRgb);
   if (!cache || cache.strength !== strength) {
+    const offsets = new Float64Array(16);
+    const intOffsets = new Int32Array(16);
+    let intExact = true;
+    for (let i = 0; i < 16; i++) {
+      offsets[i] = bayerOffset(i & 3, i >> 2) * strength;
+      const scaled = offsets[i] * INT_SCALE;
+      if (!Number.isInteger(scaled)) intExact = false;
+      intOffsets[i] = scaled;
+    }
+    const palInt = new Int32Array(palRgb.length);
+    for (let i = 0; i < palRgb.length; i++) palInt[i] = palRgb[i] * INT_SCALE;
     cache = {
       strength,
       keys: new Int32Array(1 << QUANT_CACHE_BITS).fill(-1),
       vals: new Uint32Array(1 << QUANT_CACHE_BITS),
+      offsets,
+      intExact,
+      intOffsets,
+      palInt,
     };
     quantCaches.set(palRgb, cache);
   }
   return cache;
+}
+
+/**
+ * nearestIndex と同じ結果を整数演算で求める(キャッシュミス時の総当たり)。
+ * r8,g8,b8 はディザ量を足した値の ×8、palInt はパレット ×8。重み 0.30/0.59/0.11 は ×100 して
+ * 30/59/11。距離の大小は浮動小数版と一致する(差が 0 でなければ 1/6400 以上あり、丸め誤差より
+ * 桁違いに大きい)。唯一食い違い得るのは厳密な同距離で、そのときだけ浮動小数版と同じ比較に委ねる
+ * (scripts/quantties.ts が全入力を数え上げ、同距離は 2^24×16 入力中 205 件、うち整数の先勝ちと
+ * 浮動小数の結果が割れるものが 46 件あることを確かめている)。
+ */
+function nearestIndexInt(
+  r8: number, g8: number, b8: number, palInt: Int32Array, palRgb: Uint8Array, d: number, p: number,
+): number {
+  let best = 0;
+  let bestD = 0x7fffffff;
+  const n = palInt.length / 3;
+  for (let i = 0; i < n; i++) {
+    const dr = r8 - palInt[i * 3];
+    const dg = g8 - palInt[i * 3 + 1];
+    const db = b8 - palInt[i * 3 + 2];
+    const dist = 30 * dr * dr + 59 * dg * dg + 11 * db * db;
+    if (dist < bestD) {
+      bestD = dist;
+      best = i;
+    } else if (dist === bestD && floatDist(p, d, i, palRgb) < floatDist(p, d, best, palRgb)) {
+      // 厳密な同距離: 浮動小数の参照実装(nearestIndex)の「d < bestD」判定と同じにする
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** nearestIndex と同じ式・同じ演算順の浮動小数距離(同距離の裁定専用) */
+function floatDist(p: number, d: number, i: number, palRgb: Uint8Array): number {
+  const dr = (p & 255) + d - palRgb[i * 3];
+  const dg = ((p >>> 8) & 255) + d - palRgb[i * 3 + 1];
+  const db = ((p >>> 16) & 255) + d - palRgb[i * 3 + 2];
+  return 0.30 * dr * dr + 0.59 * dg * dg + 0.11 * db * db;
 }
 
 /**
@@ -60,9 +126,7 @@ export function quantizeRgba(
   palRgb: Uint8Array,
   strength: number,
 ): void {
-  const { keys, vals } = quantCacheFor(palRgb, strength);
-  const offsets = new Float64Array(16);
-  for (let i = 0; i < 16; i++) offsets[i] = bayerOffset(i & 3, i >> 2) * strength;
+  const { keys, vals, offsets, intExact, intOffsets, palInt } = quantCacheFor(palRgb, strength);
   const px = new Uint32Array(data.buffer, data.byteOffset, w * h);
   const src4 = new Uint32Array(4);
   const out4 = new Uint32Array(4);
@@ -92,7 +156,16 @@ export function quantizeRgba(
         vals[slot] = out;
       } else {
         const d = offsets[bi];
-        const idx = nearestIndex((p & 255) + d, ((p >>> 8) & 255) + d, ((p >>> 16) & 255) + d, palRgb);
+        let idx: number;
+        if (intExact) {
+          const d8 = intOffsets[bi];
+          idx = nearestIndexInt(
+            ((p & 255) << 3) + d8, (((p >>> 8) & 255) << 3) + d8, (((p >>> 16) & 255) << 3) + d8,
+            palInt, palRgb, d, p,
+          );
+        } else {
+          idx = nearestIndex((p & 255) + d, ((p >>> 8) & 255) + d, ((p >>> 16) & 255) + d, palRgb);
+        }
         out = palRgb[idx * 3] | (palRgb[idx * 3 + 1] << 8) | (palRgb[idx * 3 + 2] << 16);
         // 先頭を2番目へ押し出して先頭に入れる
         keys[slot + 1] = keys[slot];
@@ -149,7 +222,9 @@ export class PixelPipeline {
   constructor(palette: Uint8Array, private targetTilesX: number, private tilePx: number) {
     this.palRgb = palette;
     this.buffer = document.createElement('canvas');
-    this.bctx = this.buffer.getContext('2d', { willReadFrequently: true })!;
+    // 空のフィルが毎フレーム全面を不透明に塗るので alpha:false(不透明サーフェス)。getImageData の
+    // 読み戻しで premultiplied → straight の変換が要らなくなる。
+    this.bctx = this.buffer.getContext('2d', { willReadFrequently: true, alpha: false })!;
   }
 
   /** 画面寸法から内部解像度と整数スケールを決める。renderer.resizeから呼ぶ。 */
@@ -168,11 +243,29 @@ export class PixelPipeline {
     return this.bctx;
   }
 
+  /**
+   * 直近 present の内訳(ms): [getImageData(同期ラスタ化込み), quantizeRgba, putImageData, 画面への転写]。
+   * 計測用(main の ?stats=1 → scripts/frametime.mjs)。
+   */
+  lastParts = new Float64Array(4);
+  /** true のとき次の present で量子化前の生画素を lastRaw に複写する(scripts/dumpframe.mjs 用) */
+  captureRaw = false;
+  lastRaw: Uint8ClampedArray | null = null;
+
   /** 内部バッファを量子化し、画面へ整数拡大転写。余白(レターボックス)は最暗色で塗る。 */
   present(screenCtx: CanvasRenderingContext2D, screenW: number, screenH: number): void {
+    const parts = this.lastParts;
+    const t0 = performance.now();
     const img = this.bctx.getImageData(0, 0, this.bufW, this.bufH);
+    if (this.captureRaw) {
+      this.lastRaw = img.data.slice();
+      this.captureRaw = false;
+    }
+    const t1 = performance.now();
     quantizeRgba(img.data, this.bufW, this.bufH, this.palRgb, DITHER_STRENGTH);
+    const t2 = performance.now();
     this.bctx.putImageData(img, 0, 0);
+    const t3 = performance.now();
     screenCtx.imageSmoothingEnabled = false;
     screenCtx.fillStyle = STEEL.black;
     screenCtx.fillRect(0, 0, screenW, screenH);
@@ -181,5 +274,10 @@ export class PixelPipeline {
     const dx = Math.floor((screenW - dw) / 2);
     const dy = Math.floor((screenH - dh) / 2);
     screenCtx.drawImage(this.buffer, dx, dy, dw, dh);
+    const t4 = performance.now();
+    parts[0] = t1 - t0;
+    parts[1] = t2 - t1;
+    parts[2] = t3 - t2;
+    parts[3] = t4 - t3;
   }
 }
