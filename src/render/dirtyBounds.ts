@@ -5,27 +5,70 @@ export interface CellRect {
   h: number;
 }
 
+type MaskAt = (cx: number, cy: number) => Uint8Array | undefined;
+
 /**
- * size×size のマスク(1=対象)の外接矩形を dilate セルだけ広げて返す(範囲外は切り詰め)。
- * 対象がなければ null。部分再焼き込みのクリップ領域に使う。
+ * チャンク(cx,cy)の再焼き込み範囲。自チャンクの破壊に加え、隣接チャンクの破壊のうち境界から
+ * dilate セル以内のもの(オートタイルや痕跡判定でこのチャンクの見た目に効く)も含めた外接矩形を
+ * dilate だけ広げ、チャンク内へ切り詰める。何もなければ null。部分再焼き込みのクリップ領域に使う。
  * 複数矩形のクリップはGPUキャンバスで継ぎ目やタイル端の画素が全面焼き込みと食い違うため、
  * 1矩形に限っている。
  */
-export function dirtyBounds(mask: Uint8Array, size: number, dilate: number): CellRect | null {
-  let x0 = size, y0 = size, x1 = -1, y1 = -1;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      if (mask[y * size + x] !== 1) continue;
-      if (x < x0) x0 = x;
-      if (x > x1) x1 = x;
-      if (y < y0) y0 = y;
-      if (y > y1) y1 = y;
+export function dirtyBoundsAround(maskAt: MaskAt, cx: number, cy: number, size: number, dilate: number): CellRect | null {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let ny = -1; ny <= 1; ny++) {
+    for (let nx = -1; nx <= 1; nx++) {
+      const mask = maskAt(cx + nx, cy + ny);
+      if (!mask) continue;
+      // 隣のマスクは境界側の dilate 幅だけ見る(ローカル座標で [-dilate, size+dilate) の範囲)
+      const lx0 = nx < 0 ? size - dilate : 0;
+      const lx1 = nx > 0 ? dilate - 1 : size - 1;
+      const ly0 = ny < 0 ? size - dilate : 0;
+      const ly1 = ny > 0 ? dilate - 1 : size - 1;
+      for (let y = Math.max(0, ly0); y <= Math.min(size - 1, ly1); y++) {
+        for (let x = Math.max(0, lx0); x <= Math.min(size - 1, lx1); x++) {
+          if (mask[y * size + x] !== 1) continue;
+          const wx = x + nx * size;
+          const wy = y + ny * size;
+          if (wx < x0) x0 = wx;
+          if (wx > x1) x1 = wx;
+          if (wy < y0) y0 = wy;
+          if (wy > y1) y1 = wy;
+        }
+      }
     }
   }
-  if (x1 < 0) return null;
+  if (x1 === -Infinity) return null;
   x0 = Math.max(0, x0 - dilate);
   y0 = Math.max(0, y0 - dilate);
   x1 = Math.min(size - 1, x1 + dilate);
   y1 = Math.min(size - 1, y1 + dilate);
   return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+/**
+ * 破壊のあったチャンク群から、焼き込みを無効化すべきチャンク("cx,cy")を返す。
+ * 破壊チャンク自身に加え、境界から dilate セル以内に破壊がある側の隣接チャンクを含める。
+ */
+export function rebakeTargets(affected: Iterable<string>, maskAt: MaskAt, size: number, dilate: number): Set<string> {
+  const out = new Set<string>();
+  for (const key of affected) {
+    out.add(key);
+    const [cx, cy] = key.split(',').map(Number);
+    const mask = maskAt(cx, cy);
+    if (!mask) continue;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        if (mask[y * size + x] !== 1) continue;
+        const nx0 = x < dilate ? -1 : 0;
+        const nx1 = x >= size - dilate ? 1 : 0;
+        const ny0 = y < dilate ? -1 : 0;
+        const ny1 = y >= size - dilate ? 1 : 0;
+        for (let ny = ny0; ny <= ny1; ny++)
+          for (let nx = nx0; nx <= nx1; nx++)
+            if (nx !== 0 || ny !== 0) out.add(`${cx + nx},${cy + ny}`);
+      }
+    }
+  }
+  return out;
 }

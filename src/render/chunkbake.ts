@@ -10,7 +10,7 @@ import { megaFacilityAt } from '../world/megafacility';
 import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
 import { DecorCache, type DecorOp } from './decor';
-import { dirtyBounds, type CellRect } from './dirtyBounds';
+import { dirtyBoundsAround, type CellRect } from './dirtyBounds';
 import { traceAt, type Trace } from './traces';
 import { STEEL } from './steel';
 
@@ -23,7 +23,7 @@ export const CHUNK_VISUAL_BLEND_STEPS = 16;
  * 部分再焼き込みで破壊タイルから広げる幅(タイル)。破壊の影響は隣接タイルのオートタイル/
  * 陰影、1〜2タイル上の痕跡・水面判定と、それらのはみ出し(灯の光暈≈0.5タイル)に収まる。
  */
-const REBAKE_DILATE = 2;
+export const REBAKE_DILATE = 2;
 
 export interface ChunkVisual extends BiomeBlend {
   cacheKey: string;
@@ -95,15 +95,16 @@ export class ChunkBaker {
 
   /**
    * 先読み/再焼き込み: 指定チャンクを(再)焼き込みしてキャッシュする。
-   * 無効化済みの画像があれば、破壊タイルの外接矩形だけをクリップして同じキャンバスへ描き直す
+   * 無効化済みの画像があれば、破壊タイル(境界際の隣チャンク分を含む)の外接矩形だけをクリップして同じキャンバスへ描き直す
    * (新規キャンバス全面のラスタ化を避ける)。クリップ内は全面焼き込みとほぼ同じ画素になる
    * (クリップ端でGPUラスタの丸めによる数/255程度の差が出ることがある)。
    */
   refresh(cx: number, cy: number, store: ChunkStore): void {
     const key = `${cx},${cy}`;
     const old = this.cache.get(key);
-    const mask = store.destroyedMask(cx, cy);
-    const clip = old && this.stale.has(key) && mask ? dirtyBounds(mask, CHUNK_SIZE, REBAKE_DILATE) : null;
+    const clip = old && this.stale.has(key)
+      ? dirtyBoundsAround((x, y) => store.destroyedMask(x, y), cx, cy, CHUNK_SIZE, REBAKE_DILATE)
+      : null;
     if (old && clip) this.bake(cx, cy, store, old, clip);
     else this.cache.set(key, this.bake(cx, cy, store));
     this.stale.delete(key);

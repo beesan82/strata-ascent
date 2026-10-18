@@ -3,7 +3,8 @@ import type { Player } from '../entities/player';
 import type { ChunkStore } from '../world/chunks';
 import { CHUNK_SIZE } from '../world/tiles';
 import { Background } from './background';
-import { ChunkBaker } from './chunkbake';
+import { ChunkBaker, REBAKE_DILATE } from './chunkbake';
+import { rebakeTargets } from './dirtyBounds';
 import { Lighting } from './lighting';
 import { biomeBlend, mixHex } from './biome';
 import { STEEL } from './steel';
@@ -119,9 +120,15 @@ export class Renderer {
     this.baker.evictFarFrom(cx, cy, radius);
   }
 
-  /** ChunkStore.applyDestructionと対で呼ぶ(ボーリングされたチャンクの焼き込み画像を再焼き込み待ちにする) */
-  invalidate(cx: number, cy: number): void {
-    this.baker.invalidate(cx, cy);
+  /**
+   * ChunkStore.applyDestructionと対で呼ぶ。ボーリングされたチャンクと、境界際の破壊で見た目が
+   * 変わる隣接チャンクの焼き込み画像を再焼き込み待ちにする。affected は Destruction.bore の戻り値。
+   */
+  invalidateBored(affected: Iterable<string>, store: ChunkStore): void {
+    for (const key of rebakeTargets(affected, (x, y) => store.destroyedMask(x, y), CHUNK_SIZE, REBAKE_DILATE)) {
+      const [cx, cy] = key.split(',').map(Number);
+      this.baker.invalidate(cx, cy);
+    }
   }
 
   render(

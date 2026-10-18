@@ -71,8 +71,8 @@ function fire(): void {
   for (const key of affected) {
     const [cx, cy] = key.split(',').map(Number);
     store.applyDestruction(cx, cy); // 生成済みチャンクへその場で反映(再生成しない)
-    renderer.invalidate(cx, cy); // 焼き込み画像を破棄→クレーターが見えるよう再焼き込み
   }
+  renderer.invalidateBored(affected, store); // 焼き込みを再焼き込み待ちに(境界際の隣チャンクも)
   lastBeam = { angle: aim, ttl: BEAM_TTL };
 }
 
