@@ -330,6 +330,30 @@ describe('tileAtLive(破壊差分込み)', () => {
           expect(tileAtLive(42, x, y, d)).toBe(TILE.AIR); }
     expect(found).toBe(true);
   });
+  it('未生成チャンク越しの bore でも界面の板(HARD)は破壊されない(生成+applyTo 後も、tileAtLive でも HARD)', () => {
+    const seed = 20260711;
+    const x = passageX(seed, 0, 0) - 100;
+    const y = interfaceTop(seed, 0) + 10;
+    expect(tileAt(seed, x, y)).toBe(TILE.HARD);
+    const d = new Destruction();
+    // 発射時は未生成扱い(tiles=undefined)。述語は main.ts と同じ界面判定
+    d.bore(x - 5, y, 0, 10, 1, () => undefined, (ax, ay) => interfaceTileAt(seed, ax, ay) === TILE.HARD);
+    expect(d.isDestroyed(x, y)).toBe(false);
+    const cx = Math.floor(x / CHUNK_SIZE), cy = Math.floor(y / CHUNK_SIZE);
+    const chunk = generateChunk(seed, cx, cy);
+    d.applyTo(chunk, cx, cy);
+    expect(chunk[(y - cy * CHUNK_SIZE) * CHUNK_SIZE + (x - cx * CHUNK_SIZE)]).toBe(TILE.HARD);
+    expect(tileAtLive(seed, x, y, d)).toBe(TILE.HARD);
+  });
+  it('破壊マスクが HARD の位置に立っていても tileAtLive は HARD を返す', () => {
+    const seed = 20260711;
+    const x = passageX(seed, 0, 0) - 100;
+    const y = interfaceTop(seed, 0) + 10;
+    const d = new Destruction();
+    d.bore(x, y, 0, 0, 0, () => undefined); // 述語なし=旧挙動で盲目的に記録
+    expect(d.isDestroyed(x, y)).toBe(true);
+    expect(tileAtLive(seed, x, y, d)).toBe(TILE.HARD);
+  });
 });
 
 describe('界面と前室の合成', () => {

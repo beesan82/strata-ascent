@@ -77,9 +77,12 @@ export function tileAt(seed: number, x: number, y: number): Tile {
   return overlay ?? base;
 }
 
-/** 実描画・物理が使う経路。破壊差分を最優先で反映(空なら tileAt と同値) */
+/** 実描画・物理が使う経路。破壊差分を最優先で反映(空なら tileAt と同値)。HARD は破壊済みでも HARD のまま */
 export function tileAtLive(seed: number, x: number, y: number, destruction: Destruction): Tile {
-  if (destruction.isDestroyed(x, y)) return TILE.AIR;
+  if (destruction.isDestroyed(x, y)) {
+    // 多層防御: 誤って記録された板(HARD)も不壊(破壊済みの経路でだけ tileAt を計算する)
+    return tileAt(seed, x, y) === TILE.HARD ? TILE.HARD : TILE.AIR;
+  }
   return tileAt(seed, x, y);
 }
 
