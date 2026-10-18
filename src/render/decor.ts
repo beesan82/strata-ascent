@@ -1,6 +1,6 @@
 import { hash2 } from '../world/noise';
 import { stratumIndexAt } from '../world/strata';
-import { CHUNK_SIZE, TILE } from '../world/tiles';
+import { CHUNK_SIZE, TILE, isSolid } from '../world/tiles';
 import { tileAt } from '../world/worldgen';
 import { STEEL, mixHex } from './steel';
 
@@ -145,7 +145,7 @@ export function decorateChunk(seed: number, cx: number, cy: number, pristine?: U
     if (ix < 0 || iy < 0 || ix >= N || iy >= N) return TILE.AIR;
     return buf[iy * N + ix];
   };
-  const solid = (lx: number, ly: number) => t(lx, ly) === TILE.SOLID;
+  const solid = (lx: number, ly: number) => isSolid(t(lx, ly));
 
   for (let ly = 0; ly < CHUNK_SIZE; ly++) {
     const wy = by + ly;

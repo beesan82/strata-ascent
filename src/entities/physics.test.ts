@@ -98,3 +98,14 @@ describe('moveBody', () => {
     expect(b.onGround).toBe(false);
   });
 });
+
+it('HARD は SOLID と同じく衝突する(床として立てる)', () => {
+  const tiles = (_x: number, y: number) => (y === 5 ? TILE.HARD : TILE.AIR);
+  const body = { x: 0.1, y: 3, w: 0.75, h: 1.75, vx: 0, vy: 10, onGround: false };
+  moveBody(body, 1 / 60, tiles);
+  for (let i = 0; i < 60; i++) { body.vy += 30 / 60; moveBody(body, 1 / 60, tiles); }
+  expect(body.onGround).toBe(true);
+  // 衝突解決は 1/16 タイル刻みの探索なので、床面の手前 1/16 以内で止まる
+  expect(body.y + body.h).toBeLessThanOrEqual(5);
+  expect(body.y + body.h).toBeGreaterThan(5 - 1 / 16 - 1e-6);
+});

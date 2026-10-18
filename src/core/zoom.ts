@@ -1,4 +1,4 @@
-import { TILE } from '../world/tiles';
+import { isSolid } from '../world/tiles';
 
 /** ズーム下限(最大ズームアウト)。0.5 = 標準の2倍のタイルが横に入る(≒横88タイル) */
 export const MIN_ZOOM = 0.5;
@@ -40,7 +40,7 @@ export function sampleOpenness(
   for (let y = y0; y <= y1; y += step) {
     for (let x = x0; x <= x1; x += step) {
       total++;
-      if (tileAt(x, y) !== TILE.SOLID) open++;
+      if (!isSolid(tileAt(x, y))) open++;
     }
   }
   return total === 0 ? 0 : open / total;

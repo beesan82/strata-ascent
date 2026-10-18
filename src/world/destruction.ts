@@ -71,7 +71,10 @@ export class Destruction {
         }
         const i = (wy - cy * CHUNK_SIZE) * CHUNK_SIZE + (wx - cx * CHUNK_SIZE);
         if (mask && mask[i] === 1) continue;
-        if (tiles(wx, wy) === TILE.AIR) continue;
+        const t = tiles(wx, wy);
+        if (t === TILE.AIR) continue;
+        // 破壊不能(界面の板)は掘れない
+        if (t === TILE.HARD) continue;
         if (!mask) {
           mask = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
           this.masks.set(lastKey, mask);

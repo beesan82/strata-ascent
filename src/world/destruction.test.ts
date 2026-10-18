@@ -99,3 +99,11 @@ describe('Destruction', () => {
     expect(d.maskOf(3, 3)).toBeUndefined();
   });
 });
+
+it('bore は HARD を破壊しない(SOLID は破壊する)', () => {
+  const d = new Destruction();
+  const tiles = (x: number, y: number): Tile => (y === 5 ? (x < 10 ? TILE.SOLID : TILE.HARD) : TILE.AIR);
+  d.bore(0, 5, 0, 20, 0, tiles);
+  expect(d.isDestroyed(3, 5)).toBe(true);
+  expect(d.isDestroyed(15, 5)).toBe(false);
+});
