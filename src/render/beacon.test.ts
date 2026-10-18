@@ -105,6 +105,22 @@ describe('glowStrips', () => {
     expect(left[0].alpha).toBeGreaterThan(left[left.length - 1].alpha);
   });
 
+  it('歩いても帯の配置は 8 px の格子単位でしか変わらない(空のフィルの塗り直しを抑える)', () => {
+    // 大穴が画面外(右 60 タイル)の位置から 0.1 タイル刻みで 10 タイル歩く。parallax 0.9×12 px/タイルで
+    // 108 px 進むので、8 px 格子なら配置は高々 14+1 通り。毎フレーム変わるなら 100 通り
+    const layouts = new Set<string>();
+    for (let i = 0; i <= 100; i++) {
+      const { strips } = glowStrips(SEED, px0 - 12 + i * 0.1, bottom0 + 46, w, ppt);
+      layouts.add(strips.map((s) => `${s.x0}-${s.x1}:${s.alpha}`).join(','));
+    }
+    expect(layouts.size).toBeLessThanOrEqual(16);
+  });
+
+  it('大穴が画面外でも帯は 12 本以下(量子化キャッシュと塗り直しのため)', () => {
+    expect(glowStrips(SEED, px0 - 12, bottom0 + 46, w, ppt).strips.length).toBeLessThanOrEqual(12);
+    expect(glowStrips(SEED, 40, bottom0 + 40, w, ppt).strips.length).toBeLessThanOrEqual(12);
+  });
+
   it('大穴が画面中央にあれば偏りは無く、左右の端は同じ明るさ', () => {
     const s = glowStrips(SEED, px0 + 48, bottom0 + 46, w, ppt).strips;
     expect(s[0].alpha).toBeCloseTo(s[s.length - 1].alpha, 2);
@@ -140,6 +156,15 @@ describe('ambientDelta', () => {
     expect(ambientDelta(SEED, hx - POOL_FRINGE_RADIUS, floorY)).toBeCloseTo(AMBIENT_OUT_POOL);
     const mid = ambientDelta(SEED, hx + (POOL_CORE_RADIUS + POOL_FRINGE_RADIUS) / 2, floorY);
     expect(mid).toBeCloseTo((AMBIENT_IN_POOL + AMBIENT_OUT_POOL) / 2);
+  });
+
+  it('板の下面から下へ 4 タイルで 0 から立ち上がる(孔を抜けた瞬間に暗幕が跳ばない)', () => {
+    const hx = px0 + 48;
+    expect(ambientDelta(SEED, hx, bottom0 - 1)).toBe(0);
+    expect(ambientDelta(SEED, hx, bottom0)).toBe(0);
+    expect(ambientDelta(SEED, hx, bottom0 + 2)).toBeCloseTo(AMBIENT_IN_POOL / 2);
+    expect(ambientDelta(SEED, hx, bottom0 + 4)).toBeCloseTo(AMBIENT_IN_POOL);
+    expect(ambientDelta(SEED, hx, bottom0 + 10)).toBeCloseTo(AMBIENT_IN_POOL);
   });
 
   it('前室の外縁 40 タイルで 0 へ戻り、前室の上下の外では 0', () => {

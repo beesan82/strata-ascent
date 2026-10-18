@@ -1,4 +1,4 @@
-// 使い方: node scripts/frametime.mjs [--seed=20260711] [--pos=x,y] [--wait=3000] [--seconds=4] [--budget=16.7]
+// 使い方: node scripts/frametime.mjs [--seed=20260711] [--pos=x,y] [--wait=3000] [--seconds=4] [--budget=16.7] [--press=KeyD]
 //   ヘッドレス Chromium(既定=ソフトウェア描画、GPU なし)でページを開き、--wait ミリ秒待ってから
 //   --seconds 秒間 requestAnimationFrame の間隔(ms)を集め、p50 / p95 / max を表示する。
 //   p95 が --budget(既定 16.7 ms = 60 fps の 1 フレーム)を超えたら終了コード 1。
@@ -16,6 +16,8 @@ const pos = args['--pos'];
 const wait = Number(args['--wait'] ?? 3000);
 const seconds = Number(args['--seconds'] ?? 4);
 const budget = Number(args['--budget'] ?? 16.7);
+// 計測中に押し続けるキー(例: --press=KeyD で右へ歩く)。立ち止まった場面だけでなく移動中の予算を見る
+const press = args['--press'];
 
 const server = await createServer({ logLevel: 'silent', server: { port: 0 } });
 await server.listen();
@@ -37,6 +39,7 @@ const percentile = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor(
 try {
   await page.goto(url);
   await page.waitForTimeout(wait);
+  if (press) await page.keyboard.down(press);
   // ページ内で rAF 間隔を集める(main.ts の rAF ループと同じ vsync 刻みで呼ばれる)
   const intervals = await page.evaluate((ms) => new Promise((resolve) => {
     const out = [];
@@ -50,6 +53,7 @@ try {
     };
     requestAnimationFrame(tick);
   }), seconds * 1000);
+  if (press) await page.keyboard.up(press);
   const sorted = [...intervals].sort((a, b) => a - b);
   const p50 = percentile(sorted, 0.5);
   const p95 = percentile(sorted, 0.95);

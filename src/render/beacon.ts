@@ -35,6 +35,8 @@ export const BAND_FACTOR = 0.6;
 /** §6.3: 光溜まりの中の ambientLevel 補正と、その外の補正 */
 export const AMBIENT_IN_POOL = 0.15;
 export const AMBIENT_OUT_POOL = -0.1;
+/** §6.3 の補正を板の下面から立ち上げる縦の幅(タイル) */
+export const AMBIENT_TOP_FADE = 4;
 
 export interface Beacon {
   cell: number;
@@ -139,9 +141,12 @@ export function beaconGlowAt(seed: number, camX: number, camY: number): BeaconGl
  * 0.22 では消え、0.45 では塔の矩形と空で量子化先が割れて紫の斑になった(スクリーンショットで確認)。
  */
 export const GLOW_ALPHA = 0.6;
-/** 滲みの帯の最小幅(内部バッファ px)と、帯のアルファの刻み(1/64) */
+/**
+ * 滲みの帯の最小幅(内部バッファ px)と、帯のアルファの刻み(1/16)。刻みが細かいと偏り(GLOW_LEAN)で
+ * 帯が 40 本に増え、歩くたびに空のフィルを塗り直すことになった。32 色に量子化されるので 16 段で足りる。
+ */
 export const GLOW_STRIP_PX = 8;
-export const GLOW_ALPHA_STEPS = 64;
+export const GLOW_ALPHA_STEPS = 16;
 /** 滲みの画面内の偏り: 大穴側の端を 1+この値、反対側の端を 1−この値に(大穴が画面外のとき) */
 export const GLOW_LEAN = 0.6;
 
@@ -166,8 +171,10 @@ export interface GlowStrip {
 export function glowStrips(seed: number, camX: number, camY: number, w: number, ppt: number): { color: string; strips: GlowStrip[] } {
   const g = beaconGlowAt(seed, camX, camY);
   const depth = clamp01((camY - g.top) / (g.layerBottom - g.top));
-  const a = GLOW_ALPHA * (1 - 0.6 * depth);
-  const sx = (g.x - camX) * GLOW_FACTOR * ppt + w / 2;
+  // 深さは 1/16 に、頂点の X は帯の格子(8 px)に量子化する。帯の配置が変わるのは格子をまたいだときだけに
+  // なり、空のフィルの塗り直し(約 3 ms)が歩行中に数フレームに 1 回で済む。
+  const a = GLOW_ALPHA * (1 - 0.6 * Math.round(depth * GLOW_ALPHA_STEPS) / GLOW_ALPHA_STEPS);
+  const sx = Math.round(((g.x - camX) * GLOW_FACTOR * ppt + w / 2) / GLOW_STRIP_PX) * GLOW_STRIP_PX;
   // 偏り: 大穴が画面外ならその側の端を (1+GLOW_LEAN)、反対の端を (1−GLOW_LEAN) 倍にする。
   // 1 画面(34 タイル)は 256 タイルの減衰の約 1 割しか跨がず、そのままでは量子化後に同じ色になる。
   // 大穴が画面中央にあるときは偏り 0、画面端に達するまで線形に強める。
@@ -218,9 +225,12 @@ export function interfaceBandsNear(seed: number, camY: number, spanY: number): I
 export function ambientDelta(seed: number, x: number, y: number): number {
   const cell = biomeCellAt(seed, y);
   const dy = y - interfaceBottom(seed, cell);
-  if (dy < 0 || dy > ANTECHAMBER_DEPTH) return 0;
+  if (dy <= 0 || dy > ANTECHAMBER_DEPTH) return 0;
   const px = nearestPassage(seed, cell, x).x;
-  const fade = clamp01((ANTECHAMBER_HALF_WIDTH + ANTECHAMBER_FADE - Math.abs(x - px)) / ANTECHAMBER_FADE);
+  // 横は前室の外縁 40 タイル、縦は板の下面から AMBIENT_TOP_FADE タイルで 0 から立ち上げる
+  // (孔を抜けた瞬間・梯子で板へ入る瞬間に暗幕が 1 フレームで跳ばないように)。底は連続床で越えない。
+  const fade = clamp01((ANTECHAMBER_HALF_WIDTH + ANTECHAMBER_FADE - Math.abs(x - px)) / ANTECHAMBER_FADE)
+    * clamp01(dy / AMBIENT_TOP_FADE);
   if (fade === 0) return 0;
   const d = Math.abs(x - nearestHoleX(seed, cell, x));
   const u = clamp01((d - POOL_CORE_RADIUS) / (POOL_FRINGE_RADIUS - POOL_CORE_RADIUS));
