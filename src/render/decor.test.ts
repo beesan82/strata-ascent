@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CHUNK_SIZE, TILE } from '../world/tiles';
 import { tileAt } from '../world/worldgen';
-import { DECOR_MARGIN, DecorCache, decorateChunk, hatchSpacingAt, PALETTE } from './decor';
+import { DECOR_MARGIN, DecorCache, decorOpBounds, decorateChunk, hatchSpacingAt, PALETTE } from './decor';
 
 // decorateChunk は (seed,cx,cy) の純関数。段階Fの広域スキャンは同じチャンクを
 // 複数テストで走査するため、seed=42 の結果をメモ化して再計算を避ける(挙動不変・高速化)。
@@ -410,6 +410,41 @@ describe('DecorCache', () => {
         for (let lx = 0; lx < n; lx++)
           buf[ly * n + lx] = tileAt(42, cx * CHUNK_SIZE + lx - DECOR_MARGIN, cy * CHUNK_SIZE + ly - DECOR_MARGIN);
       expect(decorateChunk(42, cx, cy, buf)).toEqual(decorateChunk(42, cx, cy));
+    }
+  });
+});
+
+describe('decorOpBounds', () => {
+  const px = 1 / 16;
+  it('線は太さ(最小1px)と角の尖りぶん広げた外接矩形', () => {
+    const b = decorOpBounds({ kind: 'line', x1: 1, y1: 2, x2: 3, y2: 2, w: 0.1, color: '#000' }, px);
+    expect(b.x0).toBeLessThanOrEqual(1 - 0.05);
+    expect(b.x1).toBeGreaterThanOrEqual(3 + 0.05);
+    expect(b.y0).toBeLessThanOrEqual(2 - 0.05);
+    expect(b.y1).toBeGreaterThanOrEqual(2 + 0.05);
+  });
+
+  it('負の幅の矩形も正しい向きに直す', () => {
+    const b = decorOpBounds({ kind: 'rect', x: 5, y: 5, w: -2, h: 1, color: '#000' }, px);
+    expect(b.x0).toBeLessThanOrEqual(3);
+    expect(b.x1).toBeGreaterThanOrEqual(5);
+    expect(b.x1 - b.x0).toBeLessThan(2.5);
+  });
+
+  it('多角形と点も全点・半径を含む', () => {
+    const p = decorOpBounds({ kind: 'poly', pts: [0, 0, 4, 1, 2, 3], w: 0.05, color: '#000', fill: true }, px);
+    expect([p.x0 <= 0, p.y0 <= 0, p.x1 >= 4, p.y1 >= 3]).toEqual([true, true, true, true]);
+    const d = decorOpBounds({ kind: 'dot', x: 1, y: 1, r: 0.01, color: '#000' }, px);
+    expect(d.x0).toBeLessThanOrEqual(1 - px); // 半径は最小1px
+    expect(d.y1).toBeGreaterThanOrEqual(1 + px);
+  });
+
+  it('実際の装飾の全命令で有限の矩形を返す', () => {
+    for (const op of decorateChunk(42, 1, 1)) {
+      const b = decorOpBounds(op, px);
+      expect(Number.isFinite(b.x0 + b.y0 + b.x1 + b.y1)).toBe(true);
+      expect(b.x1).toBeGreaterThanOrEqual(b.x0);
+      expect(b.y1).toBeGreaterThanOrEqual(b.y0);
     }
   });
 });

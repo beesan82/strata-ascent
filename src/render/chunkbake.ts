@@ -9,7 +9,7 @@ import { facilityTileAt } from '../world/facility';
 import { megaFacilityAt } from '../world/megafacility';
 import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
-import { DECOR_MARGIN, DecorCache, type DecorOp } from './decor';
+import { DECOR_MARGIN, DecorCache, decorOpBounds, type DecorOp } from './decor';
 import { dirtyBoundsAround, expandRect, type CellRect } from './dirtyBounds';
 import { traceAt, type Trace } from './traces';
 import { STEEL } from './steel';
@@ -24,6 +24,11 @@ export const CHUNK_VISUAL_BLEND_STEPS = 16;
  * 陰影、1〜2タイル上の痕跡・水面判定と、それらのはみ出し(灯の光暈≈0.5タイル)に収まる。
  */
 export const REBAKE_DILATE = 2;
+/**
+ * 先読みの新規焼き込みを分ける帯の高さ(タイル)。1チャンク全面を1フレームで焼くと JS 約25ms に加え
+ * フレーム末のラスタ化が約40ms 乗るので、帯ごとに別フレームで焼いて写す。
+ */
+const PREFETCH_BAND = 8;
 
 export interface ChunkVisual extends BiomeBlend {
   cacheKey: string;
@@ -55,6 +60,8 @@ export class ChunkBaker {
   private decor: DecorCache;
   /** 部分再焼き込みの作業用キャンバス(全面サイズ、使い回す) */
   private scratch: HTMLCanvasElement | null = null;
+  /** 帯ごとに焼いている途中の先読みチャンク(次に焼く帯の先頭行)。完成するまで cache には入れない */
+  private pending = new Map<string, { canvas: HTMLCanvasElement; nextRow: number }>();
 
   constructor(private seed: number) {
     this.decor = new DecorCache(seed);
@@ -84,6 +91,7 @@ export class ChunkBaker {
     if (!canvas) {
       canvas = this.bake(cx, cy, store);
       this.cache.set(key, canvas);
+      this.pending.delete(key);
       this.bakedThisFrame = true;
     }
     return canvas;
@@ -99,6 +107,8 @@ export class ChunkBaker {
    * 先読み/再焼き込み: 指定チャンクを(再)焼き込みしてキャッシュする。
    * 無効化済みの画像があれば、破壊タイル(境界際の隣チャンク分を含む)の外接矩形だけを描き直して
    * 同じキャンバスへ写す(新規キャンバスを作らない)。写した範囲は全面焼き込みと同じ画素になる。
+   * 未焼き込みのチャンクは PREFETCH_BAND 行ずつ焼き、全部の帯が揃った時点で cache に入れる
+   * (それまで isFresh は false のままなので、スケジューラが次のフレームで続きを頼む)。
    */
   refresh(cx: number, cy: number, store: ChunkStore): void {
     const key = `${cx},${cy}`;
@@ -107,21 +117,42 @@ export class ChunkBaker {
       ? dirtyBoundsAround((x, y) => store.destroyedMask(x, y), cx, cy, CHUNK_SIZE, REBAKE_DILATE)
       : null;
     if (old && clip) {
-      // クリップは使わない(クリップ端の画素が全面焼き込みと食い違う)。範囲の周辺だけを作業キャンバスへ
-      // 描き、範囲の矩形を等倍・整数座標で写す。CPUキャンバス同士なので写すのは単なる画素コピー。
-      if (!this.scratch) {
-        this.scratch = document.createElement('canvas');
-        this.scratch.width = this.scratch.height = CHUNK_SIZE * BAKE_PPT;
+      this.bakeRectInto(old, clip, cx, cy, store);
+    } else if (!old) {
+      let p = this.pending.get(key);
+      if (!p) {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = CHUNK_SIZE * BAKE_PPT;
+        p = { canvas, nextRow: 0 };
+        this.pending.set(key, p);
       }
-      this.bake(cx, cy, store, this.scratch, expandRect(clip, 1, CHUNK_SIZE));
-      const P = BAKE_PPT;
-      const octx = old.getContext('2d', { willReadFrequently: true })!;
-      octx.clearRect(clip.x * P, clip.y * P, clip.w * P, clip.h * P);
-      octx.drawImage(this.scratch, clip.x * P, clip.y * P, clip.w * P, clip.h * P, clip.x * P, clip.y * P, clip.w * P, clip.h * P);
+      const h = Math.min(PREFETCH_BAND, CHUNK_SIZE - p.nextRow);
+      this.bakeRectInto(p.canvas, { x: 0, y: p.nextRow, w: CHUNK_SIZE, h }, cx, cy, store);
+      p.nextRow += h;
+      if (p.nextRow < CHUNK_SIZE) return;
+      this.pending.delete(key);
+      this.cache.set(key, p.canvas);
     } else {
       this.cache.set(key, this.bake(cx, cy, store));
     }
     this.stale.delete(key);
+  }
+
+  /**
+   * rect(タイル単位)の範囲だけを全面焼き込みと同じ画素で描き、target へ写す。
+   * クリップは使わない(クリップ端の画素が全面焼き込みと食い違う)。範囲+1タイルだけを作業キャンバスへ
+   * 描き、範囲の矩形を等倍・整数座標で写す。CPUキャンバス同士なので写すのは単なる画素コピー。
+   */
+  private bakeRectInto(target: HTMLCanvasElement, rect: CellRect, cx: number, cy: number, store: ChunkStore): void {
+    if (!this.scratch) {
+      this.scratch = document.createElement('canvas');
+      this.scratch.width = this.scratch.height = CHUNK_SIZE * BAKE_PPT;
+    }
+    this.bake(cx, cy, store, this.scratch, expandRect(rect, 1, CHUNK_SIZE));
+    const P = BAKE_PPT;
+    const tctx = target.getContext('2d', { willReadFrequently: true })!;
+    tctx.clearRect(rect.x * P, rect.y * P, rect.w * P, rect.h * P);
+    tctx.drawImage(this.scratch, rect.x * P, rect.y * P, rect.w * P, rect.h * P, rect.x * P, rect.y * P, rect.w * P, rect.h * P);
   }
 
   /** 焼き込みに使う装飾が計算済みか(先読みスケジューラ用) */
@@ -153,6 +184,8 @@ export class ChunkBaker {
   invalidate(cx: number, cy: number): void {
     const key = `${cx},${cy}`;
     if (this.cache.has(key)) this.stale.add(key);
+    // 帯ごとに焼いている途中なら、焼き済みの帯が古いので最初からやり直す
+    this.pending.delete(key);
     // 発射フレームは破壊計算を済ませた後なので、再焼き込みは次フレームから始める
     this.bakedThisFrame = true;
   }
@@ -165,6 +198,10 @@ export class ChunkBaker {
         this.cache.delete(key);
         this.stale.delete(key);
       }
+    }
+    for (const key of this.pending.keys()) {
+      const [kx, ky] = key.split(',').map(Number);
+      if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > radius) this.pending.delete(key);
     }
     this.decor.evictFarFrom(cx, cy, radius);
   }
@@ -279,7 +316,14 @@ export class ChunkBaker {
     // モックの色構成に合わせ、物理装飾は鋼ランプ由来のPALETTE色のまま焼く
     // (旧accent置換は廃止。暖色は錆・灯のみに限定する)。
     ctx.lineCap = 'round';
-    for (const op of this.decorFor(cx, cy, store)) this.draw(ctx, op);
+    for (const op of this.decorFor(cx, cy, store)) {
+      if (tiles) {
+        // 部分焼き込みでは、描く範囲に掛からない命令を省く(範囲内の画素には影響しない)
+        const b = decorOpBounds(op, 1 / P);
+        if (b.x1 < span.x || b.x0 > span.x + span.w || b.y1 < span.y || b.y0 > span.y + span.h) continue;
+      }
+      this.draw(ctx, op);
+    }
 
     // 配管コリドー: 全系統のconduitに配管ラインを重ね、通路が「配管」として読めるようにする。
     // networkTileAtと同じ条件なので、conduitが歩けるタイルを生む場所と正確に一致する。

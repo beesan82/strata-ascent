@@ -24,6 +24,42 @@ export type DecorOp =
   | { kind: 'rect'; x: number; y: number; w: number; h: number; color: string; alpha?: number; surface?: boolean }
   | { kind: 'grad'; x: number; y: number; w: number; h: number; dir: 'h' | 'v'; stops: ReadonlyArray<readonly [number, string]>; alpha?: number; surface?: boolean };
 
+/**
+ * 装飾命令が描きうる範囲(チャンクローカルのタイル単位)。保守的に広めに取る:
+ * 線は太さ(最小 minPx)の半分に加えて角の尖り(miter上限10≒太さ×5)まで、塗りはAAの1px分を足す。
+ * 部分焼き込みで、描き直す範囲に掛からない命令を省くために使う。
+ */
+export function decorOpBounds(op: DecorOp, minPx: number): { x0: number; y0: number; x1: number; y1: number } {
+  const aa = minPx;
+  const strokePad = (w: number) => Math.max(w, minPx) * 5 + aa;
+  switch (op.kind) {
+    case 'line': {
+      const p = strokePad(op.w);
+      return { x0: Math.min(op.x1, op.x2) - p, y0: Math.min(op.y1, op.y2) - p, x1: Math.max(op.x1, op.x2) + p, y1: Math.max(op.y1, op.y2) + p };
+    }
+    case 'dot': {
+      const r = Math.max(op.r, minPx) + aa;
+      return { x0: op.x - r, y0: op.y - r, x1: op.x + r, y1: op.y + r };
+    }
+    case 'poly': {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let i = 0; i < op.pts.length; i += 2) {
+        x0 = Math.min(x0, op.pts[i]); x1 = Math.max(x1, op.pts[i]);
+        y0 = Math.min(y0, op.pts[i + 1]); y1 = Math.max(y1, op.pts[i + 1]);
+      }
+      const p = op.fill ? aa : strokePad(op.w);
+      return { x0: x0 - p, y0: y0 - p, x1: x1 + p, y1: y1 + p };
+    }
+    case 'hatch':
+    case 'rect':
+    case 'grad':
+      return {
+        x0: Math.min(op.x, op.x + op.w) - aa, y0: Math.min(op.y, op.y + op.h) - aa,
+        x1: Math.max(op.x, op.x + op.w) + aa, y1: Math.max(op.y, op.y + op.h) + aa,
+      };
+  }
+}
+
 /** 装飾の色パレット(realismモックの鋼ランプSTEELから導出。暖色は錆のみリテラル) */
 export const PALETTE = {
   edgeTop: STEEL.railTop,
