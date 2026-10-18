@@ -32,6 +32,11 @@ export const BAKE_KEEP_RADIUS = 2;
 
 /** 発射直後の画面シェイク最大振幅(px) */
 const SHAKE_MAX = 6;
+/**
+ * drawSky の作業キャンバスの余白(px)。SHAKE_MAX 以上で、グラデのディザ位置が内部バッファと
+ * そろうよう16の倍数にする(6だと量子化後に空の画素が約0.4%入れ替わった)。
+ */
+const SKY_PAD = 16;
 
 /** 溜め中/発射ビームの演出パラメータ(main→renderへ毎フレーム渡す) */
 export interface GravitonFx {
@@ -84,6 +89,8 @@ export class Renderer {
    * update側(main)がビーム/ボーリング方向として読む。1フレーム遅延は許容。
    */
   aimAngle = 0;
+  /** drawSky の作業キャンバスと、その色・寸法のキー */
+  private sky: { key: string; canvas: HTMLCanvasElement } | null = null;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -131,6 +138,29 @@ export class Renderer {
     }
   }
 
+  /**
+   * 最初のフィル(縦グラデ)。CPUキャンバスへの全面グラデ塗りは1回約2.7msかかるため、色が変わった
+   * ときだけ作業キャンバスへ塗り、毎フレームは等倍で貼る。シェイクで生じる端の隙間を隠すため
+   * 少し外側まで塗る(shake=0でも無害)。グラデの座標は従来どおり内部バッファの 0..h。
+   */
+  private drawSky(ctx: CanvasRenderingContext2D, w: number, h: number, top: string, bottom: string): void {
+    const key = `${w}x${h}:${top}:${bottom}`;
+    if (this.sky?.key !== key) {
+      const canvas = this.sky?.canvas ?? document.createElement('canvas');
+      canvas.width = w + SKY_PAD * 2;
+      canvas.height = h + SKY_PAD * 2;
+      // 内部バッファと同じCPUラスタで塗る(GPUキャンバスだと貼るたびに読み戻しが起きる)
+      const sctx = canvas.getContext('2d', { willReadFrequently: true })!;
+      const grad = sctx.createLinearGradient(0, SKY_PAD, 0, SKY_PAD + h);
+      grad.addColorStop(0, top);
+      grad.addColorStop(1, bottom);
+      sctx.fillStyle = grad;
+      sctx.fillRect(0, 0, canvas.width, canvas.height);
+      this.sky = { key, canvas };
+    }
+    ctx.drawImage(this.sky.canvas, -SKY_PAD, -SKY_PAD);
+  }
+
   render(
     store: ChunkStore, cam: Camera, player: Player,
     mouseX: number, mouseY: number, timeSec: number,
@@ -168,12 +198,7 @@ export class Renderer {
     // ambientの低い系統(廃棄物層など)はほぼ暗いまま。SOLIDタイルより必ず暗くしてシルエットを保つ。
     // 上を少し明るく下を暗くする縦グラデで開放空間に奥行きを与える。
     const lit = mixHex(STEEL.black, mixHex(bb.ambientColor, '#000000', 0.6), bb.ambientLevel);
-    const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, mixHex(lit, '#ffffff', 0.05 * bb.ambientLevel));
-    grad.addColorStop(1, mixHex(lit, '#000000', 0.45));
-    ctx.fillStyle = grad;
-    // シェイクで生じる端の隙間を隠すため少し外側まで塗る(shake=0でも無害)
-    ctx.fillRect(-SHAKE_MAX, -SHAKE_MAX, w + SHAKE_MAX * 2, h + SHAKE_MAX * 2);
+    this.drawSky(ctx, w, h, mixHex(lit, '#ffffff', 0.05 * bb.ambientLevel), mixHex(lit, '#000000', 0.45));
 
     // パララックス遠景(バイオーム配色の多層構造)
     this.background.render(ctx, renderCam.x, renderCam.y, w, h, ppt, bb);
