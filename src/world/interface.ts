@@ -115,3 +115,33 @@ export function interfaceTileAt(seed: number, x: number, y: number): Tile | null
   }
   return null;
 }
+
+/** 界面の下の地形変調(前室・圧縮帯)。 */
+export interface TerrainMods {
+  cavityScale: number;
+  massDrop: number;
+  suppressLadder: boolean;
+  forceFloor: boolean;
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/**
+ * その cell の板(= cell の天井)の直下の地形変調。
+ * 前室(板の下 0..48)は空洞化+梯子抑止、その底(dy=48)は床、さらに 60 タイルは圧縮帯。
+ */
+export function terrainModsAt(seed: number, x: number, y: number, cell: number = biomeCellAt(seed, y)): TerrainMods | null {
+  const dy = y - interfaceBottom(seed, cell);
+  if (dy < 0 || dy > ANTECHAMBER_DEPTH + COMPRESSION_DEPTH) return null;
+  const dx = Math.abs(x - nearestPassage(seed, cell, x).x);
+  if (dy < ANTECHAMBER_DEPTH) {
+    const fade = clamp01((ANTECHAMBER_HALF_WIDTH + ANTECHAMBER_FADE - dx) / ANTECHAMBER_FADE);
+    if (fade === 0) return null;
+    return { cavityScale: 1 - fade, massDrop: 0, suppressLadder: fade >= 1, forceFloor: false };
+  }
+  if (dx > ANTECHAMBER_HALF_WIDTH) return null;
+  if (dy === ANTECHAMBER_DEPTH) return { cavityScale: 1, massDrop: 0, suppressLadder: false, forceFloor: true };
+  return { cavityScale: 1, massDrop: COMPRESSION_MASS_DROP, suppressLadder: false, forceFloor: false };
+}

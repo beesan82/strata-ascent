@@ -12,6 +12,12 @@ import { hash2 } from './noise';
 import { CHUNK_SIZE, TILE } from './tiles';
 import { findSpawn, generateChunk, noiseTileAt, tileAt, tileAtLive } from './worldgen';
 import { Destruction } from './destruction';
+import { ANTECHAMBER_DEPTH, interfaceBottom, interfaceTileAt, interfaceTop, passageX, terrainModsAt } from './interface';
+
+/** 界面の地物・前室の内側ではノイズ梯子の不変条件を適用しない */
+function inInterfaceZone(seed: number, x: number, y: number): boolean {
+  return interfaceTileAt(seed, x, y) !== null || !!terrainModsAt(seed, x, y)?.suppressLadder;
+}
 
 function representativeBiomeCenter(seed: number, target: BiomeId): number {
   for (let cell = -100; cell <= 100; cell++) {
@@ -129,6 +135,7 @@ describe('tileAt', () => {
         for (let y = -TEST_RANGE_UNIT * 40; y < TEST_RANGE_UNIT * 41; y++) {
           const ladderX =
             group * 32 + Math.floor(hash2(seed + 404, group, 0) * 32);
+          if (inInterfaceZone(seed, ladderX, y)) continue;
           expect(tileAt(seed, ladderX, y)).toBe(TILE.LADDER);
         }
       }
@@ -178,9 +185,11 @@ describe('biome-driven terrain', () => {
 
     for (let cell = -10; cell <= 10; cell++) {
       const edge = biomeBoundary(seed, cell);
+      // 境界の両側(板の上面 -1 と板の下面 + 48 + 1)で同じ列が LADDER
+      const ys = [edge - 1, interfaceBottom(seed, cell) + ANTECHAMBER_DEPTH + 1];
       expect(ladderColumns.some((x) =>
-        Array.from({ length: 25 }, (_, offset) => noiseTileAt(seed, x, edge - 12 + offset))
-          .every((tile) => tile === TILE.LADDER),
+        ys.every((y) => inInterfaceZone(seed, x, y) || noiseTileAt(seed, x, y) === TILE.LADDER)
+          && ys.some((y) => !inInterfaceZone(seed, x, y)),
       )).toBe(true);
     }
   });
@@ -189,6 +198,7 @@ describe('biome-driven terrain', () => {
     for (const group of [-3, -2, -1]) {
       const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, 0) * 32);
       for (const y of [-900, -1, 0, 900]) {
+        if (inInterfaceZone(seed, ladderX, y)) continue;
         expect(noiseTileAt(seed, ladderX, y)).toBe(TILE.LADDER);
       }
     }
@@ -249,7 +259,7 @@ describe('tileAt 合成(段階2)', () => {
     let checked = 0;
     for (let y = -200; y < 0 && checked < 50; y++) {
       for (let x = 0; x < 512 && checked < 50; x++) {
-        if (noiseTileAt(42, x, y) === TILE.LADDER) {
+        if (interfaceTileAt(42, x, y) === null && noiseTileAt(42, x, y) === TILE.LADDER) {
           expect(tileAt(42, x, y)).toBe(TILE.LADDER);
           checked++;
         }
@@ -264,7 +274,7 @@ describe('施設統合後の到達可能性', () => {
     let checked = 0;
     for (let y = -400; y < 0 && checked < 80; y++) {
       for (let x = 0; x < 1024 && checked < 80; x++) {
-        if (noiseTileAt(42, x, y) === TILE.LADDER) {
+        if (interfaceTileAt(42, x, y) === null && noiseTileAt(42, x, y) === TILE.LADDER) {
           expect(tileAt(42, x, y)).toBe(TILE.LADDER);
           checked++;
         }
@@ -286,7 +296,7 @@ describe('段階4b 統合', () => {
     let checked = 0;
     for (let y = -400; y < 0 && checked < 60; y++)
       for (let x = 0; x < 1024 && checked < 60; x++)
-        if (noiseTileAt(42, x, y) === TILE.LADDER) { expect(tileAt(42, x, y)).toBe(TILE.LADDER); checked++; }
+        if (interfaceTileAt(42, x, y) === null && noiseTileAt(42, x, y) === TILE.LADDER) { expect(tileAt(42, x, y)).toBe(TILE.LADDER); checked++; }
     expect(checked).toBeGreaterThan(0);
   });
   it('findSpawn は SOLID の中でない', () => {
@@ -313,5 +323,54 @@ describe('tileAtLive(破壊差分込み)', () => {
         if (tileAt(42, x, y) === TILE.SOLID) { d.bore(x, y, 0, 0, 0, (ax, ay) => tileAt(42, ax, ay)); found = true;
           expect(tileAtLive(42, x, y, d)).toBe(TILE.AIR); }
     expect(found).toBe(true);
+  });
+});
+
+describe('界面と前室の合成', () => {
+  const seeds = [1, 42, 20260711];
+  it('tileAt は界面タイルを最優先にする(施設・メガ施設の上でも)', () => {
+    for (const seed of seeds) for (let cell = -4; cell <= 4; cell++) {
+      const top = interfaceTop(seed, cell);
+      for (let x = -2000; x <= 2000; x += 97) {
+        const iface = interfaceTileAt(seed, x, top + 3);
+        expect(iface).not.toBe(null);
+        expect(tileAt(seed, x, top + 3)).toBe(iface);
+      }
+    }
+  });
+  it('前室の底は連続した床(梯子列は通す)、前室の内側に梯子列も施設の壁もない', () => {
+    for (const seed of seeds) for (let cell = -2; cell <= 2; cell++) for (const k of [-1, 0, 2]) {
+      const bottom = interfaceBottom(seed, cell), px = passageX(seed, cell, k);
+      for (let x = px - 120; x <= px + 120; x++) {
+        const t = tileAt(seed, x, bottom + ANTECHAMBER_DEPTH);
+        expect(t === TILE.SOLID || t === TILE.LADDER).toBe(true);
+      }
+      for (let x = px - 119; x < px + 120; x++) {
+        if (x === px) continue;
+        for (let y = bottom; y < bottom + ANTECHAMBER_DEPTH; y += 5) {
+          if (interfaceTileAt(seed, x, y) !== null) continue; // 大穴の最下行(dy=0)は界面が AIR を返す
+          expect(tileAt(seed, x, y)).not.toBe(TILE.LADDER);
+          expect(tileAt(seed, x, y)).toBe(noiseTileAt(seed, x, y)); // 施設オーバーレイが効いていない
+        }
+      }
+    }
+  });
+  it('前室の内側は空洞(床帯を除いて空気率 0.9 以上)、圧縮帯は通常より固体が多い', () => {
+    const seed = 20260711, cell = 0;
+    const bottom = interfaceBottom(seed, cell), px = passageX(seed, cell, 0);
+    let air = 0, n = 0;
+    for (let y = bottom + 1; y < bottom + ANTECHAMBER_DEPTH; y++) for (let x = px - 110; x <= px + 110; x++) {
+      n++; if (tileAt(seed, x, y) !== TILE.SOLID) air++;
+    }
+    expect(air / n).toBeGreaterThan(0.9);
+    const solidRatio = (y0: number, y1: number, x0: number) => {
+      let s = 0, m = 0;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x0 + 200; x++) { m++; if (noiseTileAt(seed, x, y) === TILE.SOLID) s++; }
+      return s / m;
+    };
+    // 参照は同じ X 範囲で圧縮帯の下の行(同じ景観セル・同じプロファイル)。X をずらすと隣の孔の圧縮帯に入りうる
+    const compressed = solidRatio(bottom + 50, bottom + 108, px - 100);
+    const reference = solidRatio(bottom + 120, bottom + 178, px - 100);
+    expect(compressed).toBeGreaterThan(reference);
   });
 });

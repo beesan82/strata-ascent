@@ -3,7 +3,7 @@ import { biomeBoundary } from './biomeCells';
 import { TILE } from './tiles';
 import {
   ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceThickness, interfaceTileAt, interfaceTop,
-  isGreatInterface, mod, nearestPassage, passageX, PASSAGE_SLOT,
+  isGreatInterface, mod, nearestPassage, passageX, PASSAGE_SLOT, terrainModsAt,
 } from './interface';
 
 const seeds = [1, 42, 20260711];
@@ -89,5 +89,20 @@ describe('interfaceTileAt', () => {
       for (let x = px - 12; x < px + 24; x++) if (Math.abs(x - px) > half) expect(interfaceTileAt(seed, x, top)).toBe(TILE.HARD);
       expect(interfaceTileAt(seed, px - 13, top - 1)).toBe(null);
     }
+  });
+});
+
+describe('terrainModsAt', () => {
+  it('前室の内側は強制空洞+梯子抑止、縁で線形に戻り、底は床、下は圧縮', () => {
+    const seed = 42, cell = 0;
+    const bottom = interfaceBottom(seed, cell), px = passageX(seed, cell, 0);
+    expect(terrainModsAt(seed, px + 50, bottom + 10, cell)).toEqual({ cavityScale: 0, massDrop: 0, suppressLadder: true, forceFloor: false });
+    expect(terrainModsAt(seed, px + 140, bottom + 10, cell)!.cavityScale).toBeCloseTo(0.5, 5);
+    expect(terrainModsAt(seed, px + 140, bottom + 10, cell)!.suppressLadder).toBe(false);
+    expect(terrainModsAt(seed, px + 160, bottom + 10, cell)).toBe(null);
+    expect(terrainModsAt(seed, px - 120, bottom + 48, cell)!.forceFloor).toBe(true);
+    expect(terrainModsAt(seed, px, bottom + 80, cell)!.massDrop).toBeCloseTo(0.15, 5);
+    expect(terrainModsAt(seed, px, bottom + 109, cell)).toBe(null);
+    expect(terrainModsAt(seed, px, bottom - 1, cell)).toBe(null);
   });
 });

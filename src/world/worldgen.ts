@@ -2,6 +2,7 @@ import { facilityTileAt } from './facility';
 import { megaFacilityAt } from './megafacility';
 import { networkTileAt, sectorTrunkTileAt } from './network';
 import { biomeCellAt, biomeIdForCell } from './biomeCells';
+import { groupLadderX, interfaceTileAt, terrainModsAt, type TerrainMods } from './interface';
 import { terrainProfileFor } from './biomeTerrain';
 import { hash2, valueNoise2 } from './noise';
 import { CHUNK_SIZE, TILE, type Tile } from './tiles';
@@ -15,6 +16,11 @@ function mod(n: number, m: number): number {
 /** シード+ワールドタイル座標 → 素のノイズ躯体タイル種。純粋関数(同じ入力なら常に同じ出力) */
 export function noiseTileAt(seed: number, x: number, y: number): Tile {
   const cell = biomeCellAt(seed, y);
+  return noiseTileWith(seed, x, y, cell, terrainModsAt(seed, x, y, cell));
+}
+
+/** 地形変調(前室・圧縮帯)込みのノイズ躯体。 */
+function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: TerrainMods | null): Tile {
   const biomeId = biomeIdForCell(seed, cell);
   const profile = terrainProfileFor(biomeId);
 
@@ -27,19 +33,20 @@ export function noiseTileAt(seed: number, x: number, y: number): Tile {
   // Ladder columns take precedence over all terrain features.
   // Each signed 32-tile X group has one deterministic column, independent of Y,
   // so it remains a continuous route through floors, cavities, and biome edges.
-  const group = Math.floor(x / 32);
-  const ladderX = group * 32 + Math.floor(hash2(seed + 404, group, 0) * 32);
-  if (x === ladderX) return TILE.LADDER;
+  // 前室の内側では梯子列を抑止する(孔の梯子列だけが通る)。
+  if (!mods?.suppressLadder && x === groupLadderX(seed, x)) return TILE.LADDER;
+  // 前室の底は連続した床。
+  if (mods?.forceFloor) return TILE.SOLID;
 
   // 2. 巨大空洞(低頻度ノイズ)。空洞内は4床帯ごとの橋だけ残る
-  const cavity = valueNoise2(seed + 101, x / 160, y / 160) > profile.cavityThreshold;
+  const cavity = valueNoise2(seed + 101, x / 160, y / 160) > profile.cavityThreshold * (mods?.cavityScale ?? 1);
   if (cavity) {
     if (isFloorRow && mod(band, 4) === 0 && !floorGap) return TILE.SOLID;
     return TILE.AIR;
   }
 
   // 3. 柱・壁塊(中頻度ノイズ)
-  const mass = valueNoise2(seed + 202, x / 28, y / 28) > profile.massThreshold;
+  const mass = valueNoise2(seed + 202, x / 28, y / 28) > profile.massThreshold - (mods?.massDrop ?? 0);
   if (mass) return TILE.SOLID;
 
   // 4. 床
@@ -53,7 +60,14 @@ export function noiseTileAt(seed: number, x: number, y: number): Tile {
  * 不変条件: ノイズが LADDER のタイルは施設で上書きしない(上昇路を保持し到達可能性を守る)。
  */
 export function tileAt(seed: number, x: number, y: number): Tile {
-  const base = noiseTileAt(seed, x, y);
+  // 界面(板・縦坑・見晴らし台・大穴)が最優先。
+  const iface = interfaceTileAt(seed, x, y);
+  if (iface !== null) return iface;
+  const mods = terrainModsAt(seed, x, y);
+  const base = noiseTileWith(seed, x, y, biomeCellAt(seed, y), mods);
+  // 前室の内側は施設・幹線のオーバーレイを適用しない(空洞を壁で埋めない)。
+  // 前室の底(forceFloor)も同様: 施設の内部(AIR)で連続した床が欠けないようにする。
+  if (mods?.suppressLadder || mods?.forceFloor) return base;
   if (base === TILE.LADDER) return base;
   const overlay = megaFacilityAt(seed, x, y)
     ?? facilityTileAt(seed, x, y)
