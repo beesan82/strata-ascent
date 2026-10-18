@@ -212,6 +212,7 @@ describe('findSpawn', () => {
       const { x, y } = findSpawn(seed);
       expect(isSolid(tileAt(seed, Math.floor(x), Math.floor(y)))).toBe(false);
       expect(isSolid(tileAt(seed, Math.floor(x), Math.floor(y) + 1))).toBe(false);
+      expect(isSolid(tileAt(seed, Math.floor(x), Math.floor(y) + 2))).toBe(true);
       const px = passageX(seed, 0, 0);
       expect(Math.floor(x)).toBe(px - 24);
       expect(y).toBeGreaterThan(interfaceBottom(seed, 0));
