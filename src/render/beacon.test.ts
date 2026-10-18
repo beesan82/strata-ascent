@@ -94,11 +94,20 @@ describe('glowStrips', () => {
     for (const s of strips) expect(Math.round(s.alpha * GLOW_ALPHA_STEPS)).toBeCloseTo(s.alpha * GLOW_ALPHA_STEPS);
   });
 
-  it('大穴が右にあれば右端の帯ほど明るく、左にあれば逆', () => {
+  it('大穴が右にあれば右端の帯ほど明るく、左にあれば逆。画面外なら端同士の比は 1+偏り : 1−偏り に近い', () => {
     const right = glowStrips(SEED, px0 - 12, bottom0 + 46, w, ppt).strips;
-    expect(right[right.length - 1].alpha).toBeGreaterThan(right[0].alpha);
+    const rL = right[0].alpha;
+    const rR = right[right.length - 1].alpha;
+    expect(rR).toBeGreaterThan(rL);
+    // 距離 60 タイルの減衰差(約 1 割)に偏り(1.6 : 0.4)が掛かるので、比は 3 を超える
+    expect(rR / rL).toBeGreaterThan(3);
     const left = glowStrips(SEED, px0 + 120, bottom0 + 46, w, ppt).strips;
     expect(left[0].alpha).toBeGreaterThan(left[left.length - 1].alpha);
+  });
+
+  it('大穴が画面中央にあれば偏りは無く、左右の端は同じ明るさ', () => {
+    const s = glowStrips(SEED, px0 + 48, bottom0 + 46, w, ppt).strips;
+    expect(s[0].alpha).toBeCloseTo(s[s.length - 1].alpha, 2);
   });
 
   it('色は上の層の accent、層の下へ行くほど弱い', () => {

@@ -142,6 +142,8 @@ export const GLOW_ALPHA = 0.6;
 /** 滲みの帯の最小幅(内部バッファ px)と、帯のアルファの刻み(1/64) */
 export const GLOW_STRIP_PX = 8;
 export const GLOW_ALPHA_STEPS = 64;
+/** 滲みの画面内の偏り: 大穴側の端を 1+この値、反対側の端を 1−この値に(大穴が画面外のとき) */
+export const GLOW_LEAN = 0.6;
 
 /** 滲みの平坦な帯(内部バッファの x 範囲 [x0, x1) とアルファ) */
 export interface GlowStrip {
@@ -166,14 +168,20 @@ export function glowStrips(seed: number, camX: number, camY: number, w: number, 
   const depth = clamp01((camY - g.top) / (g.layerBottom - g.top));
   const a = GLOW_ALPHA * (1 - 0.6 * depth);
   const sx = (g.x - camX) * GLOW_FACTOR * ppt + w / 2;
+  // 偏り: 大穴が画面外ならその側の端を (1+GLOW_LEAN)、反対の端を (1−GLOW_LEAN) 倍にする。
+  // 1 画面(34 タイル)は 256 タイルの減衰の約 1 割しか跨がず、そのままでは量子化後に同じ色になる。
+  // 大穴が画面中央にあるときは偏り 0、画面端に達するまで線形に強める。
+  const lean = GLOW_LEAN * Math.max(-1, Math.min(1, (sx - w / 2) / (w / 2)));
   const strips: GlowStrip[] = [];
   let x0 = 0;
   let level = -1;
   // w が帯幅の倍数でなくても最後の帯が w で閉じるよう、終端は x >= w で明示的に扱う
   for (let x = 0; ; x += GLOW_STRIP_PX) {
     const atEnd = x >= w;
-    const dxTiles = (x + GLOW_STRIP_PX / 2 - sx) / (GLOW_FACTOR * ppt);
-    const next = atEnd ? -1 : Math.round(a * glowStrength(dxTiles) * GLOW_ALPHA_STEPS);
+    const xc = x + GLOW_STRIP_PX / 2;
+    const dxTiles = (xc - sx) / (GLOW_FACTOR * ppt);
+    const tilt = 1 + lean * ((xc - w / 2) / (w / 2));
+    const next = atEnd ? -1 : Math.round(Math.min(1, a * glowStrength(dxTiles) * tilt) * GLOW_ALPHA_STEPS);
     if (next !== level) {
       if (level >= 0) strips.push({ x0, x1: Math.min(x, w), alpha: level / GLOW_ALPHA_STEPS });
       x0 = Math.min(x, w);
