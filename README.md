@@ -29,6 +29,9 @@ npm run dev   # http://localhost:5173/
 | `?freeze=1` | シミュレーション停止(描画のみ) |
 | `?debug=hierarchy[:タイル数]` | 地域階層の俯瞰表示 |
 
+界面(階層の板)の座標は `src/world/interface.ts` の `passageX` / `interfaceTop` / `interfaceBottom` で求められる。
+開始地点は常に cell 0 の前室(孔の左 24 タイル)。
+
 ## 開発
 
 ```powershell
