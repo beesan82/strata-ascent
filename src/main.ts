@@ -6,10 +6,10 @@ import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
 import { ChunkStore } from './world/chunks';
 import { Destruction } from './world/destruction';
 import { regionAt, type System } from './world/hierarchy';
-import { interfaceTileAt, isGreatInterface, layerNumber, overlookCellAt } from './world/interface';
+import { isGreatInterface, layerNumber, overlookCellAt } from './world/interface';
 import { biomeCellAt } from './world/biomeCells';
-import { CHUNK_SIZE, TILE } from './world/tiles';
-import { findSpawn } from './world/worldgen';
+import { CHUNK_SIZE } from './world/tiles';
+import { findSpawn, isHardAt } from './world/worldgen';
 import { sampleOpenness, targetZoomForOpenness, quantizeZoom } from './core/zoom';
 import { displayAltitude, highestLayer } from './core/coordinate';
 import { autoViewStarted, initialView, viewState, type ViewState } from './core/view';
@@ -105,8 +105,8 @@ function fire(): void {
   const affected = destruction.bore(
     player.centerX, player.centerY, aim, BORE_LENGTH, BORE_RADIUS,
     (tx, ty) => store.peekTileAt(tx, ty),
-    // 未生成チャンクでも界面の板(HARD)は記録しない(板は生成状態に関わらず不壊)
-    (tx, ty) => interfaceTileAt(seed, tx, ty) === TILE.HARD,
+    // 未生成チャンクでも界面の板・塔・崩落斜路(HARD)は記録しない(生成状態に関わらず不壊)
+    (tx, ty) => isHardAt(seed, tx, ty),
   );
   for (const key of affected) {
     const [cx, cy] = key.split(',').map(Number);

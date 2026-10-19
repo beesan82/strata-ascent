@@ -1,7 +1,7 @@
 import { biomeCellAt } from './biomeCells';
 import {
-  ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceThickness, interfaceTop, mod, OVERLOOK_HEIGHT,
-  PASSAGE_SLOT, passageX, SHAFT_OVERHANG,
+  ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceThickness, interfaceTop, isGreatInterface, mod,
+  OVERLOOK_HEIGHT, PASSAGE_SLOT, passageX, SHAFT_OVERHANG,
 } from './interface';
 import { hash2 } from './noise';
 import { TILE, type Tile } from './tiles';
@@ -17,9 +17,11 @@ import { TILE, type Tile } from './tiles';
  *     板の上面で開口する(頂部は幅 12 の床で、見晴らし台と同じ高さに出る。上の層 cell−1 に属する)。
  *     内部に幅 3 の縦坑(中央 LADDER)、層の高さを 4 等分した 1/4・2/4・3/4 に塔を横に貫く通路 3 本、
  *     基部の 3 行は出入口。どの高さからでも内部の梯子へ入れる第二の登攀経路。
- * 崩落界面: 天井の板の一部(幅 2×(48+厚み))が裂け、前室の床の行から板の上面まで 2 列で 1 段上がる
- *     階段状の楔(HARD)が流れている。楔の上は裂け目(AIR)。孔を使わずに右+ジャンプで登れる。
- *     幅を厚みに連動させるのは大界面(厚み 96)でも傾き 1/2 を保つため(裁定: §11 の ±30% より到達可能性を優先)。
+ * 崩落界面: 天井の板の一部が裂け、前室の床の行から板の上面まで階段状の楔(HARD)が流れている。
+ *     通常の板は 2 列で 1 段(幅 2×(48+32)=160)、大界面(厚み 96)は 1 列で 1 段(幅 48+96=144)。
+ *     2 列で 1 段のまま大界面を登ると幅 288 が要り、孔の最小間隔 256 に収まらず隣の孔の縦坑を切った(裁定)。
+ *     1 列 1 段でもジャンプ(高さ 2.8)で 2 段ずつ登れる。楔の上は裂け目(AIR)。出口の上(板の上面の上 8 行、
+ *     裂け目から右へ 12 列まで)は瓦礫が崩れ落ちた空間として空け、上の層の躯体が出口を塞がないようにする。
  */
 
 /** 中心 X = 孔 X + 160(塔・崩落とも。前室 ±120 の縁の外) */
@@ -36,8 +38,10 @@ export const TOWER_RINGS = 3;
 export const TOWER_RING_ROWS = 3;
 /** 基部の出入口(床の板の上 3 行) */
 export const TOWER_BASE_ROWS = 3;
-/** 斜路: 2 列で 1 段上がる */
+/** 斜路: 通常の板は 2 列で 1 段上がる(大界面は 1 列で 1 段) */
 export const COLLAPSE_SLOPE_RUN = 2;
+/** 出口の上の空間: 裂け目の右端からさらに右へ何列まで空けるか */
+export const COLLAPSE_EXIT_WIDTH = 12;
 
 export type LandmarkKind = 'tower' | 'collapse';
 
@@ -66,9 +70,14 @@ export function isLandmarkLayer(cell: number): boolean {
   return mod(cell, 3) === 1;
 }
 
-/** 崩落の幅 = 2 × (前室の深さ + 板の厚み)。傾き 1/2 で前室の床から板の上面へ届く長さ */
+/** 斜路の 1 段あたりの列数(通常 2、大界面 1) */
+export function collapseRun(cell: number): number {
+  return isGreatInterface(cell) ? 1 : COLLAPSE_SLOPE_RUN;
+}
+
+/** 崩落の幅 = 1 段の列数 × (前室の深さ + 板の厚み)。前室の床から板の上面へ届く長さ */
 export function collapseWidth(cell: number): number {
-  return COLLAPSE_SLOPE_RUN * (ANTECHAMBER_DEPTH + interfaceThickness(cell));
+  return collapseRun(cell) * (ANTECHAMBER_DEPTH + interfaceThickness(cell));
 }
 
 /** 層 cell・スロット k の大構造。大構造の層でない、または mod(k,3)!==0 なら null */
@@ -90,7 +99,7 @@ export function landmarkAt(seed: number, cell: number, k: number): Landmark | nu
 
 /** 大構造が X 方向に占める範囲 [x0, x1) */
 function spanOf(lm: Landmark): [number, number] {
-  return lm.kind === 'tower' ? [lm.x - TOWER_HALF_WIDTH, lm.x + TOWER_HALF_WIDTH] : [lm.gapLeft, lm.gapRight];
+  return lm.kind === 'tower' ? [lm.x - TOWER_HALF_WIDTH, lm.x + TOWER_HALF_WIDTH] : [lm.gapLeft, lm.gapRight + COLLAPSE_EXIT_WIDTH];
 }
 
 /** 層 cell で x が幾何に掛かる大構造(無ければ null)。候補はスロット floor((x−160)/384) の両隣まで */
@@ -108,7 +117,7 @@ export function landmarkNear(seed: number, cell: number, x: number): Landmark | 
 
 /** 斜路の上面の行(HARD の最上段)。x ∈ [gapLeft, gapRight) */
 export function rampTopY(lm: Landmark, x: number): number {
-  return lm.baseY - Math.floor((x - lm.gapLeft) / COLLAPSE_SLOPE_RUN);
+  return lm.baseY - Math.floor((x - lm.gapLeft) / collapseRun(lm.cell));
 }
 
 /** 塔の頂部の床 [x−6, x+6) にいるか(overlookCellAt が自動眺望の発火に使う) */
@@ -140,8 +149,14 @@ function towerTileAt(seed: number, lm: Landmark, x: number, y: number): Tile | n
   return TILE.HARD;
 }
 
-function collapseTileAt(lm: Landmark, x: number, y: number): Tile | null {
-  if (x < lm.gapLeft || x >= lm.gapRight || y < lm.top || y > lm.baseY) return null;
+function collapseTileAt(seed: number, lm: Landmark, x: number, y: number): Tile | null {
+  if (x < lm.gapLeft || y > lm.baseY || y < lm.top - OVERLOOK_HEIGHT) return null;
+  if (y < lm.top) {
+    // 出口の上の空間(裂け目と右へ 12 列)。32 タイル梯子列は残す
+    if (x >= lm.gapRight + COLLAPSE_EXIT_WIDTH) return null;
+    return x === groupLadderX(seed, x) ? TILE.LADDER : TILE.AIR;
+  }
+  if (x >= lm.gapRight) return null;
   return y >= rampTopY(lm, x) ? TILE.HARD : TILE.AIR;
 }
 
@@ -154,7 +169,7 @@ export function landmarkTileAt(seed: number, x: number, y: number): Tile | null 
   for (let cell = c; cell <= c + 1; cell++) {
     const lm = landmarkNear(seed, cell, x);
     if (!lm) continue;
-    const t = lm.kind === 'tower' ? towerTileAt(seed, lm, x, y) : collapseTileAt(lm, x, y);
+    const t = lm.kind === 'tower' ? towerTileAt(seed, lm, x, y) : collapseTileAt(seed, lm, x, y);
     if (t !== null) return t;
   }
   return null;

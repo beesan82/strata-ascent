@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ANTECHAMBER_DEPTH, interfaceBottom, interfaceTop, mod, passageX } from './interface';
 import { TILE } from './tiles';
 import {
-  collapseWidth, LANDMARK_OFFSET, landmarkAt, landmarkNear, landmarkTileAt, rampTopY, towerTopFloorAt, type Landmark,
+  collapseRun, collapseWidth, LANDMARK_OFFSET, landmarkAt, landmarkNear, landmarkTileAt, rampTopY, towerTopFloorAt, type Landmark,
 } from './landmark';
 
 const seeds = [1, 42, 20260711];
@@ -77,9 +77,11 @@ describe('塔', () => {
 });
 
 describe('崩落界面', () => {
-  it('幅は 2×(48+厚み)、斜路は 2 列で 1 段、足は前室の床の行、上端は板の上面の 1 段下、斜路の上は AIR', () => {
-    expect(collapseWidth(-2)).toBe(288);
+  it('幅は通常 160(2 列 1 段)・大界面 144(1 列 1 段)、足は前室の床の行、上端は板の上面の 1 段下、斜路の上は AIR、出口の上は空く', () => {
+    expect(collapseWidth(-2)).toBe(144);
     expect(collapseWidth(1)).toBe(160);
+    expect(collapseRun(-2)).toBe(1);
+    expect(collapseRun(1)).toBe(2);
     let collapses = 0;
     for (const lm of all()) {
       if (lm.kind !== 'collapse') continue;
@@ -96,10 +98,20 @@ describe('崩落界面', () => {
         expect(landmarkTileAt(seed, x, lm.baseY)).toBe(TILE.HARD);
         if (r > lm.top) expect(landmarkTileAt(seed, x, r - 1)).toBe(TILE.AIR);
         expect(landmarkTileAt(seed, x, lm.top)).toBe(r === lm.top ? TILE.HARD : TILE.AIR);
-        expect(landmarkTileAt(seed, x, lm.top - 1)).toBe(null);
+        expect(landmarkTileAt(seed, x, lm.top - 1)).not.toBe(null);
+        expect(landmarkTileAt(seed, x, lm.top - 1)).not.toBe(TILE.HARD);
+        expect(landmarkTileAt(seed, x, lm.top - 9)).toBe(null);
         expect(landmarkTileAt(seed, x, lm.baseY + 1)).toBe(null);
       }
+      // 出口の上: 裂け目の右端から 12 列は板の上 8 行が空く(梯子列は残る)
+      for (let x = lm.gapRight; x < lm.gapRight + 12; x++) {
+        const t = landmarkTileAt(seed, x, lm.top - 8);
+        expect(t === TILE.AIR || t === TILE.LADDER).toBe(true);
+        expect(landmarkTileAt(seed, x, lm.top)).toBe(null);
+      }
+      expect(landmarkTileAt(seed, lm.gapRight + 12, lm.top - 1)).toBe(null);
       expect(landmarkTileAt(seed, lm.gapLeft - 1, lm.top + 1)).toBe(null);
+      expect(landmarkTileAt(seed, lm.gapLeft - 1, lm.top - 1)).toBe(null);
       expect(landmarkTileAt(seed, lm.gapRight, lm.top + 1)).toBe(null);
       expect(towerTopFloorAt(seed, lm.cell, lm.x)).toBe(false);
     }
@@ -119,7 +131,8 @@ describe('landmarkNear', () => {
       } else {
         expect(landmarkNear(seed, lm.cell, lm.gapLeft)).toEqual(lm);
         expect(landmarkNear(seed, lm.cell, lm.gapLeft - 1)).toBe(null);
-        expect(landmarkNear(seed, lm.cell, lm.gapRight)).toBe(null);
+        expect(landmarkNear(seed, lm.cell, lm.gapRight + 11)).toEqual(lm);
+        expect(landmarkNear(seed, lm.cell, lm.gapRight + 12)).toBe(null);
       }
     }
     expect(landmarkNear(42, 0, 100)).toBe(null); // 大構造層でない
