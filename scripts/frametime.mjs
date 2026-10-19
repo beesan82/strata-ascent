@@ -18,11 +18,13 @@ const seconds = Number(args['--seconds'] ?? 4);
 const budget = Number(args['--budget'] ?? 16.7);
 // 計測中に押し続けるキー(例: --press=KeyD で右へ歩く)。立ち止まった場面だけでなく移動中の予算を見る
 const press = args['--press'];
+// --stages: 描画段階ごとの同期ラスタ化時間も出す(?stats=2。バッチ化が崩れるので合計は少し重くなる)
+const stages = '--stages' in args;
 
 const server = await createServer({ logLevel: 'silent', server: { port: 0 } });
 await server.listen();
 const port = server.httpServer.address().port;
-let url = `http://localhost:${port}/?seed=${seed}&stats=1`;
+let url = `http://localhost:${port}/?seed=${seed}&stats=${stages ? 2 : 1}`;
 if (pos) {
   const [x, y] = pos.split(',');
   url += `&x=${x}&y=${y}`;
@@ -60,10 +62,22 @@ try {
   const max = sorted[sorted.length - 1];
   console.log(`frames=${sorted.length} p50=${p50.toFixed(2)}ms p95=${p95.toFixed(2)}ms max=${max.toFixed(2)}ms (url: ${url})`);
   // renderer.render の所要時間(main.ts の ?stats=1)。rAF 間隔は vsync 刻みに量子化されるので、こちらで余裕を見る
-  const stats = await page.evaluate(() => ({
-    render: (window.__renderMs ?? []).slice(-240),
-    present: (window.__presentMs ?? []).slice(-240),
-  }));
+  // present の内訳(getImageData=同期ラスタ化込み / quantize / putImageData / blit=画面への ×scale 転写)
+  const stats = await page.evaluate(() => {
+    const parts = window.__presentParts ?? [[], [], [], []];
+    const stageMs = Object.fromEntries(
+      Object.entries(window.__stageMs ?? {}).map(([k, v]) => [`  stage:${k}`, v.slice(-240)]),
+    );
+    return {
+      ...stageMs,
+      render: (window.__renderMs ?? []).slice(-240),
+      present: (window.__presentMs ?? []).slice(-240),
+      '  getImageData': parts[0].slice(-240),
+      '  quantize': parts[1].slice(-240),
+      '  putImageData': parts[2].slice(-240),
+      '  blit': parts[3].slice(-240),
+    };
+  });
   for (const [name, arr] of Object.entries(stats)) {
     if (arr.length === 0) continue;
     const rs = [...arr].sort((a, b) => a - b);

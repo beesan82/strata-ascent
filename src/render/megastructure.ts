@@ -6,12 +6,28 @@ import { makeRng } from './megastructure/rng';
 import { hazeFactor, hazeColor, structureFill } from './megastructure/atmosphere';
 import { STEEL, mixHex } from './steel';
 import type { DrawOp, StructureSpec } from './megastructure/spec';
+import { bakeKey, bakeLayout, LruCache, specBounds, visibleBlit } from './megastructure/bake';
+
+/** 焼き込み済みの塔 1 本。origin は塔原点(左上)のキャンバス内位置。 */
+interface BakedTower {
+  canvas: HTMLCanvasElement;
+  originX: number;
+  originY: number;
+}
 
 export class MegaStructure {
   /** スロットキー → 生成済みスペック(損傷を量子化してキャッシュ) */
   private cache = new Map<string, StructureSpec>();
   /** キャッシュ上限。超えたら最古から捨てる(可視は数十なので実害なし。specは再生成が安価) */
   private static readonly CACHE_CAP = 600;
+  /**
+   * 焼き込みキャンバスのキャッシュ。毎フレーム塔を描き直すと(ソフトウェア描画で)約 5 ms 掛かるので、
+   * (spec キー, 見かけ幅, 環境色, かすみ) ごとに一度 CPU キャンバスへ描き、以後は drawImage で貼る。
+   * 可視は数十本で、キーは歩いても変わらない(sw はズーム由来、環境色は縦移動の混合帯でのみ変わる)。
+   * 1 本 ≈ 330×420 px ≈ 0.5 MB なので上限 64 で 32 MB 止まり。
+   */
+  static readonly BAKE_CAP = 64;
+  private bakes = new LruCache<BakedTower>(MegaStructure.BAKE_CAP);
 
   constructor(private seed: number) {}
 
@@ -29,6 +45,7 @@ export class MegaStructure {
     slots.sort((a, b) => a.depth - b.depth);
 
     ctx.save();
+    ctx.globalAlpha = 1; // 塔ごとの alpha は焼き込み側に含めてある
     for (const s of slots) {
       // スロットの画面矩形。深度 factor で水平パララックス、基部は画面下 90% の地平に接地。
       // 縦は遠背景として地平固定(絶対高度で飛ばないよう縦パララックスは持たない)。
@@ -42,15 +59,48 @@ export class MegaStructure {
       const baseY = h * 0.9;
       const sy = baseY - sh;
       const hf = hazeFactor(s.depth);
-      this.drawSpec(ctx, spec, sx, sy, sw, sh, bb.ambientColor, hf);
+      const baked = this.bakedFor(s, spec, sw, sh, bb.ambientColor, hf);
+      // 焼き込みは整数画素に貼る(副画素位置の AA は捨て、塔の縁は 1 px 刻みで動く)。
+      // 主バッファは imageSmoothingEnabled=false なので小数位置に貼っても最近傍で同じ結果になる。
+      const dx = Math.round(sx) - baked.originX;
+      const dy = Math.round(sy) - baked.originY;
+      const r = visibleBlit(dx, dy, baked.canvas.width, baked.canvas.height, w, h);
+      if (!r) continue;
+      ctx.drawImage(baked.canvas, r.sx, r.sy, r.w, r.h, r.dx, r.dy, r.w, r.h);
     }
     ctx.restore();
+  }
+
+  /** 塔 1 本の焼き込みを返す(無ければ描いてキャッシュ)。 */
+  private bakedFor(
+    s: Slot, spec: StructureSpec, sw: number, sh: number, ambientColor: string, hf: number,
+  ): BakedTower {
+    const key = bakeKey({ specKey: this.specKey(s), sw, ambientColor, hf });
+    const hit = this.bakes.get(key);
+    if (hit) return hit;
+    const layout = bakeLayout(specBounds(spec, sw, sh));
+    const canvas = document.createElement('canvas');
+    canvas.width = layout.width;
+    canvas.height = layout.height;
+    // 読み戻しはしないが、GPU 無し前提の CPU キャンバスに揃える(chunkbake と同じ)
+    const bctx = canvas.getContext('2d', { willReadFrequently: true })!;
+    this.drawSpec(bctx, spec, layout.originX, layout.originY, sw, sh, ambientColor, hf);
+    const baked = { canvas, originX: layout.originX, originY: layout.originY };
+    this.bakes.set(key, baked);
+    return baked;
+  }
+
+  /** spec キャッシュのキー(損傷を 1/4 刻みに量子化)。焼き込みキーの材料にもなる。 */
+  private specKey(s: Slot): string {
+    const q = Math.round(s.damage * 4) / 4;
+    const type: StructureType = s.biomech ? 'biomech' : s.type;
+    return `${s.key}:${type}:${q}`;
   }
 
   private specFor(s: Slot): StructureSpec {
     const q = Math.round(s.damage * 4) / 4; // 損傷を1/4刻みに量子化
     const type: StructureType = s.biomech ? 'biomech' : s.type;
-    const key = `${s.key}:${type}:${q}`;
+    const key = this.specKey(s);
     let spec = this.cache.get(key);
     if (!spec) {
       spec = buildStructure(type, s.damage, makeRng(this.seed, s.variantSeed, Math.round(q * 100)));

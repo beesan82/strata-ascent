@@ -26,13 +26,31 @@ const seed = seedParam !== null && Number.isFinite(Number(seedParam)) ? Number(s
 const freezeSimulation = params.get('freeze') === '1';
 // ?stats=1 で renderer.render の所要時間と、そのうち present(ラスタ化+量子化)の所要時間(ms)を
 // 直近 600 フレームぶん window.__renderMs / window.__presentMs に残す(scripts/frametime.mjs が読む)
-const collectStats = params.get('stats') === '1';
+// ?stats=2 はさらに描画段階ごとの同期ラスタ化時間を window.__stageMs に残す(段階ごとの重さ調べ)
+const collectStats = params.get('stats') === '1' || params.get('stats') === '2';
+const profileStages = params.get('stats') === '2';
+// present の内訳も window.__presentParts(getImageData / quantize / putImageData / blit の 4 配列)に残す。
 const renderMs: number[] = [];
 const presentMs: number[] = [];
+const presentParts: number[][] = [[], [], [], []];
+const stageMs: Record<string, number[]> = {};
 if (collectStats) {
-  const w = window as unknown as { __renderMs: number[]; __presentMs: number[] };
+  const w = window as unknown as {
+    __renderMs: number[]; __presentMs: number[]; __presentParts: number[][];
+    __stageMs: Record<string, number[]>; __captureRaw: () => void; __rawFrame: () => { w: number; h: number; data: number[] } | null;
+  };
   w.__renderMs = renderMs;
   w.__presentMs = presentMs;
+  w.__presentParts = presentParts;
+  w.__stageMs = stageMs;
+  // scripts/dumpframe.mjs: 量子化前の生画素を 1 フレームぶん取り出す(Node 側の量子化ベンチ用)
+  w.__captureRaw = () => renderer.captureRawFrame();
+  w.__rawFrame = () => {
+    const raw = renderer.lastRawFrame;
+    if (!raw) return null;
+    const { w: bw, h: bh } = renderer.bufferSize;
+    return { w: bw, h: bh, data: Array.from(raw) };
+  };
 }
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -49,6 +67,7 @@ const player = new Player(spawn.x, spawn.y);
 const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
 const renderer = new Renderer(canvas, seed);
+renderer.profileStages = profileStages;
 const debug = params.get('debug');
 renderer.setDebug(debug);
 
@@ -174,9 +193,19 @@ function frame(now: number): void {
     // present の getImageData が描画コマンドを同期ラスタ化させるので、ここの時間に描画全体が含まれる
     renderMs.push(performance.now() - t0);
     presentMs.push(renderer.lastPresentMs);
+    const parts = renderer.lastPresentParts;
+    for (let i = 0; i < 4; i++) presentParts[i].push(parts[i]);
+    if (profileStages) {
+      for (const [name, ms] of Object.entries(renderer.stageMs)) {
+        const arr = stageMs[name] ?? (stageMs[name] = []);
+        arr.push(ms);
+        if (arr.length > 600) arr.shift();
+      }
+    }
     if (renderMs.length > 600) {
       renderMs.shift();
       presentMs.shift();
+      for (const arr of presentParts) arr.shift();
     }
   }
   updateHud();
