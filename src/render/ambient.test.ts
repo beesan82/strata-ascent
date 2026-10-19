@@ -87,3 +87,53 @@ describe('buildersInSlot', () => {
     expect(far.some((b) => b.y === y)).toBe(false);
   });
 });
+
+import { beaconsInView } from './beacon';
+import { biomeIdForCell } from '../world/biomeCells';
+import { DROP_SPEED, DROPS_MAX, fallingDropsInView, isWaterLayer } from './ambient';
+
+describe('fallingDropsInView', () => {
+  // seed 1〜200 から水系の層を探す(biomeIdForCell が waterVoid の cell)
+  const water = (() => {
+    for (let seed = 1; seed < 200; seed++) for (let cell = -4; cell <= 4; cell++) if (biomeIdForCell(seed, cell) === 'waterVoid') return { seed, cell };
+    throw new Error('no water layer');
+  })();
+  const beaconOf = (seed: number, cell: number) => beaconsInView(seed, 192, interfaceBottom(seed, cell) + 10, 400, 60).find((b) => b.cell === cell)!;
+  it('水系の層の光柱の中にだけ粒があり、X は柱の幅、Y は板の下面〜床', () => {
+    const { seed, cell } = water;
+    expect(isWaterLayer(seed, cell)).toBe(true);
+    const bc = beaconOf(seed, cell);
+    const rects = fallingDropsInView(seed, bc.x, (bc.top + bc.floor) / 2, 30, bc.floor - bc.top + 4, 3.3);
+    expect(rects.length).toBeGreaterThan(0);
+    for (const r of rects) {
+      expect(r.x0).toBeGreaterThanOrEqual(bc.x - 12);
+      expect(r.x1).toBeLessThanOrEqual(bc.x + 12);
+      expect(r.y0).toBeGreaterThanOrEqual(bc.top);
+      expect(r.y0).toBeLessThan(bc.floor);
+      expect(r.color).toBe(bc.color);
+    }
+  });
+  it('水系でない層には粒が無い', () => {
+    const seed = 20260711;
+    for (let cell = -3; cell <= 3; cell++) {
+      if (isWaterLayer(seed, cell)) continue;
+      const bc = beaconOf(seed, cell);
+      expect(fallingDropsInView(seed, bc.x, (bc.top + bc.floor) / 2, 30, 60, 1).length).toBe(0);
+    }
+  });
+  it('1 画面 12 個まで(視野に光柱が何本入っても)', () => {
+    const { seed, cell } = water;
+    const bc = beaconOf(seed, cell);
+    expect(fallingDropsInView(seed, bc.x, bc.top + 24, 3000, 100, 2).length).toBeLessThanOrEqual(DROPS_MAX);
+    expect(fallingDropsInView(seed, bc.x, bc.top + 24, 3000, 100, 2).length).toBe(DROPS_MAX);
+  });
+  it('粒は時間で下へ動き(14 タイル/秒)、床で折り返す', () => {
+    const { seed, cell } = water;
+    const bc = beaconOf(seed, cell);
+    const H = bc.floor - bc.top;
+    const a = fallingDropsInView(seed, bc.x, bc.top + H / 2, 30, H * 2, 0)[0];
+    const b = fallingDropsInView(seed, bc.x, bc.top + H / 2, 30, H * 2, 0.1).find((r) => r.x0 === a.x0)!;
+    const d = b.y0 - a.y0;
+    expect(Math.abs(d - DROP_SPEED * 0.1) < 1e-6 || Math.abs(d - DROP_SPEED * 0.1 + H) < 1e-6).toBe(true);
+  });
+});

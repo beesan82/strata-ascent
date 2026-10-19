@@ -1,5 +1,5 @@
-import { biomeCellAt } from '../world/biomeCells';
-import { BAND_FACTOR } from './beacon';
+import { biomeCellAt, biomeIdForCell } from '../world/biomeCells';
+import { BAND_FACTOR, BEACON_HALF_WIDTH, beaconsInView } from './beacon';
 import { interfaceBottom, mod, PASSAGE_SLOT } from '../world/interface';
 import { hash2 } from '../world/noise';
 import { REST_HEIGHT, restPointAt } from '../world/restpoint';
@@ -125,6 +125,41 @@ export function buildersInView(seed: number, camX: number, camY: number, spanX: 
     if (y < y0 || y > y1) continue;
     for (let k = k0; k <= k1; k++) {
       for (const b of buildersInSlot(seed, cell, k, simTime)) if (b.x >= x0 && b.x <= x1) out.push(b);
+    }
+  }
+  return out;
+}
+
+/** 落下粒: 1 画面の上限、光柱 1 本あたりの個数、落下速度(タイル/秒)、アルファ */
+export const DROPS_MAX = 12;
+export const DROPS_PER_BEACON = 6;
+export const DROP_SPEED = 14;
+export const DROP_ALPHA = 0.5;
+
+/** 水系の層か(光柱 cell の前室は層 cell の中にある)。施設の系統(regionAt)ではなく層の見た目で決める */
+export function isWaterLayer(seed: number, cell: number): boolean {
+  return biomeIdForCell(seed, cell) === 'waterVoid';
+}
+
+/**
+ * 水系の層の光柱の中を落ちる粒(1×2 タイル、光柱の色)。粒 i の Y は板の下面から
+ * (位相 × 高さ + 速度 × t) を高さで折り返した位置。視野の縦範囲に掛かる粒だけ、合計 DROPS_MAX まで。
+ */
+export function fallingDropsInView(seed: number, camX: number, camY: number, spanX: number, spanY: number, timeSec: number): LightRect[] {
+  const y0 = camY - spanY / 2;
+  const y1 = camY + spanY / 2;
+  const out: LightRect[] = [];
+  for (const b of beaconsInView(seed, camX, camY, spanX, spanY)) {
+    if (!isWaterLayer(seed, b.cell)) continue;
+    const H = b.floor - b.top;
+    for (let i = 0; i < DROPS_PER_BEACON; i++) {
+      if (out.length >= DROPS_MAX) return out;
+      const dx = (hash2(seed + 9501, b.cell * 8 + i, b.k) * 2 - 1) * (BEACON_HALF_WIDTH - 1);
+      const phase = hash2(seed + 9502, b.cell * 8 + i, b.k);
+      const y = b.top + mod(phase * H + DROP_SPEED * timeSec, H);
+      if (y + 2 < y0 || y > y1) continue;
+      const x = Math.floor(b.x + dx);
+      out.push({ x0: x, y0: y, x1: x + 1, y1: y + 2, alpha: DROP_ALPHA, color: b.color });
     }
   }
   return out;
