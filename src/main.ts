@@ -6,11 +6,14 @@ import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
 import { ChunkStore } from './world/chunks';
 import { Destruction } from './world/destruction';
 import { regionAt, type System } from './world/hierarchy';
-import { interfaceTileAt } from './world/interface';
+import { interfaceTileAt, isGreatInterface, layerNumber, overlookCellAt } from './world/interface';
+import { biomeCellAt } from './world/biomeCells';
 import { CHUNK_SIZE, TILE } from './world/tiles';
 import { findSpawn } from './world/worldgen';
 import { sampleOpenness, targetZoomForOpenness, quantizeZoom } from './core/zoom';
-import { displayY } from './core/coordinate';
+import { displayAltitude, highestLayer } from './core/coordinate';
+import { autoViewStarted, INITIAL_VIEW, viewState, type ViewState } from './core/view';
+import { Caption, captionText } from './render/caption';
 
 const DEFAULT_SEED = 20260711;
 const STEP_MS = 1000 / 60;
@@ -55,6 +58,7 @@ if (collectStats) {
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
+const caption = new Caption(document.getElementById('caption')!);
 
 const destruction = new Destruction();
 const store = new ChunkStore(seed, destruction);
@@ -67,6 +71,10 @@ const player = new Player(spawn.x, spawn.y);
 const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
 const renderer = new Renderer(canvas, seed);
+// 眺望(§6.4)の状態。純粋関数 viewState の出力(目標ズーム・中心オフセット)にカメラが追従する
+let view: ViewState = INITIAL_VIEW;
+// HUD の階層(§6.5): 到達した最高階層。落下で下がっても減らない
+let maxLayer = layerNumber(seed, biomeCellAt(seed, Math.floor(spawn.y)));
 renderer.profileStages = profileStages;
 const debug = params.get('debug');
 renderer.setDebug(debug);
@@ -119,10 +127,36 @@ let opennessEma: number | null = null;
 // EMA係数。約100msごとの更新で0.35=数サンプル(~0.3秒)で追随。小さいほど滑らかで鈍い。
 const OPENNESS_EMA_ALPHA = 0.35;
 
+function clamp(lo: number, hi: number, v: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
 function update(dt: number): void {
   simTime += dt;
-  player.update(input.state, dt, tiles);
-  camera.follow(player.centerX, player.centerY, dt);
+  const s = input.state;
+  player.update(s, dt, tiles);
+  // 眺望(§6.4): 接地・静止で Shift → 手動、見晴らし台に初めて接地 → 自動(通過演出)。
+  // 足元の行は接地時に body の下端がタイル境界に揃うので round で取る。
+  const footRow = Math.round(player.body.y + player.body.h);
+  const halfW = canvas.width / 2;
+  const halfH = canvas.height / 2;
+  const next = viewState(view, {
+    shift: input.shiftHeld,
+    moving: s.left || s.right || s.up || s.down || s.jump,
+    grounded: player.body.onGround,
+    still: player.body.onGround && player.body.vx === 0,
+    aimX: clamp(-1, 1, (input.mouseX * dpr - halfW) / halfW),
+    aimY: clamp(-1, 1, (input.mouseY * dpr - halfH) / halfH),
+    overlookCell: player.body.onGround ? overlookCellAt(seed, Math.floor(player.centerX), footRow) : null,
+    baseZoom: zoomTarget,
+  }, dt);
+  if (autoViewStarted(view, next)) {
+    // 字幕(§6.5): 板 cell を越えた先の層は cell−1。大界面ならその旨を添える
+    const cell = next.autoFiredMinCell!;
+    caption.show(captionText(layerNumber(seed, cell - 1), isGreatInterface(cell)), simTime);
+  }
+  view = next;
+  camera.follow(player.centerX + view.offsetX, player.centerY + view.offsetY, dt);
   // 開放度は毎フレームだと重い(tileAt多数)ので6フレームごとに測る。
   // 求めた目標ズームは quantizeZoom で離散段へ量子化してから、毎フレーム平滑追従する
   // (camera.zoomTo自体は連続補間。描画スケールの段スナップは段I Task5でrenderer側が行う)。
@@ -131,7 +165,8 @@ function update(dt: number): void {
     opennessEma = opennessEma === null ? raw : opennessEma + (raw - opennessEma) * OPENNESS_EMA_ALPHA;
     zoomTarget = quantizeZoom(targetZoomForOpenness(opennessEma));
   }
-  camera.zoomTo(zoomTarget, dt);
+  // 眺望中は view.zoom が 0.35、それ以外は開放度由来の zoomTarget(1 フレーム前の値で十分)
+  camera.zoomTo(view.zoom, dt);
   graviton.update(dt, input.fireHeld, fire);
   if (lastBeam) {
     lastBeam.ttl -= dt;
@@ -157,7 +192,8 @@ const SYSTEM_LABEL: Record<System, string> = {
 };
 
 function updateHud(): void {
-  const coordinateY = displayY(player.body.y, player.body.h);
+  const altitude = displayAltitude(player.body.y, player.body.h);
+  maxLayer = highestLayer(maxLayer, layerNumber(seed, biomeCellAt(seed, Math.floor(player.body.y))));
   const sys = regionAt(seed, Math.floor(player.centerX), Math.floor(player.body.y)).system;
   let cannon = `重力子砲 ${graviton.charges}/3`;
   const r = graviton.chargeRatio;
@@ -166,7 +202,7 @@ function updateHud(): void {
     const bars = Math.round(r * 4);
     cannon += ` [${'#'.repeat(bars)}${'-'.repeat(4 - bars)}]`;
   }
-  hud.textContent = `座標 Y ${coordinateY} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${cannon}`;
+  hud.textContent = `第 ${maxLayer} 階層 / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${cannon}`;
 }
 
 let last = performance.now();
@@ -209,6 +245,7 @@ function frame(now: number): void {
     }
   }
   updateHud();
+  caption.update(simTime);
   requestAnimationFrame(frame);
 }
 
