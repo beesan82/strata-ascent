@@ -1,5 +1,5 @@
 import { Camera } from './core/camera';
-import { Input } from './core/input';
+import { Input, MOVE_KEYS } from './core/input';
 import { Player } from './entities/player';
 import { Graviton } from './entities/graviton';
 import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
@@ -137,6 +137,7 @@ function clamp(lo: number, hi: number, v: number): number {
 function update(dt: number): void {
   simTime += dt;
   const s = input.state;
+  const pressed = input.takePressed();
   player.update(s, dt, tiles);
   // 眺望(§6.4): 接地・静止で Shift → 手動、見晴らし台に初めて接地 → 自動(通過演出)。
   // 足元の行は接地時に body の下端がタイル境界に揃うので round で取る。
@@ -146,6 +147,7 @@ function update(dt: number): void {
   const next = viewState(view, {
     shift: input.shiftHeld,
     moving: s.left || s.right || s.up || s.down || s.jump,
+    newlyMoving: MOVE_KEYS.some((c) => pressed.has(c)),
     grounded: player.body.onGround,
     still: player.body.onGround && player.body.vx === 0,
     aimX: input.mouseSeen ? clamp(-1, 1, (input.mouseX * dpr - halfW) / halfW) : 0,

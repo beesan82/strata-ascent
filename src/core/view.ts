@@ -19,6 +19,8 @@ export interface ViewInput {
   shift: boolean;
   /** 移動キー(左右・上下・ジャンプ)のいずれか押下 */
   moving: boolean;
+  /** このフレームに新たに押された移動キーがあるか(キー別の keydown のエッジ。Input.takePressed) */
+  newlyMoving: boolean;
   /** body.onGround */
   grounded: boolean;
   /** 接地かつ vx === 0 */
@@ -38,8 +40,6 @@ export interface ViewState {
   autoElapsed: number;
   /** 自動眺望を発火した最も上の板の cell。これより上(小さい cell)でだけ再発火する(1 界面 1 回) */
   autoFiredMinCell: number | null;
-  /** 前フレームの moving(新たに押された移動キーの検出用) */
-  prevMoving: boolean;
   /** 出力: 目標ズーム */
   zoom: number;
   /** 出力: カメラ中心の目標オフセット(タイル、プレイヤー中心基準) */
@@ -48,7 +48,7 @@ export interface ViewState {
 }
 
 export const INITIAL_VIEW: ViewState = {
-  mode: 'none', autoElapsed: 0, autoFiredMinCell: null, prevMoving: false, zoom: 1, offsetX: 0, offsetY: 0,
+  mode: 'none', autoElapsed: 0, autoFiredMinCell: null, zoom: 1, offsetX: 0, offsetY: 0,
 };
 
 function clamp01(v: number): number {
@@ -58,12 +58,13 @@ function clamp01(v: number): number {
 /**
  * 1 フレームぶんの遷移。判定順: 自動の発火 → 自動の継続/終了 → 手動 → なし。
  * - 自動眺望は見晴らし台に接地した瞬間(overlookCell が発火済みより上の板)に発火し、AUTO_SECONDS で終わる。
- *   打ち切るのは「新たに押された」移動キーだけ。梯子から D を押したまま着地するのが自然な経路なので、
- *   押しっぱなしの移動では打ち切らない(その間の移動自体は受け付ける)。
+ *   打ち切るのは「新たに押された」移動キー(newlyMoving、キー別の keydown のエッジ)だけ。梯子から D を
+ *   押したまま着地するのが自然な経路なので、押しっぱなしの移動では打ち切らない(その間の移動自体は受け付ける)。
+ *   D を押したまま Space や W を新たに押せば打ち切る(段階3 の保留: moving の OR では検出できなかった)。
  * - 手動眺望は接地・静止で Shift を押している間だけ。移動キーで即解除。
  */
 export function viewState(prev: ViewState, input: ViewInput, dt: number): ViewState {
-  const next: ViewState = { ...prev, prevMoving: input.moving };
+  const next: ViewState = { ...prev };
   const fires = input.overlookCell !== null && input.grounded
     && (prev.autoFiredMinCell === null || input.overlookCell < prev.autoFiredMinCell);
   if (fires) {
@@ -71,9 +72,8 @@ export function viewState(prev: ViewState, input: ViewInput, dt: number): ViewSt
     next.autoElapsed = dt; // 発火したフレームも流れに数える(初フレームからオフセットが動き出す)
     next.autoFiredMinCell = input.overlookCell;
   } else if (prev.mode === 'auto') {
-    const newlyMoving = input.moving && !prev.prevMoving;
     next.autoElapsed = prev.autoElapsed + dt;
-    next.mode = newlyMoving || next.autoElapsed >= AUTO_SECONDS ? 'none' : 'auto';
+    next.mode = input.newlyMoving || next.autoElapsed >= AUTO_SECONDS ? 'none' : 'auto';
   } else {
     next.mode = 'none';
   }

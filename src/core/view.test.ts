@@ -5,7 +5,7 @@ import {
 } from './view';
 
 const base: ViewInput = {
-  shift: false, moving: false, grounded: true, still: true, aimX: 0, aimY: 0, overlookCell: null, baseZoom: 1,
+  shift: false, moving: false, newlyMoving: false, grounded: true, still: true, aimX: 0, aimY: 0, overlookCell: null, baseZoom: 1,
 };
 const step = (s: ViewState, patch: Partial<ViewInput>, dt = 1 / 60): ViewState => viewState(s, { ...base, ...patch }, dt);
 
@@ -65,7 +65,14 @@ describe('自動眺望', () => {
   });
   it('新たに押された移動キーで打ち切る', () => {
     let s = step(INITIAL_VIEW, { overlookCell: 0 });
-    s = step(s, { overlookCell: 0, moving: true, still: false });
+    s = step(s, { overlookCell: 0, moving: true, newlyMoving: true, still: false });
+    expect(s.mode).toBe('none');
+  });
+  it('D を押したまま Space / W を新たに押しても打ち切る(キー別の立ち上がり)', () => {
+    let s = step(INITIAL_VIEW, { moving: true, still: false, grounded: false });
+    s = step(s, { moving: true, still: false, overlookCell: 0 });
+    expect(s.mode).toBe('auto');
+    s = step(s, { moving: true, newlyMoving: true, still: false, overlookCell: 0 });
     expect(s.mode).toBe('none');
   });
   it('押しっぱなしの移動キーでは打ち切らない(梯子から D のまま着地)', () => {
