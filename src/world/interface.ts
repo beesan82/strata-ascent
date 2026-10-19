@@ -21,6 +21,8 @@ export const ANTECHAMBER_DEPTH = 48;
 export const ANTECHAMBER_FADE = 40;
 export const COMPRESSION_DEPTH = 60;
 export const COMPRESSION_MASS_DROP = 0.15;
+/** 開始層の cell(findSpawn は常に cell 0 の前室に置く)。第 1 階層 */
+export const START_CELL = 0;
 
 /** 正規化剰余(負数でも [0, m))。 */
 export function mod(n: number, m: number): number {
@@ -143,4 +145,29 @@ export function terrainModsAt(seed: number, x: number, y: number, cell: number =
   if (dx > ANTECHAMBER_HALF_WIDTH) return null;
   if (dy === ANTECHAMBER_DEPTH) return { cavityScale: 1, massDrop: 0, suppressLadder: false, forceFloor: true };
   return { cavityScale: 1, massDrop: COMPRESSION_MASS_DROP, suppressLadder: false, forceFloor: false };
+}
+
+/**
+ * 階層番号(§6.5)。開始層(cell 0)を第 1 階層とし、上(cell が小さくなる方向)へ 1 ずつ増える。
+ * seed は開始セルが seed 依存になったときのために受けるが、現在は未使用。
+ */
+export function layerNumber(_seed: number, cell: number): number {
+  return START_CELL - cell + 1;
+}
+
+/**
+ * 見晴らし台の床(板 cell の上面 interfaceTop の行)に立っているなら、その板の cell。
+ * footRow は足元の行(接地時は Math.round(body.y + body.h))。X は孔 −12 〜 大穴の手前(+24)、
+ * 孔の梯子列(x === px)は除く。候補 cell は interfaceTileAt と同じ理由で biomeCellAt とその +1。
+ */
+export function overlookCellAt(seed: number, x: number, footRow: number): number | null {
+  const c = biomeCellAt(seed, footRow);
+  for (let cell = c; cell <= c + 1; cell++) {
+    if (interfaceTop(seed, cell) !== footRow) continue;
+    const px = nearestPassage(seed, cell, x).x;
+    if (x === px) return null;
+    if (x >= px - OVERLOOK_LEFT && x < px + HOLE_OFFSET) return cell;
+    return null;
+  }
+  return null;
 }

@@ -11,6 +11,9 @@ const GAME_KEYS = new Set([
   'KeyS',
   'Space',
   'KeyF',
+  'ShiftLeft',
+  'ShiftRight',
+  'KeyM',
 ]);
 
 /** キーボード・マウス状態の集約。updateループから同期的に読む */
@@ -45,5 +48,15 @@ export class Input {
 
   get fireHeld(): boolean {
     return this.keys.has('KeyF');
+  }
+
+  /** 眺望(§6.4): Shift 長押し */
+  get shiftHeld(): boolean {
+    return this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
+  }
+
+  /** ミュート(§6.7、段階5 で音に接続)。いまは状態だけ */
+  get muteHeld(): boolean {
+    return this.keys.has('KeyM');
   }
 }
