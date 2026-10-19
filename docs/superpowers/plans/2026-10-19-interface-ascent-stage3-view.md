@@ -437,3 +437,15 @@ gh pr create --base master --title "feat: overlook view, passage caption and lay
 | 見晴らし台 Shift 長押し(演出後) | — | 16.7 / 6.6 (14.4), max rAF 50 |
 
 rAF p95 の 16.7 と 16.8 は vsync 刻みの丸めで、基準でも同じ 2 回測定で 16.8 が出る(予算 16.7 の判定は境界)。`--stages`(Shift 長押し)では sky p95 4.2 ms、megastructure max 8.4 ms が過渡の正体で、chunks/lighting は 1 ms 以下。
+
+## レビュー後の修正と保留(別エージェントのレビュー)
+
+修正済み:
+- 開始層の床の板(cell 1)の見晴らし台へ歩いて下りると発火し「第 1 階層」が出ていた → `initialView(startCell)` で発火済みの下限を startCell+1 から始める(テストあり)。
+- マウスを一度も動かしていないと (0,0) 扱いで Shift の眺望が左上へ 28 タイル寄った → `Input.mouseSeen` が立つまでオフセット 0。
+
+保留(Minor):
+- 自動眺望中に D を押したまま Space / W を押しても打ち切られない(`moving` を OR で 1 ビットにしているため)。キーごとの立ち上がり検出にすれば直る。
+- HUD の n は `floor(body.y)`(頭)の cell で判定するので、孔の梯子の上端(top−4)まで登って降りても n が上がる。
+- Windows で右 Shift を 8 秒押し続けると固定キー機能のダイアログが出る(preventDefault では防げない)。README に左 Shift 推奨を書くか、長押しの上限を置く。
+- テスト: 大界面(縦坑 ±2)の `overlookCellAt` ケースが無い。字幕の cell−1 / 大界面の選択は main.ts にだけあり未テスト。

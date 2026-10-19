@@ -22,6 +22,8 @@ export class Input {
   /** ビューポート座標。キャンバスが(0,0)起点のフルスクリーンである前提 */
   mouseX = 0;
   mouseY = 0;
+  /** 読み込み後にマウスが一度でも動いたか。動くまでは眺望のオフセットに使わない(左上へ寄らないため) */
+  mouseSeen = false;
 
   constructor() {
     window.addEventListener('keydown', (e) => {
@@ -32,6 +34,7 @@ export class Input {
     window.addEventListener('mousemove', (e) => {
       this.mouseX = e.clientX;
       this.mouseY = e.clientY;
+      this.mouseSeen = true;
     });
     window.addEventListener('blur', () => this.keys.clear());
   }

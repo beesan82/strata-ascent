@@ -12,7 +12,7 @@ import { CHUNK_SIZE, TILE } from './world/tiles';
 import { findSpawn } from './world/worldgen';
 import { sampleOpenness, targetZoomForOpenness, quantizeZoom } from './core/zoom';
 import { displayAltitude, highestLayer } from './core/coordinate';
-import { autoViewStarted, INITIAL_VIEW, viewState, type ViewState } from './core/view';
+import { autoViewStarted, initialView, viewState, type ViewState } from './core/view';
 import { Caption, captionText } from './render/caption';
 
 const DEFAULT_SEED = 20260711;
@@ -72,7 +72,7 @@ const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
 const renderer = new Renderer(canvas, seed);
 // 眺望(§6.4)の状態。純粋関数 viewState の出力(目標ズーム・中心オフセット)にカメラが追従する
-let view: ViewState = INITIAL_VIEW;
+let view: ViewState = initialView(biomeCellAt(seed, Math.floor(spawn.y)));
 // HUD の階層(§6.5): 到達した最高階層。落下で下がっても減らない
 let maxLayer = layerNumber(seed, biomeCellAt(seed, Math.floor(spawn.y)));
 renderer.profileStages = profileStages;
@@ -145,8 +145,8 @@ function update(dt: number): void {
     moving: s.left || s.right || s.up || s.down || s.jump,
     grounded: player.body.onGround,
     still: player.body.onGround && player.body.vx === 0,
-    aimX: clamp(-1, 1, (input.mouseX * dpr - halfW) / halfW),
-    aimY: clamp(-1, 1, (input.mouseY * dpr - halfH) / halfH),
+    aimX: input.mouseSeen ? clamp(-1, 1, (input.mouseX * dpr - halfW) / halfW) : 0,
+    aimY: input.mouseSeen ? clamp(-1, 1, (input.mouseY * dpr - halfH) / halfH) : 0,
     overlookCell: player.body.onGround ? overlookCellAt(seed, Math.floor(player.centerX), footRow) : null,
     baseZoom: zoomTarget,
   }, dt);

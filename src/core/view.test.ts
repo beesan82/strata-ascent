@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { VIEW_ZOOM } from './zoom';
 import {
-  AUTO_FLOW_TILES, autoViewStarted, INITIAL_VIEW, MANUAL_OFFSET_TILES, viewState, type ViewInput, type ViewState,
+  AUTO_FLOW_TILES, autoViewStarted, INITIAL_VIEW, initialView, MANUAL_OFFSET_TILES, viewState, type ViewInput, type ViewState,
 } from './view';
 
 const base: ViewInput = {
@@ -88,5 +88,13 @@ describe('自動眺望', () => {
       return s;
     };
     expect(run()).toEqual(run());
+  });
+});
+
+describe('initialView', () => {
+  it('開始層の床の板(startCell+1)では発火せず、開始層の天井の板(startCell)で初めて発火する', () => {
+    const s0 = initialView(0);
+    expect(step(s0, { overlookCell: 1 }).mode).toBe('none');
+    expect(step(s0, { overlookCell: 0 }).mode).toBe('auto');
   });
 });

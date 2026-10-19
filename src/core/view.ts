@@ -101,6 +101,14 @@ export function viewState(prev: ViewState, input: ViewInput, dt: number): ViewSt
   return next;
 }
 
+/**
+ * 開始時の状態。開始層の床の板(startCell+1)の見晴らし台へ歩いて下りても発火しないよう、
+ * 発火済みの下限を startCell+1 にしておく(最初に発火するのは開始層の天井の板 startCell)。
+ */
+export function initialView(startCell: number): ViewState {
+  return { ...INITIAL_VIEW, autoFiredMinCell: startCell + 1 };
+}
+
 /** 自動眺望がこのフレームで発火したか(字幕の表示トリガ) */
 export function autoViewStarted(prev: ViewState, next: ViewState): boolean {
   return prev.mode !== 'auto' && next.mode === 'auto';
