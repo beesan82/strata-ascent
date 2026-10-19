@@ -7,7 +7,12 @@ import { regionAt } from '../world/hierarchy';
 import { conduitAt } from '../world/network';
 import { facilityTileAt } from '../world/facility';
 import { megaFacilityAt } from '../world/megafacility';
-import { terrainModsAt } from '../world/interface';
+import { nearestPassage, terrainModsAt } from '../world/interface';
+import { biomeCellAt } from '../world/biomeCells';
+import {
+  EDGE_PX, HARD_EDGE_BOTTOM, HARD_EDGE_SIDE, HARD_EDGE_TOP, HARD_FILL, HARD_SEAM,
+  hardEdgeStrength, hardRibAt, hardSeamAt, holeCenterX,
+} from './hardPlate';
 import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
 import { DECOR_MARGIN, DecorCache, decorOpBounds, type DecorOp } from './decor';
@@ -268,9 +273,10 @@ export class ChunkBaker {
 
     // ベース: SOLIDタイルを8近傍から求めたブロブIDでオートタイル描画する。
     // 近傍参照は周囲込みの配列経由なのでチャンクをまたいでも継ぎ目なく一致する。
+    // HARD(界面の板)は近傍としては固体(ブロブが繋がる)だが、自身は専用パスで平坦に塗る。
     for (let ty = span.y; ty < span.y + span.h; ty++) {
       for (let tx = span.x; tx < span.x + span.w; tx++) {
-        if (!isSolid(chunk[ty * CHUNK_SIZE + tx])) continue;
+        if (chunk[ty * CHUNK_SIZE + tx] !== TILE.SOLID) continue;
         const nb = {
           n: isSolid(around(tx, ty - 1)),
           e: isSolid(around(tx + 1, ty)),
@@ -299,7 +305,7 @@ export class ChunkBaker {
     const rimTopColor = mixHex(biome.palette.edge, '#ffffff', 0.4);
     for (let ty = span.y; ty < span.y + span.h; ty++) {
       for (let tx = span.x; tx < span.x + span.w; tx++) {
-        if (!isSolid(chunk[ty * CHUNK_SIZE + tx])) continue;
+        if (chunk[ty * CHUNK_SIZE + tx] !== TILE.SOLID) continue; // HARD は陰影帯・リムを付けない(平坦)
         const edges = reliefEdges(
           isSolid(around(tx, ty - 1)),
           isSolid(around(tx + 1, ty)),
@@ -330,14 +336,7 @@ export class ChunkBaker {
     }
     ctx.globalAlpha = 1;
 
-    // 仮の暗幕: 破壊不能の HARD タイルを鋼より暗く見せる。段階2で超構造体材パレットに置き換える。
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    for (let ty = span.y; ty < span.y + span.h; ty++) {
-      for (let tx = span.x; tx < span.x + span.w; tx++) {
-        if (chunk[ty * CHUNK_SIZE + tx] !== TILE.HARD) continue;
-        ctx.fillRect(tx * P, ty * P, P, P);
-      }
-    }
+    this.bakeHardPlates(ctx, chunk, around, bx, by, span);
 
     // 装飾(アトラスが描く表面線画=surfaceタグ付きはスキップ、物理装飾は残す)。
     // モックの色構成に合わせ、物理装飾は鋼ランプ由来のPALETTE色のまま焼く
@@ -443,6 +442,86 @@ export class ChunkBaker {
     }
     ctx.restore();
     return canvas;
+  }
+
+  /**
+   * 超構造体材パレット(§6.1): 界面の板(HARD)をほぼ黒の平坦な面として塗る。アトラス・陰影帯・
+   * リム・ディザは当てず、16 タイルごとの 1 px 継ぎ目線、上下面の 2 px の硬いエッジ(大穴に
+   * 近いほど強い)、下面の 8 タイル間隔の短い垂下リブだけで量塊を示す。
+   * 継ぎ目・リブ・エッジはワールド座標から決まるので、チャンク境界や部分再焼き込みで切れない。
+   * リブは板の下の空気タイル側から描く(板の最下行がチャンク下端でも自チャンク内に収まる)。
+   */
+  private bakeHardPlates(
+    ctx: CanvasRenderingContext2D,
+    chunk: Uint8Array,
+    around: (lx: number, ly: number) => number,
+    bx: number, by: number, span: CellRect,
+  ): void {
+    const P = BAKE_PPT;
+    ctx.globalAlpha = 1;
+    // 1) 平坦な塗り + 継ぎ目線
+    for (let ty = span.y; ty < span.y + span.h; ty++) {
+      for (let tx = span.x; tx < span.x + span.w; tx++) {
+        if (chunk[ty * CHUNK_SIZE + tx] !== TILE.HARD) continue;
+        ctx.fillStyle = HARD_FILL;
+        ctx.fillRect(tx * P, ty * P, P, P);
+        const seam = hardSeamAt(bx + tx, by + ty);
+        if (seam.v || seam.h) {
+          ctx.fillStyle = HARD_SEAM;
+          ctx.globalAlpha = 0.9;
+          if (seam.v) ctx.fillRect(tx * P, ty * P, 1, P);
+          if (seam.h) ctx.fillRect(tx * P, ty * P, P, 1);
+          ctx.globalAlpha = 1;
+        }
+      }
+    }
+    // 2) 硬いエッジ(空気に面した辺)。継ぎ目より後に描いてエッジが勝つ。
+    for (let ty = span.y; ty < span.y + span.h; ty++) {
+      for (let tx = span.x; tx < span.x + span.w; tx++) {
+        if (chunk[ty * CHUNK_SIZE + tx] !== TILE.HARD) continue;
+        const openN = !isSolid(around(tx, ty - 1));
+        const openS = !isSolid(around(tx, ty + 1));
+        const openW = !isSolid(around(tx - 1, ty));
+        const openE = !isSolid(around(tx + 1, ty));
+        if (!openN && !openS && !openW && !openE) continue;
+        const wx = bx + tx;
+        const wy = by + ty;
+        if (openN || openS) {
+          const cell = biomeCellAt(this.seed, wy);
+          const s = hardEdgeStrength(wx - holeCenterX(nearestPassage(this.seed, cell, wx).x));
+          ctx.globalAlpha = 0.9 * s;
+          if (openN) {
+            ctx.fillStyle = HARD_EDGE_TOP;
+            ctx.fillRect(tx * P, ty * P, P, EDGE_PX);
+          }
+          if (openS) {
+            ctx.fillStyle = HARD_EDGE_BOTTOM;
+            ctx.fillRect(tx * P, (ty + 1) * P - EDGE_PX, P, EDGE_PX);
+          }
+        }
+        if (openW || openE) {
+          ctx.globalAlpha = 0.5;
+          ctx.fillStyle = HARD_EDGE_SIDE;
+          if (openW) ctx.fillRect(tx * P, ty * P, EDGE_PX, P);
+          if (openE) ctx.fillRect((tx + 1) * P - EDGE_PX, ty * P, EDGE_PX, P);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+    // 3) 下面の垂下リブ(板の直下の非固体タイルの上端に描く)
+    for (let ty = span.y; ty < span.y + span.h; ty++) {
+      for (let tx = span.x; tx < span.x + span.w; tx++) {
+        if (chunk[ty * CHUNK_SIZE + tx] === TILE.HARD) continue;
+        if (around(tx, ty - 1) !== TILE.HARD || !hardRibAt(bx + tx)) continue;
+        const rx = (tx + 0.375) * P;
+        ctx.fillStyle = HARD_FILL;
+        ctx.fillRect(rx, ty * P, 0.25 * P, 0.5 * P);
+        ctx.fillStyle = HARD_EDGE_BOTTOM;
+        ctx.globalAlpha = 0.6;
+        ctx.fillRect(rx + 0.25 * P - 1, ty * P, 1, 0.5 * P);
+        ctx.globalAlpha = 1;
+      }
+    }
   }
 
   /** 床の縁の痕跡。タイル(tx,ty)内の正規化座標で描く(y=1が床面)。暗い色調。 */

@@ -24,6 +24,16 @@ const params = new URLSearchParams(location.search);
 const seedParam = params.get('seed');
 const seed = seedParam !== null && Number.isFinite(Number(seedParam)) ? Number(seedParam) : DEFAULT_SEED;
 const freezeSimulation = params.get('freeze') === '1';
+// ?stats=1 で renderer.render の所要時間と、そのうち present(ラスタ化+量子化)の所要時間(ms)を
+// 直近 600 フレームぶん window.__renderMs / window.__presentMs に残す(scripts/frametime.mjs が読む)
+const collectStats = params.get('stats') === '1';
+const renderMs: number[] = [];
+const presentMs: number[] = [];
+if (collectStats) {
+  const w = window as unknown as { __renderMs: number[]; __presentMs: number[] };
+  w.__renderMs = renderMs;
+  w.__presentMs = presentMs;
+}
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
@@ -155,10 +165,20 @@ function frame(now: number): void {
     }
   }
   const beam = lastBeam ? { angle: lastBeam.angle, alpha: lastBeam.ttl / BEAM_TTL } : null;
+  const t0 = collectStats ? performance.now() : 0;
   renderer.render(store, camera, player, input.mouseX * dpr, input.mouseY * dpr, simTime, {
     chargeRatio: graviton.chargeRatio,
     beam,
   });
+  if (collectStats) {
+    // present の getImageData が描画コマンドを同期ラスタ化させるので、ここの時間に描画全体が含まれる
+    renderMs.push(performance.now() - t0);
+    presentMs.push(renderer.lastPresentMs);
+    if (renderMs.length > 600) {
+      renderMs.shift();
+      presentMs.shift();
+    }
+  }
   updateHud();
   requestAnimationFrame(frame);
 }

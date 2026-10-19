@@ -1,5 +1,10 @@
 import { hash2 } from '../world/noise';
 import { mixHex, type BiomeBlend, type BgLayer } from './biome';
+import { BAND_FACTOR, interfaceBandsNear } from './beacon';
+import { STEEL } from './steel';
+
+/** 界面の帯の不透明度 */
+const BAND_ALPHA = 0.7;
 
 export interface FarSil { kind: 'tower' | 'dome' | 'gantry' | 'ring'; x: number; w: number; h: number; color: string }
 
@@ -97,7 +102,26 @@ export class Background {
         case 'haze': this.haze(ctx, L, layerIndex, camY, w, h, ppt, opacity); break;
       }
     }
+
+    // 光の滲み(§6.2)は空のフィルに焼き込んである(renderer.drawSky + beacon.glowStrips)。
+
+    // 界面の帯(§6.1): 上下 1 画面以内の板を、最も手前の遠景層(追従率 0.6)として先に見せる。
+    this.bands(ctx, camY, w, h, ppt);
     ctx.globalAlpha = 1;
+  }
+
+  /** 板の帯。追従率 0.6 で板と同じ Y に置き、暗い帯と下端の細い線で天井の存在を先に読ませる */
+  private bands(ctx: CanvasRenderingContext2D, camY: number, w: number, h: number, ppt: number): void {
+    for (const b of interfaceBandsNear(this.seed, camY, h / ppt)) {
+      const y0 = (b.top - camY) * BAND_FACTOR * ppt + h / 2;
+      const bh = (b.bottom - b.top) * BAND_FACTOR * ppt;
+      ctx.globalAlpha = BAND_ALPHA;
+      ctx.fillStyle = STEEL.black;
+      ctx.fillRect(0, y0, w, bh);
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = STEEL.shadow;
+      ctx.fillRect(0, y0 + bh, w, Math.max(1, 0.1 * ppt));
+    }
   }
 
   /** 近い層ほど不透明(0.2〜0.45に収める) */

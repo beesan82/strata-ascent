@@ -14,6 +14,7 @@ import { drawHierarchyDebug } from './debugHierarchy';
 import { drawBeam, drawCharge } from './beam';
 import { MegaStructure } from './megastructure';
 import { LightShafts } from './lightshaft';
+import { BeaconLights, ambientDelta, glowStrips, type GlowStrip } from './beacon';
 import { HIGH_FIDELITY_TILE_PX, PixelPipeline } from './pixel';
 import { paletteRgb } from './palette';
 import { quantizeZoom } from '../core/zoom';
@@ -37,6 +38,10 @@ const SHAKE_MAX = 6;
  * そろうよう16の倍数にする(6だと量子化後に空の画素が約0.4%入れ替わった)。
  */
 const SKY_PAD = 16;
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
 
 /** 溜め中/発射ビームの演出パラメータ(main→renderへ毎フレーム渡す) */
 export interface GravitonFx {
@@ -83,12 +88,18 @@ export class Renderer {
   private background: Background;
   private megastructure: MegaStructure;
   private lightShafts: LightShafts;
+  private beacons: BeaconLights;
   private debugMode: string | null = null;
   /**
    * 直近フレームで算出したエイム角(ワールド空間・マウス方向)。
    * update側(main)がビーム/ボーリング方向として読む。1フレーム遅延は許容。
    */
   aimAngle = 0;
+  /**
+   * 直近フレームの present(同期ラスタ化+量子化+転写)の所要時間(ms)。計測用(main の ?stats=1)。
+   * 描画コマンドはここで初めてラスタ化されるので、描画パスの重さもこの値に現れる。
+   */
+  lastPresentMs = 0;
   /** drawSky の作業キャンバスと、その色・寸法のキー */
   private sky: { key: string; canvas: HTMLCanvasElement } | null = null;
 
@@ -107,6 +118,7 @@ export class Renderer {
     this.background = new Background(seed);
     this.megastructure = new MegaStructure(seed);
     this.lightShafts = new LightShafts(seed);
+    this.beacons = new BeaconLights(seed);
   }
 
   setDebug(mode: string | null): void {
@@ -143,8 +155,14 @@ export class Renderer {
    * ときだけ作業キャンバスへ塗り、毎フレームは等倍で貼る。シェイクで生じる端の隙間を隠すため
    * 少し外側まで塗る(shake=0でも無害)。グラデの座標は従来どおり内部バッファの 0..h。
    */
-  private drawSky(ctx: CanvasRenderingContext2D, w: number, h: number, top: string, bottom: string): void {
-    const key = `${w}x${h}:${top}:${bottom}`;
+  private drawSky(
+    ctx: CanvasRenderingContext2D, w: number, h: number, top: string, bottom: string,
+    glow: { color: string; strips: GlowStrip[] },
+  ): void {
+    // 滲みの帯(§6.2)もここへ焼き込む。帯はアルファ 1/64 刻み・8 px 単位なので、立ち止まっていれば
+    // キーは変わらず、歩いても数フレームに 1 回しか塗り直さない(毎フレーム全面 lighter を避ける)。
+    const glowKey = glow.strips.map((s) => `${s.x0}-${s.x1}:${s.alpha}`).join(',');
+    const key = `${w}x${h}:${top}:${bottom}:${glow.color}:${glowKey}`;
     if (this.sky?.key !== key) {
       const canvas = this.sky?.canvas ?? document.createElement('canvas');
       canvas.width = w + SKY_PAD * 2;
@@ -156,6 +174,18 @@ export class Renderer {
       grad.addColorStop(1, bottom);
       sctx.fillStyle = grad;
       sctx.fillRect(0, 0, canvas.width, canvas.height);
+      sctx.globalCompositeOperation = 'lighter';
+      sctx.fillStyle = glow.color;
+      for (const s of glow.strips) {
+        if (s.alpha <= 0) continue;
+        sctx.globalAlpha = s.alpha;
+        // 端の帯は余白まで延ばす(シェイクで余白が見えても途切れない)
+        const x0 = s.x0 === 0 ? 0 : s.x0 + SKY_PAD;
+        const x1 = s.x1 === w ? canvas.width : s.x1 + SKY_PAD;
+        sctx.fillRect(x0, 0, x1 - x0, canvas.height);
+      }
+      sctx.globalAlpha = 1;
+      sctx.globalCompositeOperation = 'source-over';
       this.sky = { key, canvas };
     }
     ctx.drawImage(this.sky.canvas, -SKY_PAD, -SKY_PAD);
@@ -192,13 +222,18 @@ export class Renderer {
 
     // バイオーム混合(背景・環境光で共有)
     const bb = biomeBlend(this.seed, player.centerX, player.body.y);
+    // §6.3 の補正: 前室の光溜まりの中で +0.15、外で −0.1(距離補間)。暗幕・光条・ビネットにだけ掛け、
+    // 空のフィルには掛けない(フィルは色キーで作業キャンバスを再生成するため、歩くたびに再描画が走る)。
+    const ambient = clamp01(bb.ambientLevel + ambientDelta(this.seed, player.centerX, player.body.y));
 
     // 背景(最初のフィル): ほぼ黒の鋼基準色をベースに、バイオーム環境色でわずかに持ち上げる。
     // ambientLevelが高いほど明るく色づき(水系統=大空洞帯は暗青の空気に)、
     // ambientの低い系統(廃棄物層など)はほぼ暗いまま。SOLIDタイルより必ず暗くしてシルエットを保つ。
     // 上を少し明るく下を暗くする縦グラデで開放空間に奥行きを与える。
     const lit = mixHex(STEEL.black, mixHex(bb.ambientColor, '#000000', 0.6), bb.ambientLevel);
-    this.drawSky(ctx, w, h, mixHex(lit, '#ffffff', 0.05 * bb.ambientLevel), mixHex(lit, '#000000', 0.45));
+    // 光の滲み(§6.2): 最寄りの大穴へ向かう横の明るさの偏りを空のフィルに焼き込む(遠景の背後)
+    const glow = glowStrips(this.seed, renderCam.x, renderCam.y, w, ppt);
+    this.drawSky(ctx, w, h, mixHex(lit, '#ffffff', 0.05 * bb.ambientLevel), mixHex(lit, '#000000', 0.45), glow);
 
     // パララックス遠景(バイオーム配色の多層構造)
     this.background.render(ctx, renderCam.x, renderCam.y, w, h, ppt, bb);
@@ -252,17 +287,21 @@ export class Renderer {
     );
 
     // バイオーム環境光+プレイヤー補助光
-    this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, bb.ambientLevel);
+    // 光柱と光溜まり(§6.2)は §6.3 により暗幕の上に lighter で描く(暗幕で消えない)。
+    // §6 の合成順ではプレイヤーの前だが、暗幕の上に置く規則を優先する。暗幕の半解像度キャンバスへ
+    // 描いて一緒に乗せる(全画面 lighter を 1 パス節約。lighter の矩形は画素数に比例して重い)。
+    this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, ambient, (lctx, s) =>
+      this.beacons.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec));
 
     // 光条(場所依存の体積光)。ライトの後・FX/postの前。暗く開けた空間だけに硬い光条が差す。
-    this.lightShafts.render(ctx, renderCam, w, h, ppt, bb.ambientLevel);
+    this.lightShafts.render(ctx, renderCam, w, h, ppt, ambient);
 
     // 重力子砲の演出: ライトの「上」に描いて発光体として読ませる。
     // ただし post(グレイン+ビネット)の「前」に描くことで画面全体の質感と馴染ませる。
     drawGravitonEffects(ctx, visualAnchors.muzzle, fx, w, h);
 
     // ポストプロセス(グレイン+ビネット)
-    this.post.render(ctx, w, h, bb.ambientLevel);
+    this.post.render(ctx, w, h, ambient);
 
     if (this.debugMode && this.debugMode.startsWith('hierarchy')) {
       // 'hierarchy' または 'hierarchy:<tilesAcross>'。既定は広域俯瞰(40000タイル)。
@@ -274,7 +313,9 @@ export class Renderer {
     ctx.restore(); // シェイクの平行移動を戻す
     // update側がボーリング/ビーム方向として読めるよう、算出したエイム角を公開する
     this.aimAngle = angle;
+    const tPresent = performance.now();
     this.pipeline.present(this.screenCtx, this.canvas.width, this.canvas.height);
+    this.lastPresentMs = performance.now() - tPresent;
 
     // 同期焼き込みのなかったフレームだけ、先読み/再焼き込みを1仕事進める
     if (!this.baker.takeBakedThisFrame()) {
