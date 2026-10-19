@@ -18,18 +18,21 @@ export const TOWER_BLINK_DUTY = 0.15;
 /** 点滅の色(赤橙。層の accent とは別の「人工の灯」として遠くから読める) */
 export const TOWER_BLINK_COLOR = '#ff5a3c';
 /** 点滅の灯のアルファと暈のアルファ */
-const TOWER_LAMP_ALPHA = 0.6;
+const TOWER_LAMP_ALPHA = 0.7;
 const TOWER_HALO_ALPHA = 0.12;
-/** 裂け目の光条の基準アルファ(3 本: 1, 0.75, 0.5 倍)。光柱(0.1)より僅かに弱い */
-export const RIFT_ALPHA = 0.08;
+/**
+ * 裂け目の光条の基準アルファ(3 本: 1, 0.75, 0.5 倍)。光柱の芯(0.1 × 1.4 に縁 0.75 が重なる)と同程度。
+ * 0.08 では暗幕と量子化の後に帯が見えなかった(スクリーンショットで確認)。帯は重ねないので 1 枚 1 色のまま
+ */
+export const RIFT_ALPHA = 0.22;
 /** 光条の中心位置(裂け目の幅に対する割合)と幅(割合) */
 const RIFT_RAY_POS = [0.15, 0.35, 0.55] as const;
 const RIFT_RAY_WIDTH = 0.1;
 /** 光条の上端: 板の上面からこれだけ上(上の層から差し込む) */
 const RIFT_RAY_TOP = 6;
-/** 休憩点の暖色とそのアルファ(箱の内側に 1 枚) */
+/** 休憩点の暖色とそのアルファ(箱の内側に 1 枚)。0.1 では箱全体が橙の塊になり灯の暈が読めなかった */
 export const REST_WARM_COLOR = '#d8903a';
-export const REST_WARM_ALPHA = 0.1;
+export const REST_WARM_ALPHA = 0.05;
 
 /** ワールド座標(タイル)の平坦な矩形 [x0,x1)×[y0,y1) */
 export interface LightRect {
@@ -49,10 +52,10 @@ export function towerBlink(timeSec: number, k: number): boolean {
 
 function towerLights(lm: Landmark, timeSec: number, out: LightRect[]): void {
   if (!towerBlink(timeSec, lm.k)) return;
-  // 灯(3×1.5 タイル)と暈(8×4)。頂部の開口(top−8..top)のすぐ上に浮かぶ
+  // 灯(2×1 タイル)と暈(6×3)。頂部の開口(top−8..top)のすぐ上に浮かぶ
   const y = lm.top - 8;
-  out.push({ x0: lm.x - 1.5, y0: y - 1.5, x1: lm.x + 1.5, y1: y, alpha: TOWER_LAMP_ALPHA, color: TOWER_BLINK_COLOR });
-  out.push({ x0: lm.x - 4, y0: y - 4, x1: lm.x + 4, y1: y, alpha: TOWER_HALO_ALPHA, color: TOWER_BLINK_COLOR });
+  out.push({ x0: lm.x - 1, y0: y - 1, x1: lm.x + 1, y1: y, alpha: TOWER_LAMP_ALPHA, color: TOWER_BLINK_COLOR });
+  out.push({ x0: lm.x - 3, y0: y - 3, x1: lm.x + 3, y1: y, alpha: TOWER_HALO_ALPHA, color: TOWER_BLINK_COLOR });
 }
 
 function collapseLights(seed: number, lm: Landmark, timeSec: number, out: LightRect[]): void {
