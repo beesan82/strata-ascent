@@ -71,7 +71,19 @@ export function restPointAt(seed: number, cell: number, k: number): RestPoint {
     if (lx === groupLadderX(seed, lx)) lx++;
     lamps.push(lx);
   }
-  return { cell, k, x, floorY, left, right, lamps, packX: right - 3, tallyY: floorY - 6 };
+  // 荷袋は右の壁の内側 3 列。そこが 32 タイル梯子列なら 1 列左へ(床が LADDER だと描かれない。段階4 の保留)
+  const packX = right - 3 === groupLadderX(seed, right - 3) ? right - 4 : right - 3;
+  return { cell, k, x, floorY, left, right, lamps, packX, tallyY: floorY - 6 };
+}
+
+/**
+ * 層 cell の休憩点の箱(天井〜床)が取り得る Y の帯 [y0, y1]。床は層の 40〜60% なので、この帯の外では
+ * nearestRestPoint(restPointAt 3 回)を呼ばずに棄却できる(チャンク生成の restPointTileAt / traceAt が軽くなる)。
+ */
+export function restPointBand(seed: number, cell: number): { y0: number; y1: number } {
+  const bottom = interfaceBottom(seed, cell);
+  const H = interfaceTop(seed, cell + 1) - bottom;
+  return { y0: bottom + Math.round(H * 0.4) - REST_HEIGHT - 1, y1: bottom + Math.round(H * 0.6) };
 }
 
 /** (x, y) の層で x に最寄りの休憩点(k0 とその両隣から選ぶ) */
@@ -91,6 +103,8 @@ export function nearestRestPoint(seed: number, x: number, y: number): RestPoint 
  * 中は AIR。32 タイル梯子列は床・天井も貫いて残す(通路)。
  */
 export function restPointTileAt(seed: number, x: number, y: number): Tile | null {
+  const band = restPointBand(seed, biomeCellAt(seed, y));
+  if (y < band.y0 || y > band.y1) return null;
   const rp = nearestRestPoint(seed, x, y);
   if (x < rp.left || x > rp.right || y > rp.floorY || y < rp.floorY - REST_HEIGHT - 1) return null;
   if (x === groupLadderX(seed, x)) return TILE.LADDER;
@@ -101,6 +115,8 @@ export function restPointTileAt(seed: number, x: number, y: number): Tile | null
 
 /** 休憩点の暖かさ: 箱の中で 1、箱からのチェビシェフ距離 12 タイルで 0(線形) */
 export function restWarmthAt(seed: number, x: number, y: number): number {
+  const band = restPointBand(seed, biomeCellAt(seed, y));
+  if (y < band.y0 - REST_WARM_FADE || y > band.y1 + REST_WARM_FADE) return 0;
   const rp = nearestRestPoint(seed, x, y);
   const dx = Math.max(0, rp.left - x, x - rp.right);
   const dy = Math.max(0, rp.floorY - REST_HEIGHT - 1 - y, y - rp.floorY);
