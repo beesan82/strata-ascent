@@ -2,9 +2,14 @@ import { hash2 } from '../world/noise';
 import { mixHex, type BiomeBlend, type BgLayer } from './biome';
 import { BAND_FACTOR, interfaceBandsNear } from './beacon';
 import { STEEL } from './steel';
+import { buildersInView } from './ambient';
 
 /** 界面の帯の不透明度 */
 const BAND_ALPHA = 0.7;
+/** 遠景の建設者(§6.6)のシルエットの不透明度と大きさ(帯の座標系のタイル) */
+const BUILDER_ALPHA = 0.85;
+const BUILDER_W = 1.5;
+const BUILDER_H = 2.4;
 
 export interface FarSil { kind: 'tower' | 'dome' | 'gantry' | 'ring'; x: number; w: number; h: number; color: string }
 
@@ -91,6 +96,7 @@ export class Background {
     h: number,
     ppt: number,
     bb: BiomeBlend,
+    simTime = 0,
   ): void {
     // 最遠層: 遠景の巨大シルエット + 稀少な巨大ランドマーク(近景層より背後)
     this.farLayer(ctx, camX, camY, w, h, ppt, bb);
@@ -107,7 +113,27 @@ export class Background {
 
     // 界面の帯(§6.1): 上下 1 画面以内の板を、最も手前の遠景層(追従率 0.6)として先に見せる。
     this.bands(ctx, camY, w, h, ppt);
+    this.builders(ctx, camX, camY, w, h, ppt, simTime);
     ctx.globalAlpha = 1;
+  }
+
+  /**
+   * 遠景の建設者(§6.6): 板の帯の裏面(下端)に掛かる小さなシルエット。帯と同じ追従率 0.6 で板に沿って
+   * 0.3 タイル/秒で動く。設計書の「最遠パララックス層」は farLayer(追従率 0.006)だが、それでは板から
+   * 外れるので、板に紐づく最も遠い層である帯に置く(裁定)。矩形 1 枚 1 色、1 画面に数体。
+   */
+  private builders(ctx: CanvasRenderingContext2D, camX: number, camY: number, w: number, h: number, ppt: number, simTime: number): void {
+    const f = BAND_FACTOR * ppt;
+    const bw = Math.max(2, BUILDER_W * f);
+    const bh = Math.max(2, BUILDER_H * f);
+    // 帯と同じ黒。帯の裏面から突き出た影として、空や遠景の塔より暗く読ませる(STEEL.far では遠景と同化した)
+    ctx.globalAlpha = BUILDER_ALPHA;
+    ctx.fillStyle = STEEL.black;
+    for (const b of buildersInView(this.seed, camX, camY, w / ppt, h / ppt, simTime)) {
+      const sx = (b.x - camX) * f + w / 2;
+      const sy = (b.y - camY) * f + h / 2;
+      ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy), Math.round(bw), Math.round(bh));
+    }
   }
 
   /** 板の帯。追従率 0.6 で板と同じ Y に置き、暗い帯と下端の細い線で天井の存在を先に読ませる */

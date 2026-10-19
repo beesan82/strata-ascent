@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { buildersInSlot } from './ambient';
 import { Background, backgroundLayerContributions, farSilhouettes, rareLandmarkAt } from './background';
 import { BIOMES, type BiomeBlend } from './biome';
 
@@ -103,6 +104,22 @@ describe('Background interface bands', () => {
     const ctx = new RecordingContext();
     new Background(SEED).render(ctx as unknown as CanvasRenderingContext2D, 196, 40, 680, 380, 20, testBlend(0));
     expect(ctx.fillRects.some(([x, , w, h]) => x === 0 && w === 680 && Math.abs(h - BAND_H) < 1)).toBe(true);
+  });
+
+  it('板の帯の下端に建設者のシルエット(1.5×2.4 タイル × 0.6 × ppt)を描き、時間で X が動く', () => {
+    // 建設者がいるスロットを探し、その 1 体の位置にカメラを置く(板の下面は帯の座標で画面内)
+    let first = buildersInSlot(SEED, 0, 0, 0);
+    for (let k = 1; first.length === 0; k++) first = buildersInSlot(SEED, 0, k, 0);
+    const shot = (t: number) => {
+      const ctx = new RecordingContext();
+      new Background(SEED).render(ctx as unknown as CanvasRenderingContext2D, first[0].x, first[0].y, 680, 380, 20, testBlend(0), t);
+      return ctx.fillRects.filter(([, , w, h]) => w === Math.round(1.5 * 0.6 * 20) && h === Math.round(2.4 * 0.6 * 20));
+    };
+    const a = shot(0);
+    const b = shot(10); // 3 タイル動く(視野 ±28 の中に留まる)
+    expect(a.length).toBeGreaterThan(0);
+    expect(a.length).toBe(b.length);
+    expect(a.some(([x], i) => x !== b[i][0])).toBe(true);
   });
 
   it('板から 1 画面以上離れると帯を描かない', () => {

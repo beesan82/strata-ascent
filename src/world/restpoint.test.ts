@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { groupLadderX, interfaceBottom, interfaceTop, passageX } from './interface';
 import { TILE } from './tiles';
-import { nearestRestPoint, restPointAt, restPointTileAt, restWarmthAt } from './restpoint';
+import { nearestRestPoint, REST_HEIGHT, REST_WARM_FADE, restPointAt, restPointBand, restPointTileAt, restWarmthAt } from './restpoint';
 
 const seeds = [1, 42, 20260711];
 
@@ -27,7 +27,8 @@ describe('restPointAt', () => {
         expect(lx).toBeLessThan(rp.right);
         expect(lx === groupLadderX(seed, lx)).toBe(false);
       }
-      expect(rp.packX).toBe(rp.right - 3);
+      expect(rp.packX).toBeGreaterThanOrEqual(rp.right - 4);
+      expect(rp.packX).toBeLessThan(rp.right);
       expect(rp.tallyY).toBe(rp.floorY - 6);
     }
   });
@@ -75,5 +76,32 @@ describe('nearestRestPoint / restWarmthAt', () => {
     expect(restWarmthAt(20260711, rp.x, rp.floorY + 6)).toBeCloseTo(0.5, 5);
     expect(restWarmthAt(20260711, rp.right + 12, rp.floorY - 5)).toBe(0);
     expect(restWarmthAt(20260711, rp.x + 300, rp.floorY)).toBe(0);
+  });
+});
+
+describe('段階5 の保留 Minor', () => {
+  it('restPointBand: 全ての休憩点の箱は帯の中にあり、帯の外では restPointTileAt が null、restWarmthAt は帯 ±12 の外で 0', () => {
+    for (const seed of [1, 42, 20260711]) for (const cell of [-2, 0, 1]) {
+      const band = restPointBand(seed, cell);
+      for (let k = -3; k <= 3; k++) {
+        const rp = restPointAt(seed, cell, k);
+        expect(rp.floorY - REST_HEIGHT - 1).toBeGreaterThanOrEqual(band.y0);
+        expect(rp.floorY).toBeLessThanOrEqual(band.y1);
+        expect(restPointTileAt(seed, rp.x, band.y0 - 1)).toBe(null);
+        expect(restPointTileAt(seed, rp.x, band.y1 + 1)).toBe(null);
+        const fx = rp.x === groupLadderX(seed, rp.x) ? rp.x + 1 : rp.x; // 梯子列は床も貫く
+        expect(restPointTileAt(seed, fx, rp.floorY)).toBe(TILE.SOLID);
+        expect(restWarmthAt(seed, rp.x, band.y0 - REST_WARM_FADE - 1)).toBe(0);
+        expect(restWarmthAt(seed, rp.x, rp.floorY - 3)).toBe(1);
+      }
+    }
+  });
+  it('荷袋は梯子列に乗らない', () => {
+    for (let seed = 1; seed <= 60; seed++) for (const cell of [-2, 0, 1]) for (let k = -3; k <= 3; k++) {
+      const rp = restPointAt(seed, cell, k);
+      expect(rp.packX).not.toBe(groupLadderX(seed, rp.packX));
+      expect(rp.packX).toBeGreaterThanOrEqual(rp.right - 4);
+      expect(rp.packX).toBeLessThan(rp.right);
+    }
   });
 });

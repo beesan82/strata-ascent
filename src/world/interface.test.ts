@@ -136,6 +136,18 @@ describe('overlookCellAt', () => {
     expect(overlookCellAt(seed, 210, top + 1)).toBe(null);
     expect(overlookCellAt(seed, 210, top - 1)).toBe(null);
   });
+  it('大界面(cell −2、縦坑 ±2)でも見晴らし台の X 範囲で cell を返し、縦坑の列は null', () => {
+    const seed = 20260711;
+    const cell = -2;
+    const top = interfaceTop(seed, cell);
+    const px = passageX(seed, cell, 0);
+    expect(isGreatInterface(cell)).toBe(true);
+    expect(overlookCellAt(seed, px + 4, top)).toBe(cell);
+    expect(overlookCellAt(seed, px - OVERLOOK_LEFT, top)).toBe(cell);
+    expect(overlookCellAt(seed, px, top)).toBe(null);
+    expect(overlookCellAt(seed, px + HOLE_OFFSET, top)).toBe(null);
+    expect(overlookCellAt(seed, px + 4, top + 1)).toBe(null);
+  });
   it('塔の頂部の床(幅 12、梯子列を除く)でも述語を渡せばその板の cell を返す。述語無しなら null', () => {
     let towers = 0;
     for (const seed of seeds) for (const cell of [-2, 1]) for (const k of [-3, 0, 3]) {
