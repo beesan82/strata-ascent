@@ -159,14 +159,21 @@ export function layerNumber(_seed: number, cell: number): number {
  * 見晴らし台の床(板 cell の上面 interfaceTop の行)に立っているなら、その板の cell。
  * footRow は足元の行(接地時は Math.round(body.y + body.h))。X は孔 −12 〜 大穴の手前(+24)、
  * 孔の梯子列(x === px)は除く。候補 cell は interfaceTileAt と同じ理由で biomeCellAt とその +1。
+ * towerTop(cell, x) を渡すと、塔(§5.5)の頂部の床(板の上面の高さ、幅 12)でも同じ板の cell を返す
+ * (塔経由で上の層へ出ても通過演出が出る)。landmark.ts がこのファイルを import するため、循環を避けて述語で受ける。
+ * 塔の梯子列(頂部の床の中央)は孔の梯子列と同じく除く(towerTopFloorAt が偽を返す)。
  */
-export function overlookCellAt(seed: number, x: number, footRow: number): number | null {
+export function overlookCellAt(
+  seed: number, x: number, footRow: number,
+  towerTop?: (cell: number, x: number) => boolean,
+): number | null {
   const c = biomeCellAt(seed, footRow);
   for (let cell = c; cell <= c + 1; cell++) {
     if (interfaceTop(seed, cell) !== footRow) continue;
     const px = nearestPassage(seed, cell, x).x;
     if (x === px) return null;
     if (x >= px - OVERLOOK_LEFT && x < px + HOLE_OFFSET) return cell;
+    if (towerTop?.(cell, x)) return cell;
     return null;
   }
   return null;

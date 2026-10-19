@@ -3,6 +3,8 @@ import { megaFacilityAt } from './megafacility';
 import { networkTileAt, sectorTrunkTileAt } from './network';
 import { biomeCellAt, biomeIdForCell } from './biomeCells';
 import { ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceTileAt, passageX, terrainModsAt, type TerrainMods } from './interface';
+import { landmarkTileAt } from './landmark';
+import { restPointTileAt } from './restpoint';
 import { terrainProfileFor } from './biomeTerrain';
 import { hash2, valueNoise2 } from './noise';
 import { CHUNK_SIZE, isSolid, TILE, type Tile } from './tiles';
@@ -60,14 +62,18 @@ function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: T
 }
 
 /**
- * 最終タイル。優先順位:
- *   界面タイル(板・縦坑・見晴らし台・大穴) > 前室内(内側・底)はオーバーレイなしで躯体 >
- *   ノイズ LADDER 保持 > 施設・幹線オーバーレイ > 躯体(地形変調込みのノイズ)。
+ * 最終タイル。優先順位(設計書 §5.6):
+ *   HARD(界面の板・塔・崩落斜路) > 孔(LADDER/AIR)・見晴らし台・大穴 > 前室の強制空洞 > 休憩点 >
+ *   ノイズ LADDER 保持 > メガ施設・施設・幹線オーバーレイ > 躯体(地形変調込みのノイズ)。
+ * 大構造は板の HARD にだけ勝つ(塔の縦坑が板を貫き、崩落が板を裂け目と斜路に置き換える)。
+ * 孔・見晴らし台・大穴(LADDER/AIR)は大構造に勝つ(塔が板の下の見晴らし台の上に立っても塞がない)。
  * 不変条件: ノイズが LADDER のタイルは施設で上書きしない(上昇路を保持し到達可能性を守る)。
+ * ただし大構造の中では成立しない(塔・崩落は自前の梯子・斜路が経路)。
  */
 export function tileAt(seed: number, x: number, y: number): Tile {
-  // 界面(板・縦坑・見晴らし台・大穴)が最優先。
   const iface = interfaceTileAt(seed, x, y);
+  const lm = landmarkTileAt(seed, x, y);
+  if (lm !== null && (iface === null || iface === TILE.HARD)) return lm;
   if (iface !== null) return iface;
   const cell = biomeCellAt(seed, y);
   const mods = terrainModsAt(seed, x, y, cell);
@@ -75,12 +81,26 @@ export function tileAt(seed: number, x: number, y: number): Tile {
   // 前室の内側は施設・幹線のオーバーレイを適用しない(空洞を壁で埋めない)。
   // 前室の底(forceFloor)も同様: 施設の内部(AIR)で連続した床が欠けないようにする。
   if (mods?.suppressLadder || mods?.forceFloor) return base;
+  // 休憩点の箱(梯子列は restPointTileAt が保つ)。メガ施設・施設より優先
+  const rest = restPointTileAt(seed, x, y);
+  if (rest !== null) return rest;
   if (base === TILE.LADDER) return base;
   const overlay = megaFacilityAt(seed, x, y)
     ?? facilityTileAt(seed, x, y)
     ?? sectorTrunkTileAt(seed, x, y)
     ?? networkTileAt(seed, x, y);
   return overlay ?? base;
+}
+
+/**
+ * 不壊(HARD)か。tileAt(seed,x,y) === TILE.HARD と同値だが、界面と大構造だけを見て躯体ノイズを計算しない
+ * 安い判定(Destruction.bore が未生成チャンクでも使う)。
+ */
+export function isHardAt(seed: number, x: number, y: number): boolean {
+  const iface = interfaceTileAt(seed, x, y);
+  const lm = landmarkTileAt(seed, x, y);
+  if (lm !== null && (iface === null || iface === TILE.HARD)) return lm === TILE.HARD;
+  return iface === TILE.HARD;
 }
 
 /** 実描画・物理が使う経路。破壊差分を最優先で反映(空なら tileAt と同値)。HARD は破壊済みでも HARD のまま */

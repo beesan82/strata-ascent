@@ -2,6 +2,8 @@
 //   キー入力: [--press=KeyF] [--hold=800] [--capture=during|after] [--settle=400] [--mouse=x,y]
 //   --press したキーを --hold ミリ秒押下する。--capture=during は押下中に撮影(溜め演出向け)、
 //   after(既定)は離してから --settle ミリ秒待って撮影(発射・破壊痕向け)。
+//   --press=KeyW,KeyD --hold=3500,400 のようにカンマ区切りで順に押す(梯子を登って右へ降りる等)。
+//   during は最後のキーを押したまま撮る。
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createServer } from 'vite';
@@ -19,7 +21,6 @@ const wait = Number(args['--wait'] ?? 2500);
 const pos = args['--pos'];
 const debug = args['--debug'];
 const press = args['--press'];
-const hold = Number(args['--hold'] ?? 800);
 const capture = args['--capture'] ?? 'after';
 const settle = Number(args['--settle'] ?? 400);
 const mouse = args['--mouse'];
@@ -59,13 +60,17 @@ try {
 
   // キー入力(溜め→発射など)。--capture=during は押下中、after は離してから撮る。
   if (press) {
-    await page.keyboard.down(press);
-    await page.waitForTimeout(hold);
-    if (capture === 'during') {
-      // 押下したまま撮影(離すと状態が消えるチャージ演出用)
-    } else {
-      await page.keyboard.up(press);
-      await page.waitForTimeout(settle);
+    const keys = press.split(',');
+    const holds = String(args['--hold'] ?? '800').split(',').map(Number);
+    for (let i = 0; i < keys.length; i++) {
+      await page.keyboard.down(keys[i]);
+      await page.waitForTimeout(holds[i] ?? holds[holds.length - 1]);
+      if (i === keys.length - 1 && capture === 'during') {
+        // 押下したまま撮影(離すと状態が消えるチャージ演出用)
+      } else {
+        await page.keyboard.up(keys[i]);
+        if (i === keys.length - 1) await page.waitForTimeout(settle);
+      }
     }
   }
 
