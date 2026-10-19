@@ -99,3 +99,33 @@ describe('Destruction', () => {
     expect(d.maskOf(3, 3)).toBeUndefined();
   });
 });
+
+it('bore は HARD を破壊しない(SOLID は破壊する)', () => {
+  const d = new Destruction();
+  const tiles = (x: number, y: number): Tile => (y === 5 ? (x < 10 ? TILE.SOLID : TILE.HARD) : TILE.AIR);
+  d.bore(0, 5, 0, 20, 0, tiles);
+  expect(d.isDestroyed(3, 5)).toBe(true);
+  expect(d.isDestroyed(15, 5)).toBe(false);
+});
+
+it('bore は未生成(undefined)でも破壊不能と判定された位置を記録しない(隣の未生成位置は従来どおり記録)', () => {
+  const d = new Destruction();
+  const unknown = (): Tile | undefined => undefined;
+  // x=10 の列だけ破壊不能(界面の板)とみなす
+  const isIndestructible = (x: number) => x === 10;
+  d.bore(0, 5, 0, 20, 0, unknown, isIndestructible);
+  expect(d.isDestroyed(10, 5)).toBe(false);
+  expect(d.isDestroyed(11, 5)).toBe(true);
+  expect(d.isDestroyed(9, 5)).toBe(true);
+});
+
+it('applyTo はマスクが 1 でも HARD のタイルを消さない(多層防御)', () => {
+  const d = new Destruction();
+  d.bore(0, 5, 0, 20, 0, () => undefined);
+  expect(d.isDestroyed(7, 5)).toBe(true);
+  const chunk = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE).fill(TILE.SOLID);
+  chunk[5 * CHUNK_SIZE + 7] = TILE.HARD;
+  d.applyTo(chunk, 0, 0);
+  expect(chunk[5 * CHUNK_SIZE + 7]).toBe(TILE.HARD);
+  expect(chunk[5 * CHUNK_SIZE + 6]).toBe(TILE.AIR);
+});

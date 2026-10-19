@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TILE } from '../world/tiles';
+import { TILE, type Tile } from '../world/tiles';
 import {
   sampleOpenness,
   targetZoomForOpenness,
@@ -112,4 +112,10 @@ describe('quantizeZoom', () => {
     expect(quantizeZoom(0.875)).toBe(0.75); // 0.75と1の等距離
     expect(quantizeZoom(0.625)).toBe(0.5); // 0.5と0.75の等距離
   });
+});
+
+it('HARD は閉塞として数える', () => {
+  const all = (t: number) => sampleOpenness(() => t as Tile, 0, 0, 2, 1);
+  expect(all(TILE.HARD)).toBe(0);
+  expect(all(TILE.AIR)).toBe(1);
 });

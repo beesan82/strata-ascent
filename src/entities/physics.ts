@@ -1,4 +1,4 @@
-import { TILE, type Tile } from '../world/tiles';
+import { isSolid, type Tile } from '../world/tiles';
 
 /** 物理ボディ。座標はタイル単位、(x, y)は左上、yは下向きが正 */
 export interface Body {
@@ -16,11 +16,11 @@ export type TileLookup = (tx: number, ty: number) => Tile;
 const EPS = 1e-9;
 const STEP = 1 / 16;
 
-/** タイル添字範囲 [x0..x1] × [y0..y1](両端含む、floor済み)にSOLIDがあるか */
+/** タイル添字範囲 [x0..x1] × [y0..y1](両端含む、floor済み)に固体(SOLID/HARD)があるか */
 function solidInRange(tiles: TileLookup, x0: number, x1: number, y0: number, y1: number): boolean {
   for (let ty = y0; ty <= y1; ty++) {
     for (let tx = x0; tx <= x1; tx++) {
-      if (tiles(tx, ty) === TILE.SOLID) return true;
+      if (isSolid(tiles(tx, ty))) return true;
     }
   }
   return false;

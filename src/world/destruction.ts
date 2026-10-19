@@ -26,11 +26,14 @@ export class Destruction {
     return this.masks.get(`${cx},${cy}`);
   }
 
-  /** チャンク(cx,cy)の生成直後のタイル配列へ破壊を反映する(in-place)。破壊がなければ何もしない */
+  /**
+   * チャンク(cx,cy)の生成直後のタイル配列へ破壊を反映する(in-place)。破壊がなければ何もしない。
+   * 多層防御: マスクが 1 でも HARD(界面の板)は消さない(HARD は生成状態に関わらず不壊)。
+   */
   applyTo(chunk: Uint8Array, cx: number, cy: number): void {
     const mask = this.masks.get(`${cx},${cy}`);
     if (!mask) return;
-    for (let i = 0; i < mask.length; i++) if (mask[i] === 1) chunk[i] = TILE.AIR;
+    for (let i = 0; i < mask.length; i++) if (mask[i] === 1 && chunk[i] !== TILE.HARD) chunk[i] = TILE.AIR;
   }
 
   /**
@@ -38,11 +41,13 @@ export class Destruction {
    * 経路上の非AIRタイルを破壊集合へ追加する。tiles は現在のタイル取得関数。
    * tiles が undefined を返す位置(未生成チャンク)は判定せずに記録する。生成時に applyTo で
    * 反映され、元がAIRでもAIRのままなので見た目は変わらない。発射時の同期生成を避けるため。
+   * ただし isIndestructible(未生成でも安く判定できる不壊判定=界面の板)が真の位置は記録しない。
    * 影響を受けたチャンク座標("cx,cy")の集合を返す(キャッシュ無効化用)。
    */
   bore(
     x0: number, y0: number, angle: number, length: number, radius: number,
     tiles: (x: number, y: number) => Tile | undefined,
+    isIndestructible?: (x: number, y: number) => boolean,
   ): Set<string> {
     const chunks = new Set<string>();
     const dx = Math.cos(angle);
@@ -71,7 +76,12 @@ export class Destruction {
         }
         const i = (wy - cy * CHUNK_SIZE) * CHUNK_SIZE + (wx - cx * CHUNK_SIZE);
         if (mask && mask[i] === 1) continue;
-        if (tiles(wx, wy) === TILE.AIR) continue;
+        const t = tiles(wx, wy);
+        if (t === TILE.AIR) continue;
+        // 破壊不能(界面の板)は掘れない
+        if (t === TILE.HARD) continue;
+        // 未生成チャンクでも破壊不能な位置は記録しない
+        if (t === undefined && isIndestructible?.(wx, wy)) continue;
         if (!mask) {
           mask = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
           this.masks.set(lastKey, mask);

@@ -1,5 +1,5 @@
 import type { ChunkStore } from '../world/chunks';
-import { CHUNK_SIZE, TILE } from '../world/tiles';
+import { CHUNK_SIZE, TILE, isSolid } from '../world/tiles';
 import { blobId } from './tileset/autotile';
 import type { Atlas } from './tileset/atlas';
 import { generateAtlas, type TilePalette } from './tileset/generate';
@@ -7,6 +7,7 @@ import { regionAt } from '../world/hierarchy';
 import { conduitAt } from '../world/network';
 import { facilityTileAt } from '../world/facility';
 import { megaFacilityAt } from '../world/megafacility';
+import { terrainModsAt } from '../world/interface';
 import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
 import { DECOR_MARGIN, DecorCache, decorOpBounds, type DecorOp } from './decor';
@@ -269,16 +270,16 @@ export class ChunkBaker {
     // 近傍参照は周囲込みの配列経由なのでチャンクをまたいでも継ぎ目なく一致する。
     for (let ty = span.y; ty < span.y + span.h; ty++) {
       for (let tx = span.x; tx < span.x + span.w; tx++) {
-        if (chunk[ty * CHUNK_SIZE + tx] !== TILE.SOLID) continue;
+        if (!isSolid(chunk[ty * CHUNK_SIZE + tx])) continue;
         const nb = {
-          n: around(tx, ty - 1) === TILE.SOLID,
-          e: around(tx + 1, ty) === TILE.SOLID,
-          s: around(tx, ty + 1) === TILE.SOLID,
-          w: around(tx - 1, ty) === TILE.SOLID,
-          ne: around(tx + 1, ty - 1) === TILE.SOLID,
-          se: around(tx + 1, ty + 1) === TILE.SOLID,
-          sw: around(tx - 1, ty + 1) === TILE.SOLID,
-          nw: around(tx - 1, ty - 1) === TILE.SOLID,
+          n: isSolid(around(tx, ty - 1)),
+          e: isSolid(around(tx + 1, ty)),
+          s: isSolid(around(tx, ty + 1)),
+          w: isSolid(around(tx - 1, ty)),
+          ne: isSolid(around(tx + 1, ty - 1)),
+          se: isSolid(around(tx + 1, ty + 1)),
+          sw: isSolid(around(tx - 1, ty + 1)),
+          nw: isSolid(around(tx - 1, ty - 1)),
         };
         const r = atlas.rect(blobId(nb));
         ctx.drawImage(
@@ -298,12 +299,12 @@ export class ChunkBaker {
     const rimTopColor = mixHex(biome.palette.edge, '#ffffff', 0.4);
     for (let ty = span.y; ty < span.y + span.h; ty++) {
       for (let tx = span.x; tx < span.x + span.w; tx++) {
-        if (chunk[ty * CHUNK_SIZE + tx] !== TILE.SOLID) continue;
+        if (!isSolid(chunk[ty * CHUNK_SIZE + tx])) continue;
         const edges = reliefEdges(
-          around(tx, ty - 1) === TILE.SOLID,
-          around(tx + 1, ty) === TILE.SOLID,
-          around(tx, ty + 1) === TILE.SOLID,
-          around(tx - 1, ty) === TILE.SOLID,
+          isSolid(around(tx, ty - 1)),
+          isSolid(around(tx + 1, ty)),
+          isSolid(around(tx, ty + 1)),
+          isSolid(around(tx - 1, ty)),
         );
         ctx.globalAlpha = 1; // 前タイルのリムで変えたalphaを帯描画前にリセット
         for (const b of reliefBands(edges, reliefDepth)) {
@@ -328,6 +329,15 @@ export class ChunkBaker {
       }
     }
     ctx.globalAlpha = 1;
+
+    // 仮の暗幕: 破壊不能の HARD タイルを鋼より暗く見せる。段階2で超構造体材パレットに置き換える。
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    for (let ty = span.y; ty < span.y + span.h; ty++) {
+      for (let tx = span.x; tx < span.x + span.w; tx++) {
+        if (chunk[ty * CHUNK_SIZE + tx] !== TILE.HARD) continue;
+        ctx.fillRect(tx * P, ty * P, P, P);
+      }
+    }
 
     // 装飾(アトラスが描く表面線画=surfaceタグ付きはスキップ、物理装飾は残す)。
     // モックの色構成に合わせ、物理装飾は鋼ランプ由来のPALETTE色のまま焼く
@@ -398,7 +408,10 @@ export class ChunkBaker {
             megaFacilityAt(this.seed, wx, wy) === TILE.AIR ||
             facilityTileAt(this.seed, wx, wy) === TILE.AIR;
           if (!inFacility) continue;
-          if (around(tx, ty + 1) !== TILE.SOLID && around(tx, ty + 2) !== TILE.SOLID) continue;
+          // 前室(内側・底)では tileAt が施設オーバーレイを抑止するので、そこは施設内部ではない
+          const mods = terrainModsAt(this.seed, wx, wy);
+          if (mods?.suppressLadder || mods?.forceFloor) continue;
+          if (!isSolid(around(tx, ty + 1)) && !isSolid(around(tx, ty + 2))) continue;
           const y = (ty + 0.5) * P;
           ctx.beginPath();
           ctx.moveTo(tx * P, y);
@@ -416,12 +429,12 @@ export class ChunkBaker {
         const wx = bx + tx;
         const here = chunk[ty * CHUNK_SIZE + tx];
         if (here === TILE.AIR) {
-          if (around(tx, ty + 1) !== TILE.SOLID) continue;
+          if (!isSolid(around(tx, ty + 1))) continue;
           const tr = traceAt(this.seed, wx, wy, 'floor');
           if (tr) this.drawFloorTrace(ctx, tr, tx, ty);
         } else if (here === TILE.SOLID) {
-          const faceLeft = around(tx - 1, ty) !== TILE.SOLID;
-          const faceRight = around(tx + 1, ty) !== TILE.SOLID;
+          const faceLeft = !isSolid(around(tx - 1, ty));
+          const faceRight = !isSolid(around(tx + 1, ty));
           if (!faceLeft && !faceRight) continue;
           const tr = traceAt(this.seed, wx, wy, 'wall');
           if (tr) this.drawWallTrace(ctx, tr, tx, ty, faceLeft ? -1 : 1);
