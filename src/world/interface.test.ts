@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { biomeBoundary } from './biomeCells';
 import { TILE } from './tiles';
 import {
-  ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceThickness, interfaceTileAt, interfaceTop,
-  isGreatInterface, mod, nearestPassage, passageX, PASSAGE_SLOT, terrainModsAt,
+  ANTECHAMBER_DEPTH, groupLadderX, HOLE_OFFSET, interfaceBottom, interfaceThickness, interfaceTileAt, interfaceTop,
+  isGreatInterface, layerNumber, mod, nearestPassage, overlookCellAt, OVERLOOK_LEFT, passageX, PASSAGE_SLOT, terrainModsAt,
 } from './interface';
 
 const seeds = [1, 42, 20260711];
@@ -106,5 +106,41 @@ describe('terrainModsAt', () => {
     expect(terrainModsAt(seed, px, bottom + 80, cell)!.massDrop).toBeCloseTo(0.15, 5);
     expect(terrainModsAt(seed, px, bottom + 109, cell)).toBe(null);
     expect(terrainModsAt(seed, px, bottom - 1, cell)).toBe(null);
+  });
+});
+
+describe('layerNumber', () => {
+  it('開始層 cell 0 は第 1 階層、上(cell が小さい)へ 1 ずつ増え、決定論', () => {
+    expect(layerNumber(20260711, 0)).toBe(1);
+    expect(layerNumber(20260711, -1)).toBe(2);
+    expect(layerNumber(20260711, 1)).toBe(0);
+    for (let c = 5; c > -10; c--) expect(layerNumber(42, c - 1)).toBe(layerNumber(42, c) + 1);
+    expect(layerNumber(1, -3)).toBe(layerNumber(2, -3));
+  });
+});
+
+describe('overlookCellAt', () => {
+  it('seed 20260711 の cell 0: 板の上面 −9 に立つ X 184〜219(梯子列 196 を除く)で 0、大穴側・他の行は null', () => {
+    const seed = 20260711;
+    const top = interfaceTop(seed, 0);
+    const px = passageX(seed, 0, 0);
+    expect(top).toBe(-9);
+    expect(px).toBe(196);
+    expect(overlookCellAt(seed, 210, top)).toBe(0);
+    expect(overlookCellAt(seed, px - OVERLOOK_LEFT, top)).toBe(0);
+    expect(overlookCellAt(seed, px, top)).toBe(null);
+    expect(overlookCellAt(seed, px + HOLE_OFFSET, top)).toBe(null);
+    expect(overlookCellAt(seed, px - OVERLOOK_LEFT - 1, top)).toBe(null);
+    expect(overlookCellAt(seed, 210, top + 1)).toBe(null);
+    expect(overlookCellAt(seed, 210, top - 1)).toBe(null);
+  });
+  it('全 seed・cell・k で見晴らし台の床の行は HARD、その上は HARD でない', () => {
+    for (const seed of seeds) for (let cell = -3; cell <= 2; cell++) for (const k of [-2, 0, 3]) {
+      const px = passageX(seed, cell, k);
+      const top = interfaceTop(seed, cell);
+      expect(overlookCellAt(seed, px + 4, top)).toBe(cell);
+      expect(interfaceTileAt(seed, px + 4, top)).toBe(TILE.HARD);
+      expect(interfaceTileAt(seed, px + 4, top - 1)).not.toBe(TILE.HARD);
+    }
   });
 });

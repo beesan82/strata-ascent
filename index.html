@@ -11,11 +11,18 @@
       color: #9aa4ad; font: 12px monospace; letter-spacing: 0.2em;
       pointer-events: none; user-select: none;
     }
+    /* 通過演出の字幕(§6.5)。HUD と同じ等幅、文字間 0.3em。不透明度は src/render/caption.ts が毎フレーム更新 */
+    #caption {
+      position: fixed; left: 0; right: 0; bottom: 18%; text-align: center;
+      color: #c8d0d6; font: 16px monospace; letter-spacing: 0.3em; opacity: 0;
+      pointer-events: none; user-select: none;
+    }
   </style>
 </head>
 <body>
   <canvas id="game"></canvas>
   <div id="hud"></div>
+  <div id="caption"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

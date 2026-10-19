@@ -11,6 +11,9 @@ const GAME_KEYS = new Set([
   'KeyS',
   'Space',
   'KeyF',
+  'ShiftLeft',
+  'ShiftRight',
+  'KeyM',
 ]);
 
 /** キーボード・マウス状態の集約。updateループから同期的に読む */
@@ -19,6 +22,8 @@ export class Input {
   /** ビューポート座標。キャンバスが(0,0)起点のフルスクリーンである前提 */
   mouseX = 0;
   mouseY = 0;
+  /** 読み込み後にマウスが一度でも動いたか。動くまでは眺望のオフセットに使わない(左上へ寄らないため) */
+  mouseSeen = false;
 
   constructor() {
     window.addEventListener('keydown', (e) => {
@@ -29,6 +34,7 @@ export class Input {
     window.addEventListener('mousemove', (e) => {
       this.mouseX = e.clientX;
       this.mouseY = e.clientY;
+      this.mouseSeen = true;
     });
     window.addEventListener('blur', () => this.keys.clear());
   }
@@ -45,5 +51,15 @@ export class Input {
 
   get fireHeld(): boolean {
     return this.keys.has('KeyF');
+  }
+
+  /** 眺望(§6.4): Shift 長押し */
+  get shiftHeld(): boolean {
+    return this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
+  }
+
+  /** ミュート(§6.7、段階5 で音に接続)。いまは状態だけ */
+  get muteHeld(): boolean {
+    return this.keys.has('KeyM');
   }
 }

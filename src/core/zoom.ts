@@ -4,6 +4,11 @@ import { isSolid } from '../world/tiles';
 export const MIN_ZOOM = 0.5;
 /** ズーム上限(標準表示。横44タイル) */
 export const MAX_ZOOM = 1;
+/**
+ * 眺望専用の段(§6.4)。targetZoomForOpenness は [MIN_ZOOM, MAX_ZOOM] にクランプするので
+ * 開放度からは選ばれず、眺望状態(core/view.ts)だけがこの目標を要求する。
+ */
+export const VIEW_ZOOM = 0.35;
 
 /** 開放度サンプリングの既定半径(タイル) */
 export const OPENNESS_RADIUS = 22;
@@ -61,10 +66,10 @@ export function targetZoomForOpenness(openness: number): number {
  * 許可ズーム段(離散)。開放度由来の目標ズームをこの段へ量子化する。ドット絵で
  * サブピクセルのにじみを避けるため、実際に描画へ使う zoom も renderer(段I)で
  * quantizeZoom(cam.zoom) によりこの段へスナップする(目標と描画の両方を段に乗せる)。
- * MIN_ZOOM(0.5)〜MAX_ZOOM(1)を3段に分ける。昇順。
+ * 眺望専用の VIEW_ZOOM(0.35)と、MIN_ZOOM(0.5)〜MAX_ZOOM(1)の3段の計4段。昇順。
  * 段境界でのチャタリングは既存のopenness EMA平滑で緩和し、残れば実機確認後に対処。
  */
-export const ZOOM_STEPS: readonly number[] = [0.5, 0.75, 1];
+export const ZOOM_STEPS: readonly number[] = [VIEW_ZOOM, 0.5, 0.75, 1];
 
 /**
  * 連続ズーム値を最近傍の許可段へスナップ(範囲外はクランプ)。純関数・決定論・ヒステリシスなし

@@ -9,6 +9,7 @@ import {
   OPENNESS_HI,
   quantizeZoom,
   ZOOM_STEPS,
+  VIEW_ZOOM,
 } from './zoom';
 
 describe('sampleOpenness', () => {
@@ -104,13 +105,18 @@ describe('quantizeZoom', () => {
       prev = q;
     }
   });
-  it('段の両端が MIN_ZOOM/MAX_ZOOM と一致する', () => {
-    expect(ZOOM_STEPS[0]).toBe(MIN_ZOOM);
+  it('段は [VIEW_ZOOM, MIN_ZOOM, ..., MAX_ZOOM]。0.35 は眺望専用', () => {
+    expect(ZOOM_STEPS).toEqual([VIEW_ZOOM, 0.5, 0.75, 1]);
+    expect(ZOOM_STEPS[1]).toBe(MIN_ZOOM);
     expect(ZOOM_STEPS[ZOOM_STEPS.length - 1]).toBe(MAX_ZOOM);
+  });
+  it('開放度由来の目標ズームは量子化しても 0.35 にならない', () => {
+    for (let o = 0; o <= 1; o += 0.01) expect(quantizeZoom(targetZoomForOpenness(o))).toBeGreaterThanOrEqual(MIN_ZOOM);
   });
   it('段の中点は決定論的に低い段へ寄る(タイブレーク)', () => {
     expect(quantizeZoom(0.875)).toBe(0.75); // 0.75と1の等距離
     expect(quantizeZoom(0.625)).toBe(0.5); // 0.5と0.75の等距離
+    expect(quantizeZoom(0.425)).toBe(VIEW_ZOOM); // 0.35と0.5の等距離
   });
 });
 
