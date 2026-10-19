@@ -44,3 +44,46 @@ describe('lampLightsInView', () => {
     expect(lampLightsInView(seed, rp.x + 2000, rp.floorY - 6, 60, 40, 0.37).some((r) => r.x0 <= rp.right)).toBe(false);
   });
 });
+
+import { BUILDER_MAX, BUILDER_SPEED, buildersInSlot, buildersInView } from './ambient';
+import { interfaceBottom, PASSAGE_SLOT } from '../world/interface';
+
+describe('buildersInSlot', () => {
+  it('スロットごとに 0〜2 体、X はスロット内、Y は板の下面', () => {
+    const seed = 20260711;
+    let total = 0;
+    for (let k = -5; k <= 5; k++) {
+      const bs = buildersInSlot(seed, 0, k, 123.4);
+      expect(bs.length).toBeLessThanOrEqual(BUILDER_MAX);
+      total += bs.length;
+      for (const b of bs) {
+        expect(b.x).toBeGreaterThanOrEqual(k * PASSAGE_SLOT);
+        expect(b.x).toBeLessThan((k + 1) * PASSAGE_SLOT);
+        expect(b.y).toBe(interfaceBottom(seed, 0));
+      }
+    }
+    expect(total).toBeGreaterThan(0);
+  });
+  it('位置 = 初期位置 + 速度 × simTime(0.3 タイル/秒)をスロット幅で折り返す', () => {
+    const seed = 42;
+    for (let k = -3; k <= 3; k++) {
+      const at0 = buildersInSlot(seed, 1, k, 0);
+      for (let i = 0; i < at0.length; i++) {
+        const b0 = at0[i];
+        const b1 = buildersInSlot(seed, 1, k, 10)[i];
+        const wrapped = b1.x - b0.x - b0.dir * BUILDER_SPEED * 10;
+        expect(Math.abs(wrapped) < 1e-9 || Math.abs(Math.abs(wrapped) - PASSAGE_SLOT) < 1e-9).toBe(true);
+        expect(buildersInSlot(seed, 1, k, PASSAGE_SLOT / BUILDER_SPEED)[i].x).toBeCloseTo(b0.x, 6);
+      }
+    }
+  });
+  it('buildersInView は板の下面が視野(追従率 0.6 で広げた範囲)に入る層だけ返す', () => {
+    const seed = 20260711;
+    const y = interfaceBottom(seed, 0);
+    const near = buildersInView(seed, 200, y, 44, 24, 5);
+    expect(near.length).toBeGreaterThan(0);
+    expect(near.every((b) => Math.abs(b.y - y) <= 24 / 2 / 0.6)).toBe(true);
+    const far = buildersInView(seed, 200, y + 200, 44, 24, 5);
+    expect(far.some((b) => b.y === y)).toBe(false);
+  });
+});
