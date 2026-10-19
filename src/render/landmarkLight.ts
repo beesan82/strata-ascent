@@ -8,8 +8,10 @@ import { biomeForCell } from './biome';
 /**
  * 大構造の固有の光(設計書 §6.2: 塔は頂部の点滅、崩落は裂け目からの光条)と休憩点の暖色(§6.3)。
  * 幾何は純粋関数 landmarkLightsInView が平坦な矩形(ワールド座標)として返し、LandmarkLights が
- * Lighting の半解像度 overlay へ lighter で塗るだけ。新しい描画パスは足さず、色数も矩形 1 枚 1 色で、
- * 1 画面に最大でも 6 枚程度(塔 2・崩落 3・休憩点 1)に収める(段階2 の性能ルール)。
+ * Lighting の半解像度 overlay へ lighter で塗るだけ。新しい描画パスは足さず、色数も矩形 1 枚 1 色。
+ * 枚数は標準ズームで塔 2・崩落 3・休憩点 1 程度。眺望(0.35)で休憩点が複数入ると、段階5 の灯
+ * (ambient.ts、1 灯 2 枚)を合わせて 10〜20 枚になるが、1 枚は 1〜3 タイル(0.35 では 1 px 前後)で
+ * lighter の画素数は小さい(段階2 の性能ルールの範囲内)。
  */
 
 /** 塔の頂部の点滅: 周期(秒)と点灯割合 */
@@ -105,6 +107,36 @@ export function landmarkLightsInView(seed: number, camX: number, camY: number, s
   return out;
 }
 
+/**
+ * ワールド座標の矩形を lighter で塗る(画面内の部分だけ。lighter の画素数を最小に)。
+ * LandmarkLights と AmbientLights(ambient.ts)が共有する。テスト対象外(Canvas)
+ */
+export function drawLightRects(
+  ctx: CanvasRenderingContext2D,
+  rects: LightRect[],
+  cam: { x: number; y: number },
+  w: number,
+  h: number,
+  ppt: number,
+): void {
+  if (rects.length === 0) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const r of rects) {
+    const sx0 = (r.x0 - cam.x) * ppt + w / 2;
+    const sy0 = (r.y0 - cam.y) * ppt + h / 2;
+    const sx1 = (r.x1 - cam.x) * ppt + w / 2;
+    const sy1 = (r.y1 - cam.y) * ppt + h / 2;
+    const xa = Math.max(0, sx0), xb = Math.min(w, sx1);
+    const ya = Math.max(0, sy0), yb = Math.min(h, sy1);
+    if (xb <= xa || yb <= ya) continue;
+    ctx.globalAlpha = r.alpha;
+    ctx.fillStyle = r.color;
+    ctx.fillRect(xa, ya, xb - xa, yb - ya);
+  }
+  ctx.restore();
+}
+
 /** 大構造の光と休憩点の暖色の描画。Lighting の overlay(半解像度)へ lighter で矩形を塗るだけ。テスト対象外(Canvas) */
 export class LandmarkLights {
   constructor(private seed: number) {}
@@ -117,23 +149,6 @@ export class LandmarkLights {
     ppt: number,
     timeSec: number,
   ): void {
-    const rects = landmarkLightsInView(this.seed, cam.x, cam.y, w / ppt, h / ppt, timeSec);
-    if (rects.length === 0) return;
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const r of rects) {
-      const sx0 = (r.x0 - cam.x) * ppt + w / 2;
-      const sy0 = (r.y0 - cam.y) * ppt + h / 2;
-      const sx1 = (r.x1 - cam.x) * ppt + w / 2;
-      const sy1 = (r.y1 - cam.y) * ppt + h / 2;
-      // 画面内の部分だけ塗る(lighter の画素数を最小に)
-      const xa = Math.max(0, sx0), xb = Math.min(w, sx1);
-      const ya = Math.max(0, sy0), yb = Math.min(h, sy1);
-      if (xb <= xa || yb <= ya) continue;
-      ctx.globalAlpha = r.alpha;
-      ctx.fillStyle = r.color;
-      ctx.fillRect(xa, ya, xb - xa, yb - ya);
-    }
-    ctx.restore();
+    drawLightRects(ctx, landmarkLightsInView(this.seed, cam.x, cam.y, w / ppt, h / ppt, timeSec), cam, w, h, ppt);
   }
 }

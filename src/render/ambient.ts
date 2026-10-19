@@ -3,7 +3,7 @@ import { BAND_FACTOR, BEACON_HALF_WIDTH, beaconsInView } from './beacon';
 import { interfaceBottom, mod, PASSAGE_SLOT } from '../world/interface';
 import { hash2 } from '../world/noise';
 import { REST_HEIGHT, restPointAt } from '../world/restpoint';
-import type { LightRect } from './landmarkLight';
+import { drawLightRects, type LightRect } from './landmarkLight';
 
 /**
  * 動く世界(設計書 §6.6): 休憩点の灯の明滅・遠景の建設者・水系の落下粒。純粋関数が幾何を
@@ -163,4 +163,24 @@ export function fallingDropsInView(seed: number, camX: number, camY: number, spa
     }
   }
   return out;
+}
+
+/** 灯の明滅と落下粒の描画。Lighting の overlay(半解像度)へ相乗りする。テスト対象外(Canvas) */
+export class AmbientLights {
+  constructor(private seed: number) {}
+
+  render(
+    ctx: CanvasRenderingContext2D,
+    cam: { x: number; y: number },
+    w: number,
+    h: number,
+    ppt: number,
+    timeSec: number,
+  ): void {
+    const spanX = w / ppt;
+    const spanY = h / ppt;
+    const rects = lampLightsInView(this.seed, cam.x, cam.y, spanX, spanY, timeSec);
+    for (const r of fallingDropsInView(this.seed, cam.x, cam.y, spanX, spanY, timeSec)) rects.push(r);
+    drawLightRects(ctx, rects, cam, w, h, ppt);
+  }
 }

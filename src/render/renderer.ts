@@ -15,6 +15,7 @@ import { drawBeam, drawCharge } from './beam';
 import { MegaStructure } from './megastructure';
 import { LightShafts } from './lightshaft';
 import { BeaconLights, ambientDelta, glowStrips, type GlowStrip } from './beacon';
+import { AmbientLights } from './ambient';
 import { LandmarkLights, REST_WARM_COLOR } from './landmarkLight';
 import { restWarmthAt } from '../world/restpoint';
 import { HIGH_FIDELITY_TILE_PX, PixelPipeline } from './pixel';
@@ -93,6 +94,7 @@ export class Renderer {
   private lightShafts: LightShafts;
   private beacons: BeaconLights;
   private landmarkLights: LandmarkLights;
+  private ambientLights: AmbientLights;
   private debugMode: string | null = null;
   /**
    * 直近フレームで算出したエイム角(ワールド空間・マウス方向)。
@@ -153,6 +155,7 @@ export class Renderer {
     this.lightShafts = new LightShafts(seed);
     this.beacons = new BeaconLights(seed);
     this.landmarkLights = new LandmarkLights(seed);
+    this.ambientLights = new AmbientLights(seed);
   }
 
   setDebug(mode: string | null): void {
@@ -275,7 +278,7 @@ export class Renderer {
     this.mark('sky');
 
     // パララックス遠景(バイオーム配色の多層構造)
-    this.background.render(ctx, renderCam.x, renderCam.y, w, h, ppt, bb);
+    this.background.render(ctx, renderCam.x, renderCam.y, w, h, ppt, bb, timeSec);
     this.mark('background');
 
     // 意味を持つ超構造(遠→中→近の深度＋かすみ)。焼き込みチャンクより背後、遠景パララックスより手前。
@@ -334,10 +337,11 @@ export class Renderer {
     // §6 の合成順ではプレイヤーの前だが、暗幕の上に置く規則を優先する。暗幕の半解像度キャンバスへ
     // 描いて一緒に乗せる(全画面 lighter を 1 パス節約。lighter の矩形は画素数に比例して重い)。
     // 塔の点滅・裂け目の光条・休憩点の暖色(§6.2, §6.3)も同じ overlay へ相乗りする(新しいパスは足さない。
-    // 矩形は 1 画面に数枚、1 枚 1 色)。
+    // 矩形は 1 画面に数枚、1 枚 1 色)。休憩点の灯の明滅と水系の落下粒(§6.6)も同じ overlay(小矩形)。
     this.lighting.render(ctx, px, py, angle, ppt, timeSec, curtainColor, ambient, (lctx, s) => {
       this.beacons.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
       this.landmarkLights.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
+      this.ambientLights.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
     });
     this.mark('lighting');
 
