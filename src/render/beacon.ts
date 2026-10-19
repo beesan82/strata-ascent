@@ -4,6 +4,7 @@ import {
 } from '../world/interface';
 import { biomeCellAt } from '../world/biomeCells';
 import { biomeForCell } from './biome';
+import { restWarmthAt } from '../world/restpoint';
 import { holeCenterX } from './hardPlate';
 
 /**
@@ -37,6 +38,8 @@ export const AMBIENT_IN_POOL = 0.15;
 export const AMBIENT_OUT_POOL = -0.1;
 /** §6.3 の補正を板の下面から立ち上げる縦の幅(タイル) */
 export const AMBIENT_TOP_FADE = 4;
+/** §6.3: 休憩点の箱の中の ambientLevel 補正(暖色の明るさ)。箱から 12 タイルで 0 へ */
+export const REST_AMBIENT = 0.12;
 
 export interface Beacon {
   cell: number;
@@ -220,12 +223,14 @@ export function interfaceBandsNear(seed: number, camY: number, spanY: number): I
 
 /**
  * §6.3 の ambientLevel 補正。前室(板の下 0..48)の中で、光溜まりの芯(大穴中心 ±20)は +0.15、
- * 裾(±48)の外は −0.1、間は線形補間。前室の外縁 40 タイルで 0 へ戻す。前室の外は 0。
+ * 裾(±48)の外は −0.1、間は線形補間。前室の外縁 40 タイルで 0 へ戻す。
+ * 休憩点(§5.4)の箱の中は +0.12(箱から 12 タイルで 0 へ)。休憩点は層の中腹にあり前室と重ならない。
+ * それ以外は 0。
  */
 export function ambientDelta(seed: number, x: number, y: number): number {
   const cell = biomeCellAt(seed, y);
   const dy = y - interfaceBottom(seed, cell);
-  if (dy <= 0 || dy > ANTECHAMBER_DEPTH) return 0;
+  if (dy <= 0 || dy > ANTECHAMBER_DEPTH) return REST_AMBIENT * restWarmthAt(seed, x, y);
   const px = nearestPassage(seed, cell, x).x;
   // 横は前室の外縁 40 タイル、縦は板の下面から AMBIENT_TOP_FADE タイルで 0 から立ち上げる
   // (孔を抜けた瞬間・梯子で板へ入る瞬間に暗幕が 1 フレームで跳ばないように)。底は連続床で越えない。

@@ -15,6 +15,8 @@ import { drawBeam, drawCharge } from './beam';
 import { MegaStructure } from './megastructure';
 import { LightShafts } from './lightshaft';
 import { BeaconLights, ambientDelta, glowStrips, type GlowStrip } from './beacon';
+import { LandmarkLights, REST_WARM_COLOR } from './landmarkLight';
+import { restWarmthAt } from '../world/restpoint';
 import { HIGH_FIDELITY_TILE_PX, PixelPipeline } from './pixel';
 import { paletteRgb } from './palette';
 import { quantizeZoom } from '../core/zoom';
@@ -90,6 +92,7 @@ export class Renderer {
   private megastructure: MegaStructure;
   private lightShafts: LightShafts;
   private beacons: BeaconLights;
+  private landmarkLights: LandmarkLights;
   private debugMode: string | null = null;
   /**
    * 直近フレームで算出したエイム角(ワールド空間・マウス方向)。
@@ -149,6 +152,7 @@ export class Renderer {
     this.megastructure = new MegaStructure(seed);
     this.lightShafts = new LightShafts(seed);
     this.beacons = new BeaconLights(seed);
+    this.landmarkLights = new LandmarkLights(seed);
   }
 
   setDebug(mode: string | null): void {
@@ -256,6 +260,9 @@ export class Renderer {
     // §6.3 の補正: 前室の光溜まりの中で +0.15、外で −0.1(距離補間)。暗幕・光条・ビネットにだけ掛け、
     // 空のフィルには掛けない(フィルは色キーで作業キャンバスを再生成するため、歩くたびに再描画が走る)。
     const ambient = clamp01(bb.ambientLevel + ambientDelta(this.seed, player.centerX, player.body.y));
+    // 休憩点(§6.3)の中では暗幕の色を暖色へ寄せる(追加の描画なし。暗幕の 1 回のフィルの色が変わるだけ)
+    const warmth = restWarmthAt(this.seed, player.centerX, player.body.y);
+    const curtainColor = warmth > 0 ? mixHex(bb.ambientColor, REST_WARM_COLOR, 0.5 * warmth) : bb.ambientColor;
 
     // 背景(最初のフィル): ほぼ黒の鋼基準色をベースに、バイオーム環境色でわずかに持ち上げる。
     // ambientLevelが高いほど明るく色づき(水系統=大空洞帯は暗青の空気に)、
@@ -326,8 +333,12 @@ export class Renderer {
     // 光柱と光溜まり(§6.2)は §6.3 により暗幕の上に lighter で描く(暗幕で消えない)。
     // §6 の合成順ではプレイヤーの前だが、暗幕の上に置く規則を優先する。暗幕の半解像度キャンバスへ
     // 描いて一緒に乗せる(全画面 lighter を 1 パス節約。lighter の矩形は画素数に比例して重い)。
-    this.lighting.render(ctx, px, py, angle, ppt, timeSec, bb.ambientColor, ambient, (lctx, s) =>
-      this.beacons.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec));
+    // 塔の点滅・裂け目の光条・休憩点の暖色(§6.2, §6.3)も同じ overlay へ相乗りする(新しいパスは足さない。
+    // 矩形は 1 画面に数枚、1 枚 1 色)。
+    this.lighting.render(ctx, px, py, angle, ppt, timeSec, curtainColor, ambient, (lctx, s) => {
+      this.beacons.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
+      this.landmarkLights.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
+    });
     this.mark('lighting');
 
     // 光条(場所依存の体積光)。ライトの後・FX/postの前。暗く開けた空間だけに硬い光条が差す。
