@@ -15,6 +15,10 @@ import { sampleOpenness, targetZoomForOpenness, quantizeZoom } from './core/zoom
 import { displayAltitude, highestLayer } from './core/coordinate';
 import { autoViewStarted, initialView, viewState, type ViewState } from './core/view';
 import { Caption, captionText } from './render/caption';
+import { AudioEngine } from './audio/engine';
+import { beaconHum, HUM_RANGE, nearestPlateDistance } from './audio/params';
+import { beaconsInView } from './render/beacon';
+import { biomeIdForCell } from './world/biomeCells';
 
 const DEFAULT_SEED = 20260711;
 const STEP_MS = 1000 / 60;
@@ -72,6 +76,9 @@ const player = new Player(spawn.x, spawn.y);
 const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
 const renderer = new Renderer(canvas, seed);
+// 音(§6.7): 初回のキー/クリックで AudioContext を開始する(ブラウザの自動再生制限)。M はトグル(Input.muted)
+const audio = new AudioEngine();
+input.onFirstInput(() => audio.start());
 // 眺望(§6.4)の状態。純粋関数 viewState の出力(目標ズーム・中心オフセット)にカメラが追従する
 let view: ViewState = initialView(biomeCellAt(seed, Math.floor(spawn.y)));
 // HUD の階層(§6.5): 到達した最高階層。落下で下がっても減らない
@@ -160,6 +167,7 @@ function update(dt: number): void {
     // 字幕(§6.5): 板 cell を越えた先の層は cell−1。大界面ならその旨を添える
     const cell = next.autoFiredMinCell!;
     caption.show(captionText(layerNumber(seed, cell - 1), isGreatInterface(cell)), simTime);
+    audio.passage(); // 通過音(§6.7): 見晴らし台に出た瞬間に 1 音
   }
   view = next;
   camera.follow(player.centerX + view.offsetX, player.centerY + view.offsetY, dt);
@@ -174,6 +182,7 @@ function update(dt: number): void {
   // 眺望中は view.zoom が 0.35、それ以外は開放度由来の zoomTarget(1 フレーム前の値で十分)
   camera.zoomTo(view.zoom, dt);
   graviton.update(dt, input.fireHeld, fire);
+  updateAudio();
   if (lastBeam) {
     lastBeam.ttl -= dt;
     if (lastBeam.ttl <= 0) lastBeam = null;
@@ -188,6 +197,30 @@ function update(dt: number): void {
   }
 }
 
+/**
+ * 音の状態を毎フレーム渡す。ドローンは今いる層のバイオーム、うなりは最寄りの板までの距離、残響は開放度の EMA、
+ * ハムは近くの光柱(軸から ±64 タイル)の最大。光柱の列挙は 1 フレームに数回の passageX で軽い。
+ */
+function updateAudio(): void {
+  if (input.muted !== audio.muted) audio.setMuted(input.muted);
+  if (!audio.started) return;
+  const cx = player.centerX;
+  const cy = player.centerY;
+  let hum = 0;
+  for (const b of beaconsInView(seed, cx, cy, 2 * HUM_RANGE, 2 * HUM_RANGE)) {
+    const dy = cy < b.top ? b.top - cy : cy > b.floor ? cy - b.floor : 0;
+    hum = Math.max(hum, beaconHum(cx - b.x, dy));
+  }
+  audio.update({
+    biome: biomeIdForCell(seed, biomeCellAt(seed, Math.floor(cy))),
+    plateDistance: nearestPlateDistance(seed, cy),
+    openness: opennessEma ?? 0.5,
+    hum,
+    walking: player.body.onGround && player.body.vx !== 0,
+    walkPhase: player.walkPhase,
+  });
+}
+
 /** 系統 → 日本語ラベル(配色と同じ地域系統で表示) */
 const SYSTEM_LABEL: Record<System, string> = {
   water: '水系',
@@ -199,7 +232,9 @@ const SYSTEM_LABEL: Record<System, string> = {
 
 function updateHud(): void {
   const altitude = displayAltitude(player.body.y, player.body.h);
-  maxLayer = highestLayer(maxLayer, layerNumber(seed, biomeCellAt(seed, Math.floor(player.body.y))));
+  // 接地しているときだけ更新する。孔の梯子は板の上面より 4 タイル上まで延びるので、登って降りただけで
+  // 頭の cell が上の層になり n が上がっていた(段階3 の保留)。床に立った層だけを「到達」と数える
+  if (player.body.onGround) maxLayer = highestLayer(maxLayer, layerNumber(seed, biomeCellAt(seed, Math.floor(player.body.y))));
   const sys = regionAt(seed, Math.floor(player.centerX), Math.floor(player.body.y)).system;
   let cannon = `重力子砲 ${graviton.charges}/3`;
   const r = graviton.chargeRatio;
