@@ -14,7 +14,8 @@ import { TILE, type Tile } from './tiles';
  * 「孔 X」は天井の板(cell)の孔 passageX(seed, cell, k)。
  *
  * 塔: 幅 48 の HARD の柱。床の板の上面(interfaceTop(cell+1))から立ち、天井の板(cell)を貫いて
- *     板の上面で開口する(頂部は幅 12 の床で、見晴らし台と同じ高さに出る。上の層 cell−1 に属する)。
+ *     板の上面で開口する(頂部は幅 12 の床で、見晴らし台と同じ高さに出る。上の層 cell−1 に属する。
+ *     その上の空間は [x−12, x+52) × 8 行を空け、上の層へ続く 32 タイル梯子列を必ず含める)。
  *     内部に幅 3 の縦坑(中央 LADDER)、層の高さを 4 等分した 1/4・2/4・3/4 に塔を横に貫く通路 3 本、
  *     基部の 3 行は出入口。どの高さからでも内部の梯子へ入れる第二の登攀経路。
  * 崩落界面: 天井の板の一部が裂け、前室の床の行から板の上面まで階段状の楔(HARD)が流れている。
@@ -28,8 +29,15 @@ import { TILE, type Tile } from './tiles';
 export const LANDMARK_OFFSET = 160;
 /** 塔の半幅(幅 48) */
 export const TOWER_HALF_WIDTH = 24;
-/** 塔の頂部の床の半幅(幅 12) */
+/** 塔の頂部の床の半幅(幅 12。自動眺望の発火範囲) */
 export const TOWER_TOP_HALF_WIDTH = 6;
+/**
+ * 頂部の上に空ける空間の X 範囲(中心からの相対、[−12, +52))。幅 64 で 32 タイルグループを必ず 1 つ丸ごと含み、
+ * 上の層へ続く 32 タイル梯子列が 1 本入る(孔の見晴らし台 −12〜+72 と同じ保証)。幅 12 だけ空けると
+ * 上の層の躯体で約 8% の塔の頂部が袋小路になった(レビューの走査)。
+ */
+export const TOWER_TOP_CLEAR_LEFT = 12;
+export const TOWER_TOP_CLEAR_RIGHT = 52;
 /** 塔の内部の縦坑の半幅(幅 3、中央 LADDER) */
 export const TOWER_SHAFT_HALF = 1;
 /** 環状通路の本数(層の高さを 4 等分した 1/4, 2/4, 3/4) */
@@ -99,7 +107,7 @@ export function landmarkAt(seed: number, cell: number, k: number): Landmark | nu
 
 /** 大構造が X 方向に占める範囲 [x0, x1) */
 function spanOf(lm: Landmark): [number, number] {
-  return lm.kind === 'tower' ? [lm.x - TOWER_HALF_WIDTH, lm.x + TOWER_HALF_WIDTH] : [lm.gapLeft, lm.gapRight + COLLAPSE_EXIT_WIDTH];
+  return lm.kind === 'tower' ? [lm.x - TOWER_HALF_WIDTH, lm.x + TOWER_TOP_CLEAR_RIGHT] : [lm.gapLeft, lm.gapRight + COLLAPSE_EXIT_WIDTH];
 }
 
 /** 層 cell で x が幾何に掛かる大構造(無ければ null)。候補はスロット floor((x−160)/384) の両隣まで */
@@ -128,14 +136,14 @@ export function towerTopFloorAt(seed: number, cell: number, x: number): boolean 
 
 function towerTileAt(seed: number, lm: Landmark, x: number, y: number): Tile | null {
   const lx = x - (lm.x - TOWER_HALF_WIDTH);
-  if (lx < 0 || lx >= TOWER_HALF_WIDTH * 2 || y >= lm.floor) return null;
   const dx = lx - TOWER_HALF_WIDTH;
   if (y < lm.top) {
-    // 頂部の開口(板の上面の上 8 行、幅 12)。梯子は孔と同じく上面の 4 行上まで。32 タイル梯子列は残す
-    if (y < lm.top - OVERLOOK_HEIGHT || Math.abs(dx + 0.5) > TOWER_TOP_HALF_WIDTH - 0.5) return null;
+    // 頂部の開口(板の上面の上 8 行、[x−12, x+52))。梯子は孔と同じく上面の 4 行上まで。32 タイル梯子列は残す
+    if (y < lm.top - OVERLOOK_HEIGHT || dx < -TOWER_TOP_CLEAR_LEFT || dx >= TOWER_TOP_CLEAR_RIGHT) return null;
     if (x === groupLadderX(seed, x) || (dx === 0 && y >= lm.top - SHAFT_OVERHANG)) return TILE.LADDER;
     return TILE.AIR;
   }
+  if (lx < 0 || lx >= TOWER_HALF_WIDTH * 2 || y >= lm.floor) return null;
   // 縦坑(板を貫く)
   if (Math.abs(dx) <= TOWER_SHAFT_HALF) return dx === 0 ? TILE.LADDER : TILE.AIR;
   // 基部の出入口

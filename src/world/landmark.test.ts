@@ -46,8 +46,6 @@ describe('塔', () => {
       // 頂部の開口は [cx−6, cx+6)
       const t = landmarkTileAt(seed, cx - 6, lm.top - 1);
       expect(t === TILE.AIR || t === TILE.LADDER).toBe(true);
-      expect(landmarkTileAt(seed, cx - 7, lm.top - 1)).toBe(null);
-      expect(landmarkTileAt(seed, cx + 6, lm.top - 1)).toBe(null);
       // 縦坑の脇は AIR、その外は殻
       expect(landmarkTileAt(seed, cx + 1, lm.top + 5)).toBe(TILE.AIR);
       expect(landmarkTileAt(seed, cx - 1, lm.bottom + 10)).toBe(TILE.AIR);
@@ -74,6 +72,29 @@ describe('塔', () => {
       expect(towerTopFloorAt(seed, lm.cell, cx - 7)).toBe(false);
     }
     expect(towers).toBeGreaterThan(0);
+  });
+});
+
+describe('塔の頂部の開口', () => {
+  it('頂部の上の空間 [x−12, x+52) は板の上 8 行が空き、必ず 32 タイル梯子列を 1 本含む(上の層へ出られる)', () => {
+    let towers = 0;
+    for (let seed = 1; seed <= 60; seed++) for (const cell of [-2, 1, 4]) for (const k of [-3, 0, 3]) {
+      const lm = landmarkAt(seed, cell, k);
+      if (!lm || lm.kind !== 'tower') continue;
+      towers++;
+      let ladders = 0;
+      for (let x = lm.x - 12; x < lm.x + 52; x++) {
+        for (let y = lm.top - 8; y < lm.top; y++) {
+          const t = landmarkTileAt(seed, x, y);
+          expect(t === TILE.AIR || t === TILE.LADDER).toBe(true);
+        }
+        if (landmarkTileAt(seed, x, lm.top - 8) === TILE.LADDER && x !== lm.x) ladders++;
+      }
+      expect(ladders).toBeGreaterThanOrEqual(1);
+      expect(landmarkTileAt(seed, lm.x - 13, lm.top - 1)).toBe(null);
+      expect(landmarkTileAt(seed, lm.x + 52, lm.top - 1)).toBe(null);
+    }
+    expect(towers).toBeGreaterThan(50);
   });
 });
 
@@ -128,7 +149,8 @@ describe('landmarkNear', () => {
       if (lm.kind === 'tower') {
         expect(landmarkNear(seed, lm.cell, lm.x - 24)).toEqual(lm);
         expect(landmarkNear(seed, lm.cell, lm.x - 25)).toBe(null);
-        expect(landmarkNear(seed, lm.cell, lm.x + 24)).toBe(null);
+        expect(landmarkNear(seed, lm.cell, lm.x + 51)).toEqual(lm); // 頂部の上の空間まで
+        expect(landmarkNear(seed, lm.cell, lm.x + 52)).toBe(null);
       } else {
         expect(landmarkNear(seed, lm.cell, lm.gapLeft)).toEqual(lm);
         expect(landmarkNear(seed, lm.cell, lm.gapLeft - 1)).toBe(null);
