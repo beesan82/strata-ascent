@@ -120,10 +120,10 @@ export function rampTopY(lm: Landmark, x: number): number {
   return lm.baseY - Math.floor((x - lm.gapLeft) / collapseRun(lm.cell));
 }
 
-/** 塔の頂部の床 [x−6, x+6) にいるか(overlookCellAt が自動眺望の発火に使う) */
+/** 塔の頂部の床 [x−6, x+6) にいるか(梯子列 x === lm.x は除く。overlookCellAt が自動眺望の発火に使う) */
 export function towerTopFloorAt(seed: number, cell: number, x: number): boolean {
   const lm = landmarkNear(seed, cell, x);
-  return lm !== null && lm.kind === 'tower' && Math.abs(x - lm.x + 0.5) <= TOWER_TOP_HALF_WIDTH - 0.5;
+  return lm !== null && lm.kind === 'tower' && x !== lm.x && Math.abs(x - lm.x + 0.5) <= TOWER_TOP_HALF_WIDTH - 0.5;
 }
 
 function towerTileAt(seed: number, lm: Landmark, x: number, y: number): Tile | null {

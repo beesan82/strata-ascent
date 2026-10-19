@@ -68,6 +68,7 @@ describe('塔', () => {
       expect(landmarkTileAt(seed, cx - 25, lm.top + 5)).toBe(null);
       expect(landmarkTileAt(seed, cx + 24, lm.top + 5)).toBe(null);
       expect(towerTopFloorAt(seed, lm.cell, cx + 5)).toBe(true);
+      expect(towerTopFloorAt(seed, lm.cell, cx)).toBe(false); // 梯子列
       expect(towerTopFloorAt(seed, lm.cell, cx - 6)).toBe(true);
       expect(towerTopFloorAt(seed, lm.cell, cx + 6)).toBe(false);
       expect(towerTopFloorAt(seed, lm.cell, cx - 7)).toBe(false);

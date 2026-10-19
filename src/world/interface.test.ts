@@ -6,6 +6,8 @@ import {
   isGreatInterface, layerNumber, mod, nearestPassage, overlookCellAt, OVERLOOK_LEFT, passageX, PASSAGE_SLOT, terrainModsAt,
 } from './interface';
 
+import { landmarkAt, towerTopFloorAt } from './landmark';
+
 const seeds = [1, 42, 20260711];
 
 describe('interface geometry', () => {
@@ -133,6 +135,22 @@ describe('overlookCellAt', () => {
     expect(overlookCellAt(seed, px - OVERLOOK_LEFT - 1, top)).toBe(null);
     expect(overlookCellAt(seed, 210, top + 1)).toBe(null);
     expect(overlookCellAt(seed, 210, top - 1)).toBe(null);
+  });
+  it('塔の頂部の床(幅 12、梯子列を除く)でも述語を渡せばその板の cell を返す。述語無しなら null', () => {
+    let towers = 0;
+    for (const seed of seeds) for (const cell of [-2, 1]) for (const k of [-3, 0, 3]) {
+      const lm = landmarkAt(seed, cell, k)!;
+      if (lm.kind !== 'tower') continue;
+      towers++;
+      const towerTop = (c: number, x: number) => towerTopFloorAt(seed, c, x);
+      expect(overlookCellAt(seed, lm.x + 3, lm.top, towerTop)).toBe(cell);
+      expect(overlookCellAt(seed, lm.x - 6, lm.top, towerTop)).toBe(cell);
+      expect(overlookCellAt(seed, lm.x + 6, lm.top, towerTop)).toBe(null);
+      expect(overlookCellAt(seed, lm.x, lm.top, towerTop)).toBe(null); // 梯子列
+      expect(overlookCellAt(seed, lm.x + 3, lm.top + 1, towerTop)).toBe(null);
+      expect(overlookCellAt(seed, lm.x + 3, lm.top)).toBe(null);
+    }
+    expect(towers).toBeGreaterThan(0);
   });
   it('全 seed・cell・k で見晴らし台の床の行は HARD、その上は HARD でない', () => {
     for (const seed of seeds) for (let cell = -3; cell <= 2; cell++) for (const k of [-2, 0, 3]) {

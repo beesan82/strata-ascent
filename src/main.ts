@@ -8,6 +8,7 @@ import { Destruction } from './world/destruction';
 import { regionAt, type System } from './world/hierarchy';
 import { isGreatInterface, layerNumber, overlookCellAt } from './world/interface';
 import { biomeCellAt } from './world/biomeCells';
+import { towerTopFloorAt } from './world/landmark';
 import { CHUNK_SIZE } from './world/tiles';
 import { findSpawn, isHardAt } from './world/worldgen';
 import { sampleOpenness, targetZoomForOpenness, quantizeZoom } from './core/zoom';
@@ -79,6 +80,8 @@ renderer.profileStages = profileStages;
 const debug = params.get('debug');
 renderer.setDebug(debug);
 
+const towerTop = (cell: number, x: number) => towerTopFloorAt(seed, cell, x);
+
 let dpr = window.devicePixelRatio || 1;
 
 function resize(): void {
@@ -147,7 +150,8 @@ function update(dt: number): void {
     still: player.body.onGround && player.body.vx === 0,
     aimX: input.mouseSeen ? clamp(-1, 1, (input.mouseX * dpr - halfW) / halfW) : 0,
     aimY: input.mouseSeen ? clamp(-1, 1, (input.mouseY * dpr - halfH) / halfH) : 0,
-    overlookCell: player.body.onGround ? overlookCellAt(seed, Math.floor(player.centerX), footRow) : null,
+    // 塔(§5.5)の頂部の床からも発火する(述語は interface.ts → landmark.ts の循環 import を避けるため)
+    overlookCell: player.body.onGround ? overlookCellAt(seed, Math.floor(player.centerX), footRow, towerTop) : null,
     baseZoom: zoomTarget,
   }, dt);
   if (autoViewStarted(view, next)) {
