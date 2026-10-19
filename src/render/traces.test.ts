@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { traceAt, FLOOR_TYPES, WALL_TYPES } from './traces';
+import { restPointAt } from '../world/restpoint';
 
 const SEED = 20260711;
 
@@ -46,5 +47,26 @@ describe('traceAt', () => {
         break;
       }
     }
+  });
+});
+
+describe('休憩点の痕跡(段階4)', () => {
+  it('休憩点の床の 1 段上に灯 3〜5 と荷袋、左の壁に刻印', () => {
+    for (const cell of [0, -1, 2]) {
+      const rp = restPointAt(SEED, cell, 0);
+      for (const lx of rp.lamps) expect(traceAt(SEED, lx, rp.floorY - 1, 'floor')?.type).toBe('lamp');
+      expect(traceAt(SEED, rp.packX, rp.floorY - 1, 'floor')?.type).toBe('pack');
+      expect(traceAt(SEED, rp.left, rp.tallyY, 'wall')?.type).toBe('tally');
+    }
+  });
+  it('休憩点の周囲 24 タイルは床痕跡が 5 倍(約 9%)、その外は従来(2% 弱)', () => {
+    const rp = restPointAt(SEED, 0, 0);
+    let near = 0, far = 0;
+    const N = 4000;
+    for (let i = 0; i < N; i++) if (traceAt(SEED, rp.left - 20 + (i % 40), rp.floorY + 2 + (Math.floor(i / 40) % 20), 'floor')) near++;
+    for (let i = 0; i < N; i++) if (traceAt(SEED, rp.right + 30 + (i % 200), rp.floorY + 30 + Math.floor(i / 200), 'floor')) far++;
+    expect(near / N).toBeGreaterThan(0.05);
+    expect(near / N).toBeLessThan(0.15);
+    expect(far / N).toBeLessThan(0.05);
   });
 });
