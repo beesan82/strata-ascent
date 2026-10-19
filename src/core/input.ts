@@ -25,7 +25,7 @@ export class Input {
   private pressed = new Set<string>();
   /** ミュート(§6.7)。M の keydown でトグル。blur でキーは消えるがこの状態は保つ */
   muted = false;
-  private firstInputCbs: (() => void)[] = [];
+  private inputCbs: (() => void)[] = [];
   /** ビューポート座標。キャンバスが(0,0)起点のフルスクリーンである前提 */
   mouseX = 0;
   mouseY = 0;
@@ -39,10 +39,10 @@ export class Input {
       if (e.repeat) return;
       this.pressed.add(e.code);
       if (e.code === 'KeyM') this.muted = !this.muted;
-      this.fireFirstInput();
+      this.fireInput();
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
-    window.addEventListener('pointerdown', () => this.fireFirstInput());
+    window.addEventListener('pointerdown', () => this.fireInput());
     window.addEventListener('mousemove', (e) => {
       this.mouseX = e.clientX;
       this.mouseY = e.clientY;
@@ -51,16 +51,16 @@ export class Input {
     window.addEventListener('blur', () => this.keys.clear());
   }
 
-  /** 初回のキー押下 / ポインタ押下で 1 回だけ呼ぶ(AudioContext の開始。ブラウザの自動再生制限) */
-  onFirstInput(cb: () => void): void {
-    this.firstInputCbs.push(cb);
+  /**
+   * キー押下(リピート除く)/ ポインタ押下のたびに呼ぶ(AudioContext の開始と resume。ブラウザの自動再生制限)。
+   * 初回だけにすると、最初のキーが Esc などユーザー操作に数えられないものだったとき音が永久に出ない
+   */
+  onInput(cb: () => void): void {
+    this.inputCbs.push(cb);
   }
 
-  private fireFirstInput(): void {
-    if (this.firstInputCbs.length === 0) return;
-    const cbs = this.firstInputCbs;
-    this.firstInputCbs = [];
-    for (const cb of cbs) cb();
+  private fireInput(): void {
+    for (const cb of this.inputCbs) cb();
   }
 
   /** このフレームに新たに押されたキーの集合を返して空にする(1 フレームに 1 回) */

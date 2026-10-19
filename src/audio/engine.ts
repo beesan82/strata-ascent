@@ -68,9 +68,16 @@ export class AudioEngine {
     return this.isMuted;
   }
 
-  /** 初回入力で呼ぶ(ブラウザの自動再生制限)。2 回目以降は no-op */
+  /**
+   * 入力のたびに呼ぶ(ブラウザの自動再生制限)。初回で AudioContext を作り、以降は running でなければ
+   * resume を試みるだけ(Esc など「ユーザー操作」に数えられないキーが最初だと suspended のまま残るため)。
+   */
   start(): void {
-    if (this.ctx || typeof AudioContext === 'undefined') return;
+    if (typeof AudioContext === 'undefined') return;
+    if (this.ctx) {
+      if (this.ctx.state !== 'running') void this.ctx.resume();
+      return;
+    }
     const ctx = new AudioContext();
     this.ctx = ctx;
     this.master = ctx.createGain();

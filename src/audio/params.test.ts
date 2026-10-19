@@ -11,10 +11,17 @@ describe('audio params', () => {
     expect(dbToGain(MASTER_DB)).toBeCloseTo(0.251, 3);
     expect(dbToGain(0)).toBe(1);
   });
-  it('足音は walkPhase の整数跨ぎ', () => {
-    expect(footstepCrossed(0.9, 1.1)).toBe(true);
+  it('足音は walkPhase(ラジアン)が π の倍数を跨いだとき = sin(walkPhase) の零交差(足が着く瞬間)。整数跨ぎでは 9 回/秒になる', () => {
+    expect(footstepCrossed(3.0, 3.2)).toBe(true); // π
+    expect(footstepCrossed(6.2, 6.4)).toBe(true); // 2π
+    expect(footstepCrossed(0.9, 1.1)).toBe(false); // 整数 1 は跨ぐが π は跨がない
     expect(footstepCrossed(1.1, 1.9)).toBe(false);
     expect(footstepCrossed(2, 2)).toBe(false);
+    // 歩行 1 秒(位相 +9 ラジアン)で 2〜3 回
+    let n = 0;
+    for (let t = 0; t < 1; t += 1 / 60) if (footstepCrossed(t * 9, (t + 1 / 60) * 9)) n++;
+    expect(n).toBeGreaterThanOrEqual(2);
+    expect(n).toBeLessThanOrEqual(3);
   });
   it('残響は開放度に比例(0.15〜1.6 秒)、バケットは 0..5 で単調', () => {
     expect(reverbSeconds(0)).toBe(REVERB_MIN);

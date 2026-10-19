@@ -76,9 +76,13 @@ const player = new Player(spawn.x, spawn.y);
 const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
 const renderer = new Renderer(canvas, seed);
-// 音(§6.7): 初回のキー/クリックで AudioContext を開始する(ブラウザの自動再生制限)。M はトグル(Input.muted)
+// 音(§6.7): キー/クリックのたびに AudioContext の開始・resume を試みる(ブラウザの自動再生制限)。
+// M はトグル(Input.muted)。最初のキーが M のときに一瞬鳴らないよう、開始の前にミュートを渡す
 const audio = new AudioEngine();
-input.onFirstInput(() => audio.start());
+input.onInput(() => {
+  audio.setMuted(input.muted);
+  audio.start();
+});
 // 眺望(§6.4)の状態。純粋関数 viewState の出力(目標ズーム・中心オフセット)にカメラが追従する
 let view: ViewState = initialView(biomeCellAt(seed, Math.floor(spawn.y)));
 // HUD の階層(§6.5): 到達した最高階層。落下で下がっても減らない

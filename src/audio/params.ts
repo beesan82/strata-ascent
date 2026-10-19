@@ -17,9 +17,13 @@ function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
-/** 足音: 接地歩行の walkPhase が整数を跨いだフレームで 1 回鳴らす */
+/**
+ * 足音: 接地歩行の walkPhase が π の倍数を跨いだフレームで 1 回鳴らす。walkPhase はラジアン
+ * (playerPose は sin(walkPhase) で歩容を作る)なので、足が着く瞬間 = sin の零交差 = π ごと。
+ * 設計書の「整数跨ぎ」を文字通り取ると 9 回/秒の連打になった(レビューで指摘)。
+ */
 export function footstepCrossed(prevPhase: number, phase: number): boolean {
-  return Math.floor(prevPhase) !== Math.floor(phase);
+  return Math.floor(prevPhase / Math.PI) !== Math.floor(phase / Math.PI);
 }
 
 /** 残響の長さ(秒)の範囲。開放度 0(閉塞・休憩点)→ 短く、1(前室・大空洞)→ 長く */
