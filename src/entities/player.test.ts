@@ -84,6 +84,93 @@ describe('Player', () => {
   });
 });
 
+describe('Player 移動の手触り(アクション化 第1段)', () => {
+  const settle = (p: Player, tiles = floorTiles) => {
+    for (let i = 0; i < 120; i++) p.update(noInput, 1 / 60, tiles);
+  };
+
+  it('横移動は即時ではなく加速し、数フレームで最高速に達する', () => {
+    const p = new Player(0, 8);
+    settle(p);
+    p.update({ ...noInput, right: true }, 1 / 60, floorTiles);
+    expect(p.body.vx).toBeGreaterThan(0);
+    expect(p.body.vx).toBeLessThan(6); // 1 フレームでは最高速(6)にならない
+    for (let i = 0; i < 10; i++) p.update({ ...noInput, right: true }, 1 / 60, floorTiles);
+    expect(p.body.vx).toBeCloseTo(6);
+    // 離すと短い距離で止まる
+    for (let i = 0; i < 10; i++) p.update(noInput, 1 / 60, floorTiles);
+    expect(p.body.vx).toBe(0);
+  });
+
+  it('長押しジャンプの最大高さは従来と同等(約2.8タイル)', () => {
+    const p = new Player(0, 8);
+    settle(p);
+    const startFeet = p.body.y + p.body.h;
+    let minFeet = Infinity;
+    for (let i = 0; i < 90; i++) {
+      p.update({ ...noInput, jump: true }, 1 / 60, floorTiles);
+      minFeet = Math.min(minFeet, p.body.y + p.body.h);
+    }
+    const height = startFeet - minFeet;
+    expect(height).toBeGreaterThan(2.5);
+    expect(height).toBeLessThan(3.1);
+  });
+
+  it('短押しジャンプは長押しより低くなる(可変ジャンプ)', () => {
+    const apexOf = (holdFrames: number): number => {
+      const p = new Player(0, 8);
+      settle(p);
+      let minFeet = Infinity;
+      for (let i = 0; i < 90; i++) {
+        p.update({ ...noInput, jump: i < holdFrames }, 1 / 60, floorTiles);
+        minFeet = Math.min(minFeet, p.body.y + p.body.h);
+      }
+      return minFeet;
+    };
+    const shortApex = apexOf(2);
+    const longApex = apexOf(90);
+    expect(shortApex - longApex).toBeGreaterThan(0.8); // 短押しは 0.8 タイル以上低い
+  });
+
+  it('崖を出て 0.1 秒以内なら跳べる(コヨーテタイム)', () => {
+    const cliffTiles = (tx: number, ty: number): Tile => (ty === 10 && tx < 5 ? TILE.SOLID : TILE.AIR);
+    const p = new Player(2, 8);
+    settle(p, cliffTiles);
+    // 右端まで歩いて崖を出る
+    for (let i = 0; i < 60 && p.body.onGround; i++) p.update({ ...noInput, right: true }, 1 / 60, cliffTiles);
+    expect(p.body.onGround).toBe(false);
+    // 3 フレーム(=0.05 秒)後に押す
+    for (let i = 0; i < 3; i++) p.update(noInput, 1 / 60, cliffTiles);
+    p.update({ ...noInput, jump: true }, 1 / 60, cliffTiles);
+    expect(p.body.vy).toBeLessThan(0);
+  });
+
+  it('着地の直前に押したジャンプが着地と同時に発動する(入力バッファ)', () => {
+    const p = new Player(0, 5); // 空中から落ちる
+    // 足元が床(行 10)の 0.9 タイル以内に来た落下中に、ジャンプを 1 フレームだけ押して離す
+    let pressed = false;
+    let jumpedAfterLanding = false;
+    let wasGrounded = false;
+    for (let i = 0; i < 240; i++) {
+      const nearFloor = !p.body.onGround && p.body.y + p.body.h > 9.1;
+      const input = nearFloor && !pressed ? { ...noInput, jump: true } : noInput;
+      if (nearFloor && !pressed) pressed = true;
+      p.update(input, 1 / 60, floorTiles);
+      if (wasGrounded && p.body.vy < 0) jumpedAfterLanding = true;
+      wasGrounded = p.body.onGround;
+    }
+    expect(pressed).toBe(true);
+    expect(jumpedAfterLanding).toBe(true);
+  });
+
+  it('落下中は重力が増す(2 フレーム目の vy が通常重力より大きい)', () => {
+    const p = new Player(0, 0);
+    p.update(noInput, 1 / 60, emptyTiles); // vy: 0 → 0.5(通常)
+    p.update(noInput, 1 / 60, emptyTiles); // 落下中は 1.5 倍: 0.5 + 0.75 = 1.25
+    expect(p.body.vy).toBeCloseTo(1.25);
+  });
+});
+
 describe('Player 向きと歩行位相', () => {
   it('左右入力で向きが変わり、入力がなければ維持される', () => {
     const p = new Player(0, 8);
