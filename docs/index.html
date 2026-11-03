@@ -5,7 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>STRATA ASCENT</title>
   <style>
-    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+    html, body {
+      margin: 0; height: 100%; overflow: hidden; background: #000;
+      /* ゲーム画面全体でテキスト/範囲選択と長押しコールアウトを禁止する
+         (ドラッグ照準やボタンの長押しで画面が選択されて青くなるのを防ぐ) */
+      user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
     canvas { display: block; }
     #hud {
       position: fixed; left: 12px; top: 10px;
