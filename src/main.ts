@@ -1,6 +1,6 @@
 import { Camera } from './core/camera';
 import { Input, MOVE_KEYS } from './core/input';
-import { installTouchControls } from './core/touch';
+import { installTouchControls, setTouchLadderVisible } from './core/touch';
 import { Player } from './entities/player';
 import { Graviton } from './entities/graviton';
 import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
@@ -10,7 +10,7 @@ import { regionAt, type System } from './world/hierarchy';
 import { isGreatInterface, layerNumber, overlookCellAt } from './world/interface';
 import { biomeCellAt } from './world/biomeCells';
 import { towerTopFloorAt } from './world/landmark';
-import { CHUNK_SIZE } from './world/tiles';
+import { CHUNK_SIZE, TILE } from './world/tiles';
 import { findSpawn, isHardAt } from './world/worldgen';
 import { sampleOpenness, targetZoomForOpenness, quantizeZoom } from './core/zoom';
 import { displayAltitude, highestLayer } from './core/coordinate';
@@ -168,14 +168,14 @@ function update(dt: number): void {
     newlyMoving: MOVE_KEYS.some((c) => pressed.has(c)),
     grounded: player.body.onGround,
     still: player.body.onGround && player.body.vx === 0,
-    // マウスが一度も動いていない(タッチ等)間は、エイムスティックの照準を使い、
+    // マウスが一度も動いていない(タッチ等)間は、タッチ照準点があればそれを使い、
     // 無ければプレイヤーの向きの水平に倒す(左上に張り付かせない)
     aimX: input.mouseSeen
       ? clamp(-1, 1, (input.mouseX * dpr - halfW) / halfW)
-      : input.touchAimActive ? clamp(-1, 1, input.touchAimX) : player.facing,
+      : input.touchPointActive ? clamp(-1, 1, (input.touchPointX * dpr - halfW) / halfW) : player.facing,
     aimY: input.mouseSeen
       ? clamp(-1, 1, (input.mouseY * dpr - halfH) / halfH)
-      : input.touchAimActive ? clamp(-1, 1, input.touchAimY) : 0,
+      : input.touchPointActive ? clamp(-1, 1, (input.touchPointY * dpr - halfH) / halfH) : 0,
     // 塔(§5.5)の頂部の床からも発火する(述語は interface.ts → landmark.ts の循環 import を避けるため)
     overlookCell: player.body.onGround ? overlookCellAt(seed, Math.floor(player.centerX), footRow, towerTop) : null,
     baseZoom: zoomTarget,
@@ -195,9 +195,21 @@ function update(dt: number): void {
     const raw = sampleOpenness(tiles, player.centerX, player.centerY);
     opennessEma = opennessEma === null ? raw : opennessEma + (raw - opennessEma) * OPENNESS_EMA_ALPHA;
     zoomTarget = quantizeZoom(targetZoomForOpenness(opennessEma));
+    // タッチ用梯子ボタンの表示連動: 中心列 ±1、中心行 -1 〜 足元行 +1 に梯子があるか
+    const pcx = Math.floor(player.centerX);
+    const pTop = Math.floor(player.centerY) - 1;
+    const pFeet = Math.floor(player.body.y + player.body.h - 1e-6) + 1;
+    let ladderNear = false;
+    for (let tx = pcx - 1; tx <= pcx + 1 && !ladderNear; tx++) {
+      for (let ty = pTop; ty <= pFeet; ty++) {
+        if (tiles(tx, ty) === TILE.LADDER) { ladderNear = true; break; }
+      }
+    }
+    setTouchLadderVisible(ladderNear);
   }
   // 眺望中は view.zoom が 0.35、それ以外は開放度由来の zoomTarget(1 フレーム前の値で十分)
   camera.zoomTo(view.zoom, dt);
+  if (input.takeFireCancel()) graviton.cancelCharge(); // タッチ照準のキャンセル(解放より先に破棄)
   graviton.update(dt, input.fireHeld, fire);
   updateAudio();
   if (lastBeam) {
@@ -280,14 +292,14 @@ function frame(now: number): void {
   const beam = lastBeam ? { angle: lastBeam.angle, alpha: lastBeam.ttl / BEAM_TTL } : null;
   const t0 = collectStats ? performance.now() : 0;
   // マウスが一度も動いていない(タッチ等)間は、照準用のマウス位置を合成する:
-  // エイムスティックが有効ならその方向、無ければ「プレイヤーの向きの水平」
+  // タッチ照準点があればその点、無ければ「プレイヤーの向きの水平」
   // (実マウス座標 0,0 だと照準が画面左上に張り付き、コーンとビームの向きが実用にならないため)
   const aimMouseX = input.mouseSeen
     ? input.mouseX * dpr
-    : canvas.width / 2 + (input.touchAimActive ? input.touchAimX : player.facing) * (canvas.width / 4);
+    : input.touchPointActive ? input.touchPointX * dpr : canvas.width / 2 + (player.facing * canvas.width) / 4;
   const aimMouseY = input.mouseSeen
     ? input.mouseY * dpr
-    : canvas.height / 2 + (input.touchAimActive ? input.touchAimY * (canvas.height / 4) : 0);
+    : input.touchPointActive ? input.touchPointY * dpr : canvas.height / 2;
   renderer.render(store, camera, player, aimMouseX, aimMouseY, simTime, {
     chargeRatio: graviton.chargeRatio,
     beam,

@@ -51,6 +51,26 @@ describe('Graviton', () => {
     for (let i = 0; i < 60 * 7; i++) g.update(1 / 60, false, fire); // 7秒待つ(RECHARGE=6s)
     expect(g.charges).toBe(3); // 上限で頭打ち
   });
+  it('満溜め後に cancelCharge すると、離しても発射せず弾数も減らない', () => {
+    const g = new Graviton();
+    const fire = vi.fn();
+    for (let i = 0; i < 60; i++) g.update(1 / 60, true, fire); // 満溜め
+    g.cancelCharge();
+    expect(g.chargeRatio).toBe(0);
+    g.update(1 / 60, false, fire); // 離す
+    expect(fire).not.toHaveBeenCalled();
+    expect(g.charges).toBe(3);
+  });
+  it('溜め途中で cancelCharge しても、その後の再押下は通常どおり溜まる', () => {
+    const g = new Graviton();
+    const fire = vi.fn();
+    g.update(0.2, true, fire);
+    g.cancelCharge();
+    g.update(1 / 60, false, fire);
+    for (let i = 0; i < 60; i++) g.update(1 / 60, true, fire);
+    g.update(1 / 60, false, fire);
+    expect(fire).toHaveBeenCalledTimes(1);
+  });
   it('チャージ進捗 chargeRatio は 0..1', () => {
     const g = new Graviton();
     const fire = vi.fn();

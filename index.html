@@ -23,36 +23,38 @@
     @media (pointer: coarse) {
       #touch { display: block; }
       .tcluster {
-        position: fixed; bottom: calc(18px + env(safe-area-inset-bottom));
-        display: flex; flex-wrap: wrap; gap: 12px;
+        position: fixed; bottom: calc(12px + env(safe-area-inset-bottom));
+        display: flex; gap: 12px;
         pointer-events: none; z-index: 10;
       }
-      .tcluster.left { left: 16px; }
-      .tcluster.right { right: 16px; width: 172px; justify-content: flex-end; }
+      .tcluster.left { left: 12px; flex-direction: column; gap: 8px; }
+      .tcluster.right { right: 12px; align-items: flex-end; }
+      .trow { display: flex; gap: 10px; }
+      /* 梯子ボタンは梯子のそばにいる間だけ出す(main が #touch.ladder-on を切り替える) */
+      .trow.ladder { display: none; }
+      #touch.ladder-on .trow.ladder { display: flex; }
+      /* 溜め中は移動クラスタを落として無効化する(止まって狙うモードの明示) */
+      #touch.aiming .tcluster.left { opacity: 0.25; }
+      #touch.aiming .tcluster.left .tbtn { pointer-events: none; }
+      .tview {
+        position: fixed; top: calc(10px + env(safe-area-inset-top)); right: 12px;
+        pointer-events: none; z-index: 10;
+      }
       .tbtn {
-        pointer-events: auto; width: 80px; height: 80px; border-radius: 50%;
+        pointer-events: auto; border-radius: 50%;
         background: rgba(28, 34, 40, 0.45); color: #c8d0d6;
         border: 1px solid rgba(200, 208, 214, 0.4);
         font: 24px monospace; touch-action: none;
         user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
       }
       .tbtn.on { background: rgba(130, 150, 165, 0.55); }
-      /* 浮動スティック(src/core/touch.ts)。左半分=移動、右半分=エイムのレイヤーが受け、
-         土台とノブを触った点へ出す */
-      .stick-layer { position: fixed; top: 0; bottom: 0; width: 50%; z-index: 5; touch-action: none; }
-      .stick-layer.left { left: 0; }
-      .stick-layer.right { right: 0; }
-      .stick-base {
-        display: none; position: fixed; width: 112px; height: 112px;
-        margin: -56px 0 0 -56px; border-radius: 50%;
-        border: 1px solid rgba(200, 208, 214, 0.35); background: rgba(28, 34, 40, 0.3);
-        pointer-events: none;
-      }
-      .stick-knob {
-        position: absolute; left: 50%; top: 50%; width: 52px; height: 52px;
-        margin: -26px 0 0 -26px; border-radius: 50%;
-        background: rgba(130, 150, 165, 0.45);
-      }
+      /* キャンセル圏内での予告色 */
+      .tbtn.cancel-armed { background: rgba(170, 60, 60, 0.55); border-color: rgba(255, 130, 130, 0.7); }
+      .sz-move { width: 74px; height: 74px; }
+      .sz-ladder { width: 64px; height: 64px; font-size: 20px; }
+      .sz-jump { width: 84px; height: 84px; font-size: 26px; }
+      .sz-cannon { width: 76px; height: 76px; font-size: 22px; }
+      .sz-view { width: 48px; height: 48px; font-size: 16px; }
     }
   </style>
 </head>

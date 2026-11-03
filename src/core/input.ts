@@ -67,19 +67,33 @@ export class Input {
     this.keys.delete(code);
   }
 
-  /** エイムスティックの照準(単位ベクトル)。マウス未使用時のみ main が読む */
-  touchAimX = 0;
-  touchAimY = 0;
-  touchAimActive = false;
+  /** タッチ照準の点(CSS px、砲ボタンのドラッグ位置)。マウス未使用時のみ main が読む */
+  touchPointX = 0;
+  touchPointY = 0;
+  touchPointActive = false;
 
-  setTouchAim(x: number, y: number): void {
-    this.touchAimX = x;
-    this.touchAimY = y;
-    this.touchAimActive = true;
+  setTouchPoint(x: number, y: number): void {
+    this.touchPointX = x;
+    this.touchPointY = y;
+    this.touchPointActive = true;
   }
 
-  clearTouchAim(): void {
-    this.touchAimActive = false;
+  clearTouchPoint(): void {
+    this.touchPointActive = false;
+  }
+
+  private fireCancelRequested = false;
+
+  /** タッチ側からの発射キャンセル要求(砲ボタンのキャンセル圏内で離したとき) */
+  requestFireCancel(): void {
+    this.fireCancelRequested = true;
+  }
+
+  /** キャンセル要求を 1 回だけ取り出す(main が graviton.update の前に読む) */
+  takeFireCancel(): boolean {
+    const v = this.fireCancelRequested;
+    this.fireCancelRequested = false;
+    return v;
   }
 
   /**
