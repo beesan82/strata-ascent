@@ -2,6 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>STRATA ASCENT</title>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
@@ -22,16 +23,17 @@
     @media (pointer: coarse) {
       #touch { display: block; }
       .tcluster {
-        position: fixed; bottom: 16px; display: flex; flex-wrap: wrap; gap: 10px;
+        position: fixed; bottom: calc(18px + env(safe-area-inset-bottom));
+        display: flex; flex-wrap: wrap; gap: 12px;
         pointer-events: none; z-index: 10;
       }
-      .tcluster.left { left: 14px; }
-      .tcluster.right { right: 14px; width: 142px; justify-content: flex-end; }
+      .tcluster.left { left: 16px; }
+      .tcluster.right { right: 16px; width: 172px; justify-content: flex-end; }
       .tbtn {
-        pointer-events: auto; width: 64px; height: 64px; border-radius: 50%;
+        pointer-events: auto; width: 80px; height: 80px; border-radius: 50%;
         background: rgba(28, 34, 40, 0.45); color: #c8d0d6;
         border: 1px solid rgba(200, 208, 214, 0.4);
-        font: 20px monospace; touch-action: none;
+        font: 24px monospace; touch-action: none;
         user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
       }
       .tbtn.on { background: rgba(130, 150, 165, 0.55); }
