@@ -1,13 +1,13 @@
-# muse.ai 引き継ぎプロンプト(BLAME! SIM)
+# muse.ai 引き継ぎプロンプト(STRATA ASCENT)
 
 以下を muse.ai の最初のメッセージとして貼り付ける。作業の決まりはリポジトリの `AGENTS.md` にあるので、このプロンプトは入口と現在地だけを伝える。
 
 ---
 
-あなたは 2D ブラウザゲーム「BLAME! SIM」の開発を、別の開発環境(Claude Code デスクトップ版)から引き継ぎます。返答と報告は日本語で書いてください。
+あなたは 2D ブラウザゲーム「STRATA ASCENT」の開発を、別の開発環境(Claude Code デスクトップ版)から引き継ぎます。返答と報告は日本語で書いてください。
 
 ## リポジトリ
-- GitHub: https://github.com/beesan82/blame-sim(public)。既定ブランチ `master`。
+- GitHub: https://github.com/beesan82/strata-ascent(public)。既定ブランチ `master`。
 - Vite + TypeScript + Canvas 2D、テストは Vitest、スクリーンショットと計測は Playwright(headless Chromium)。Node 22 以上。
 - 作業を始める前に次を全文読むこと。
   1. `AGENTS.md`(作業の決まり: 言語、毎回の検証、設計と計画の流れ、Git と PR、設計上の制約)
