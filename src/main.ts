@@ -240,7 +240,7 @@ function updateHud(): void {
   // 頭の cell が上の層になり n が上がっていた(段階3 の保留)。床に立った層だけを「到達」と数える
   if (player.body.onGround) maxLayer = highestLayer(maxLayer, layerNumber(seed, biomeCellAt(seed, Math.floor(player.body.y))));
   const sys = regionAt(seed, Math.floor(player.centerX), Math.floor(player.body.y)).system;
-  let cannon = `重力子砲 ${graviton.charges}/3`;
+  let cannon = `重粒子砲 ${graviton.charges}/3`;
   const r = graviton.chargeRatio;
   if (r > 0 && r < 1) {
     // 溜めゲージ(ASCII固定でフォント差異なく確実に表示)

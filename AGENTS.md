@@ -1,4 +1,4 @@
-# AGENTS.md — BLAME! SIM の作業の決まり
+# AGENTS.md — STRATA ASCENT の作業の決まり
 
 AI エージェント(Claude Code、muse.ai など)と人が、このリポジトリで作業するときの決まり。
 何を作るかは `docs/superpowers/specs/`(設計書)と `docs/superpowers/plans/`(実装計画)にある。

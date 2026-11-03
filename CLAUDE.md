@@ -1,4 +1,4 @@
-# Claude Code 開発ガイド — BLAME! SIM
+# Claude Code 開発ガイド — STRATA ASCENT
 
 作業の進め方(言語、検証、設計と計画の流れ、Git と PR、設計上の制約)は `AGENTS.md` に従うこと。
 起動・操作・URL パラメータ・スクリプトは `README.md`。
