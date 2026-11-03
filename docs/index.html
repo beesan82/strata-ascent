@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>STRATA ASCENT</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; }
+    #hud {
+      position: fixed; left: 12px; top: 10px;
+      color: #9aa4ad; font: 12px monospace; letter-spacing: 0.2em;
+      pointer-events: none; user-select: none;
+    }
+    /* 通過演出の字幕(§6.5)。HUD と同じ等幅、文字間 0.3em。不透明度は src/render/caption.ts が毎フレーム更新 */
+    #caption {
+      position: fixed; left: 0; right: 0; bottom: 18%; text-align: center;
+      color: #c8d0d6; font: 16px monospace; letter-spacing: 0.3em; opacity: 0;
+      pointer-events: none; user-select: none;
+    }
+  </style>
+  <script type="module" crossorigin src="/strata-ascent/assets/index-3YYpAZ7J.js"></script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="hud"></div>
+  <div id="caption"></div>
+</body>
+</html>
