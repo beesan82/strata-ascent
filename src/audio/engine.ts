@@ -113,6 +113,19 @@ export class AudioEngine {
     void ctx.resume();
   }
 
+  /**
+   * タブを隠したときに呼ぶ。rAF が止まって update が来なくなるので、context ごと止めないと
+   * ドローンとハムが最後のゲインのまま鳴り続ける。開始前・実行中でなければ何もしない。
+   */
+  suspend(): void {
+    if (this.ctx && this.ctx.state === 'running') void this.ctx.suspend();
+  }
+
+  /** タブが戻ったときに呼ぶ。suspend した context だけを再開する(開始前の resume は start の役目) */
+  resume(): void {
+    if (this.ctx && this.ctx.state === 'suspended') void this.ctx.resume();
+  }
+
   setMuted(muted: boolean): void {
     this.isMuted = muted;
     if (!this.ctx) return;

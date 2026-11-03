@@ -83,6 +83,11 @@ input.onInput(() => {
   audio.setMuted(input.muted);
   audio.start();
 });
+// タブを隠すと rAF が止まり updateAudio が来ないが、AudioContext は進み続けるので context ごと止める
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) audio.suspend();
+  else audio.resume();
+});
 // 眺望(§6.4)の状態。純粋関数 viewState の出力(目標ズーム・中心オフセット)にカメラが追従する
 let view: ViewState = initialView(biomeCellAt(seed, Math.floor(spawn.y)));
 // HUD の階層(§6.5): 到達した最高階層。落下で下がっても減らない

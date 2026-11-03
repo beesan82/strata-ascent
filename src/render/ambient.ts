@@ -144,12 +144,17 @@ export function isWaterLayer(seed: number, cell: number): boolean {
 /**
  * 水系の層の光柱の中を落ちる粒(1×2 タイル、光柱の色)。粒 i の Y は板の下面から
  * (位相 × 高さ + 速度 × t) を高さで折り返した位置。視野の縦範囲に掛かる粒だけ、合計 DROPS_MAX まで。
+ * 粒を配るのは柱(軸 ±BEACON_HALF_WIDTH)が視野に掛かる光柱だけ。beaconsInView は光溜まりの
+ * 裾(±48)で拾うので、裾だけ掛かる光柱にも配ると画面内の柱の粒が上限で打ち切られていた。
  */
 export function fallingDropsInView(seed: number, camX: number, camY: number, spanX: number, spanY: number, timeSec: number): LightRect[] {
+  const x0 = camX - spanX / 2;
+  const x1 = camX + spanX / 2;
   const y0 = camY - spanY / 2;
   const y1 = camY + spanY / 2;
   const out: LightRect[] = [];
   for (const b of beaconsInView(seed, camX, camY, spanX, spanY)) {
+    if (b.x + BEACON_HALF_WIDTH < x0 || b.x - BEACON_HALF_WIDTH > x1) continue;
     if (!isWaterLayer(seed, b.cell)) continue;
     const H = b.floor - b.top;
     for (let i = 0; i < DROPS_PER_BEACON; i++) {
