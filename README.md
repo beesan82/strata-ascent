@@ -36,6 +36,10 @@ npm run dev   # http://localhost:5173/
 
 ## 開発
 
+作業の決まり(言語、毎回の検証、設計と計画の流れ、Git と PR、設計上の制約)は `AGENTS.md`、
+Claude Code 向けの要点は `CLAUDE.md`、muse.ai などへ引き継ぐときの最初のプロンプトは `docs/handoff/muse-ai-prompt.md`。
+フレーム予算の内訳は `docs/superpowers/notes/frame-budget.md`。
+
 ```powershell
 npm test            # Vitest
 npx tsc --noEmit    # 型チェック
