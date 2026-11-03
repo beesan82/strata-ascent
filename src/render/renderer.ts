@@ -53,6 +53,8 @@ export interface GravitonFx {
   chargeRatio: number;
   /** 生存中のビーム。nullなら描かない */
   beam: { angle: number; alpha: number } | null;
+  /** パルスの弾(ワールド座標の中心と方向)。平坦色の短矩形で描く */
+  pulses?: readonly { x: number; y: number; dx: number; dy: number }[];
 }
 
 /**
@@ -352,6 +354,21 @@ export class Renderer {
     // 重力子砲の演出: ライトの「上」に描いて発光体として読ませる。
     // ただし post(グレイン+ビネット)の「前」に描くことで画面全体の質感と馴染ませる。
     drawGravitonEffects(ctx, visualAnchors.muzzle, fx, w, h);
+
+    // パルスの弾: 同じ fx 相乗りで、平坦色の短矩形だけを描く(新規パスなし)
+    if (fx.pulses && fx.pulses.length > 0) {
+      ctx.fillStyle = '#d7ecff';
+      const long = Math.max(2, Math.round(0.55 * ppt));
+      const short = Math.max(1, Math.round(0.18 * ppt));
+      for (const p of fx.pulses) {
+        const sx = Math.round((p.x - renderCam.x) * ppt + w / 2);
+        const sy = Math.round((p.y - renderCam.y) * ppt + h / 2);
+        const horiz = Math.abs(p.dx) >= Math.abs(p.dy);
+        const bw = horiz ? long : short;
+        const bh = horiz ? short : long;
+        ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy - bh / 2), bw, bh);
+      }
+    }
     this.mark('fx');
 
     // ポストプロセス(グレイン+ビネット)

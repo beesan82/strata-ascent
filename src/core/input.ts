@@ -11,6 +11,7 @@ const GAME_KEYS = new Set([
   'KeyS',
   'Space',
   'KeyF',
+  'KeyJ',
   'ShiftLeft',
   'KeyM',
 ]);
@@ -31,6 +32,8 @@ export class Input {
   mouseY = 0;
   /** 読み込み後にマウスが一度でも動いたか。動くまでは眺望のオフセットに使わない(左上へ寄らないため) */
   mouseSeen = false;
+  /** マウスの左ボタンが押されているか(パルスの発射用) */
+  private mouseDown = false;
 
   constructor() {
     window.addEventListener('keydown', (e) => {
@@ -39,13 +42,23 @@ export class Input {
       this.pressKey(e.code);
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
-    window.addEventListener('pointerdown', () => this.fireInput());
+    window.addEventListener('pointerdown', (e) => {
+      this.fireInput();
+      // パルスの発射はマウスの左ボタンだけ(タッチの pointerdown では立てない)
+      if (e.pointerType === 'mouse' && e.button === 0) this.mouseDown = true;
+    });
+    window.addEventListener('pointerup', (e) => {
+      if (e.pointerType === 'mouse' && e.button === 0) this.mouseDown = false;
+    });
     window.addEventListener('mousemove', (e) => {
       this.mouseX = e.clientX;
       this.mouseY = e.clientY;
       this.mouseSeen = true;
     });
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+      this.mouseDown = false;
+    });
   }
 
   /** キーが押されたときの共通処理(押下エッジ、ミュート切替、入力コールバック) */
@@ -113,6 +126,11 @@ export class Input {
     const out = this.pressed;
     this.pressed = new Set();
     return out;
+  }
+
+  /** パルス発射中か(KeyJ / マウス左 / タッチの「射」ボタン=KeyJ) */
+  get pulseHeld(): boolean {
+    return this.keys.has('KeyJ') || this.mouseDown;
   }
 
   get state(): PlayerInput {
