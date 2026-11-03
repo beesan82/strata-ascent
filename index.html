@@ -34,11 +34,12 @@
         pointer-events: none; z-index: 10;
       }
       .tcluster.left { left: 12px; flex-direction: column; gap: 8px; }
-      .tcluster.right { right: 12px; align-items: flex-end; }
+      .tcluster.right { right: 12px; flex-direction: column; gap: 8px; align-items: flex-end; }
       .trow { display: flex; gap: 10px; }
-      /* 梯子ボタンは梯子のそばにいる間だけ出す(main が #touch.ladder-on を切り替える) */
+      /* 梯子ボタンは梯子のそばにいる間だけ出す(main が #touch.ladder-on を切り替える)。
+         パルス発射中(touch が #touch.pulse-on を付ける)も上・斜め狙い用に出す */
       .trow.ladder { display: none; }
-      #touch.ladder-on .trow.ladder { display: flex; }
+      #touch.ladder-on .trow.ladder, #touch.pulse-on .trow.ladder { display: flex; }
       /* 溜め中は移動クラスタを落として無効化する(止まって狙うモードの明示) */
       #touch.aiming .tcluster.left { opacity: 0.25; }
       #touch.aiming .tcluster.left .tbtn { pointer-events: none; }
@@ -60,6 +61,7 @@
       .sz-ladder { width: 64px; height: 64px; font-size: 20px; }
       .sz-jump { width: 84px; height: 84px; font-size: 26px; }
       .sz-cannon { width: 76px; height: 76px; font-size: 22px; }
+      .sz-pulse { width: 76px; height: 76px; font-size: 22px; }
       .sz-view { width: 48px; height: 48px; font-size: 16px; }
     }
   </style>

@@ -4,6 +4,8 @@ import type { Input } from './input';
  * タッチ端末向けの操作(設計書 2026-11-03-touch-redesign-design)。
  * モード分離: 移動はホールドボタン、照準+発射は「砲ボタンを押した指をそのまま
  * 地形へドラッグして点を指し、離して発射」。スティック方式は廃止した。
+ * パルス(アクション化 第2段)は右下「射」のホールドで連射し、照準は移動入力の
+ * 8 方向。発射中だけ ↑ ↓ 列も表示して上・斜めを狙えるようにする。
  * すべて Input のタッチ入口へ流すだけ。スタイルは index.html(pointer: coarse のみ)。
  */
 
@@ -150,15 +152,37 @@ export function installTouchControls(input: Input): void {
     },
   });
 
+  // パルスボタン(押している間だけ連射。発射中は root に pulse-on を付けて
+  // ↑ ↓ 列も出し、上・斜めを狙えるようにする)
+  const pulseBtn = makeButton('射', 'sz-pulse', {
+    onDown: () => {
+      root.classList.add('pulse-on');
+      input.touchDown('KeyJ');
+    },
+    onUp: () => {
+      root.classList.remove('pulse-on');
+      input.touchUp('KeyJ');
+    },
+  });
+
+  // 右クラスタは 2 段: 上段に「射」、下段に「砲」「跳」
+  // (3 つ横並びだと縦持ちの幅に収まらず左クラスタと重なるため)
   const right = document.createElement('div');
   right.className = 'tcluster right';
-  right.appendChild(cannonBtn);
-  right.appendChild(
+  const rightTop = document.createElement('div');
+  rightTop.className = 'trow';
+  rightTop.appendChild(pulseBtn);
+  const rightBottom = document.createElement('div');
+  rightBottom.className = 'trow';
+  rightBottom.appendChild(cannonBtn);
+  rightBottom.appendChild(
     makeButton('跳', 'sz-jump', {
       onDown: () => input.touchDown('Space'),
       onUp: () => input.touchUp('Space'),
     }),
   );
+  right.appendChild(rightTop);
+  right.appendChild(rightBottom);
   root.appendChild(right);
 
   // 眺望(右上、長押し = Shift)

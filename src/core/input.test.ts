@@ -45,6 +45,15 @@ describe('Input のタッチ入口', () => {
     expect(input.touchPointActive).toBe(false);
   });
 
+  it('pulseHeld は KeyJ のタッチ押下で立ち、離すと落ちる', () => {
+    const input = new Input();
+    expect(input.pulseHeld).toBe(false);
+    input.touchDown('KeyJ');
+    expect(input.pulseHeld).toBe(true);
+    input.touchUp('KeyJ');
+    expect(input.pulseHeld).toBe(false);
+  });
+
   it('発射キャンセルの要求は takeFireCancel で 1 回だけ取れる', () => {
     const input = new Input();
     expect(input.takeFireCancel()).toBe(false);

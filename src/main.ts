@@ -3,6 +3,7 @@ import { Input, MOVE_KEYS } from './core/input';
 import { installTouchControls, setTouchLadderVisible } from './core/touch';
 import { Player } from './entities/player';
 import { Graviton } from './entities/graviton';
+import { pulseAimDir, PulseGun, PULSE_SIZE } from './entities/pulse';
 import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
 import { ChunkStore } from './world/chunks';
 import { Destruction } from './world/destruction';
@@ -69,6 +70,7 @@ const caption = new Caption(document.getElementById('caption')!);
 const destruction = new Destruction();
 const store = new ChunkStore(seed, destruction);
 const graviton = new Graviton();
+const pulseGun = new PulseGun();
 // デバッグ/スクリーンショット用: ?x=&y= でスポーン位置を上書き(埋まり座標は自己責任)
 const qx = params.get('x');
 const qy = params.get('y');
@@ -211,6 +213,9 @@ function update(dt: number): void {
   camera.zoomTo(view.zoom, dt);
   if (input.takeFireCancel()) graviton.cancelCharge(); // タッチ照準のキャンセル(解放より先に破棄)
   graviton.update(dt, input.fireHeld, fire);
+  // パルス(連射武器): 照準は移動入力から作る 8 方向。溜め中は移動が止まるので競合しない
+  const pulseDir = pulseAimDir(input.state, player.facing);
+  pulseGun.update(dt, input.pulseHeld, player.centerX, player.centerY, pulseDir.x, pulseDir.y, tiles);
   updateAudio();
   if (lastBeam) {
     lastBeam.ttl -= dt;
@@ -303,6 +308,12 @@ function frame(now: number): void {
   renderer.render(store, camera, player, aimMouseX, aimMouseY, simTime, {
     chargeRatio: graviton.chargeRatio,
     beam,
+    pulses: pulseGun.pulses.map((p) => ({
+      x: p.body.x + PULSE_SIZE / 2,
+      y: p.body.y + PULSE_SIZE / 2,
+      dx: p.dx,
+      dy: p.dy,
+    })),
   });
   if (collectStats) {
     // present の getImageData が描画コマンドを同期ラスタ化させるので、ここの時間に描画全体が含まれる
