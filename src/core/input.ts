@@ -35,11 +35,8 @@ export class Input {
   constructor() {
     window.addEventListener('keydown', (e) => {
       if (GAME_KEYS.has(e.code)) e.preventDefault();
-      this.keys.add(e.code);
       if (e.repeat) return;
-      this.pressed.add(e.code);
-      if (e.code === 'KeyM') this.muted = !this.muted;
-      this.fireInput();
+      this.pressKey(e.code);
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('pointerdown', () => this.fireInput());
@@ -49,6 +46,25 @@ export class Input {
       this.mouseSeen = true;
     });
     window.addEventListener('blur', () => this.keys.clear());
+  }
+
+  /** キーが押されたときの共通処理(押下エッジ、ミュート切替、入力コールバック) */
+  private pressKey(code: string): void {
+    this.keys.add(code);
+    this.pressed.add(code);
+    if (code === 'KeyM') this.muted = !this.muted;
+    this.fireInput();
+  }
+
+  /** タッチボタンからの押下。keydown と同じ入口に流す(画面ボタンは src/core/touch.ts) */
+  touchDown(code: string): void {
+    if (this.keys.has(code)) return; // 既に押下中ならエッジを二重に出さない
+    this.pressKey(code);
+  }
+
+  /** タッチボタンからの解放。keyup と同じく集合から除くだけ */
+  touchUp(code: string): void {
+    this.keys.delete(code);
   }
 
   /**

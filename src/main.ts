@@ -1,5 +1,6 @@
 import { Camera } from './core/camera';
 import { Input, MOVE_KEYS } from './core/input';
+import { installTouchControls } from './core/touch';
 import { Player } from './entities/player';
 import { Graviton } from './entities/graviton';
 import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
@@ -75,6 +76,7 @@ const spawn = qx !== null && qy !== null ? { x: Number(qx), y: Number(qy) } : fi
 const player = new Player(spawn.x, spawn.y);
 const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
+installTouchControls(input); // タッチ端末でのみ画面ボタンが出る(それ以外は何もしない)
 const renderer = new Renderer(canvas, seed);
 // 音(§6.7): キー/クリックのたびに AudioContext の開始・resume を試みる(ブラウザの自動再生制限)。
 // M はトグル(Input.muted)。最初のキーが M のときに一瞬鳴らないよう、開始の前にミュートを渡す
@@ -166,7 +168,8 @@ function update(dt: number): void {
     newlyMoving: MOVE_KEYS.some((c) => pressed.has(c)),
     grounded: player.body.onGround,
     still: player.body.onGround && player.body.vx === 0,
-    aimX: input.mouseSeen ? clamp(-1, 1, (input.mouseX * dpr - halfW) / halfW) : 0,
+    // マウスが一度も動いていない(タッチ等)間は、照準をプレイヤーの向きの水平に倒す(左上に張り付かせない)
+    aimX: input.mouseSeen ? clamp(-1, 1, (input.mouseX * dpr - halfW) / halfW) : player.facing,
     aimY: input.mouseSeen ? clamp(-1, 1, (input.mouseY * dpr - halfH) / halfH) : 0,
     // 塔(§5.5)の頂部の床からも発火する(述語は interface.ts → landmark.ts の循環 import を避けるため)
     overlookCell: player.body.onGround ? overlookCellAt(seed, Math.floor(player.centerX), footRow, towerTop) : null,
@@ -271,7 +274,11 @@ function frame(now: number): void {
   }
   const beam = lastBeam ? { angle: lastBeam.angle, alpha: lastBeam.ttl / BEAM_TTL } : null;
   const t0 = collectStats ? performance.now() : 0;
-  renderer.render(store, camera, player, input.mouseX * dpr, input.mouseY * dpr, simTime, {
+  // マウスが一度も動いていない(タッチ等)間は、照準用のマウス位置を「プレイヤーの向きの水平」へ合成する
+  // (実マウス座標 0,0 だと照準が画面左上に張り付き、コーンとビームの向きが実用にならないため)
+  const aimMouseX = input.mouseSeen ? input.mouseX * dpr : canvas.width / 2 + (player.facing * canvas.width) / 4;
+  const aimMouseY = input.mouseSeen ? input.mouseY * dpr : canvas.height / 2;
+  renderer.render(store, camera, player, aimMouseX, aimMouseY, simTime, {
     chargeRatio: graviton.chargeRatio,
     beam,
   });
