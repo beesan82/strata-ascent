@@ -168,9 +168,14 @@ function update(dt: number): void {
     newlyMoving: MOVE_KEYS.some((c) => pressed.has(c)),
     grounded: player.body.onGround,
     still: player.body.onGround && player.body.vx === 0,
-    // マウスが一度も動いていない(タッチ等)間は、照準をプレイヤーの向きの水平に倒す(左上に張り付かせない)
-    aimX: input.mouseSeen ? clamp(-1, 1, (input.mouseX * dpr - halfW) / halfW) : player.facing,
-    aimY: input.mouseSeen ? clamp(-1, 1, (input.mouseY * dpr - halfH) / halfH) : 0,
+    // マウスが一度も動いていない(タッチ等)間は、エイムスティックの照準を使い、
+    // 無ければプレイヤーの向きの水平に倒す(左上に張り付かせない)
+    aimX: input.mouseSeen
+      ? clamp(-1, 1, (input.mouseX * dpr - halfW) / halfW)
+      : input.touchAimActive ? clamp(-1, 1, input.touchAimX) : player.facing,
+    aimY: input.mouseSeen
+      ? clamp(-1, 1, (input.mouseY * dpr - halfH) / halfH)
+      : input.touchAimActive ? clamp(-1, 1, input.touchAimY) : 0,
     // 塔(§5.5)の頂部の床からも発火する(述語は interface.ts → landmark.ts の循環 import を避けるため)
     overlookCell: player.body.onGround ? overlookCellAt(seed, Math.floor(player.centerX), footRow, towerTop) : null,
     baseZoom: zoomTarget,
@@ -274,10 +279,15 @@ function frame(now: number): void {
   }
   const beam = lastBeam ? { angle: lastBeam.angle, alpha: lastBeam.ttl / BEAM_TTL } : null;
   const t0 = collectStats ? performance.now() : 0;
-  // マウスが一度も動いていない(タッチ等)間は、照準用のマウス位置を「プレイヤーの向きの水平」へ合成する
+  // マウスが一度も動いていない(タッチ等)間は、照準用のマウス位置を合成する:
+  // エイムスティックが有効ならその方向、無ければ「プレイヤーの向きの水平」
   // (実マウス座標 0,0 だと照準が画面左上に張り付き、コーンとビームの向きが実用にならないため)
-  const aimMouseX = input.mouseSeen ? input.mouseX * dpr : canvas.width / 2 + (player.facing * canvas.width) / 4;
-  const aimMouseY = input.mouseSeen ? input.mouseY * dpr : canvas.height / 2;
+  const aimMouseX = input.mouseSeen
+    ? input.mouseX * dpr
+    : canvas.width / 2 + (input.touchAimActive ? input.touchAimX : player.facing) * (canvas.width / 4);
+  const aimMouseY = input.mouseSeen
+    ? input.mouseY * dpr
+    : canvas.height / 2 + (input.touchAimActive ? input.touchAimY * (canvas.height / 4) : 0);
   renderer.render(store, camera, player, aimMouseX, aimMouseY, simTime, {
     chargeRatio: graviton.chargeRatio,
     beam,

@@ -33,4 +33,15 @@ describe('Input のタッチ入口', () => {
     input.touchUp('KeyF');
     expect(input.fireHeld).toBe(false);
   });
+
+  it('タッチ照準は既定で無効、setTouchAim で有効になり clearTouchAim で戻る', () => {
+    const input = new Input();
+    expect(input.touchAimActive).toBe(false);
+    input.setTouchAim(0.6, -0.8);
+    expect(input.touchAimActive).toBe(true);
+    expect(input.touchAimX).toBeCloseTo(0.6);
+    expect(input.touchAimY).toBeCloseTo(-0.8);
+    input.clearTouchAim();
+    expect(input.touchAimActive).toBe(false);
+  });
 });
