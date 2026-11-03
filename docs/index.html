@@ -37,9 +37,22 @@
         user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
       }
       .tbtn.on { background: rgba(130, 150, 165, 0.55); }
+      /* 浮動スティック(src/core/touch.ts)。レイヤーが全画面で受け、土台とノブを原点へ出す */
+      #stick-layer { position: fixed; inset: 0; z-index: 5; touch-action: none; }
+      #stick-base {
+        display: none; position: fixed; width: 112px; height: 112px;
+        margin: -56px 0 0 -56px; border-radius: 50%;
+        border: 1px solid rgba(200, 208, 214, 0.35); background: rgba(28, 34, 40, 0.3);
+        pointer-events: none;
+      }
+      #stick-knob {
+        position: absolute; left: 50%; top: 50%; width: 52px; height: 52px;
+        margin: -26px 0 0 -26px; border-radius: 50%;
+        background: rgba(130, 150, 165, 0.45);
+      }
     }
   </style>
-  <script type="module" crossorigin src="/strata-ascent/assets/index-Cjfof--4.js"></script>
+  <script type="module" crossorigin src="/strata-ascent/assets/index-BqBRGosC.js"></script>
 </head>
 <body>
   <canvas id="game"></canvas>
