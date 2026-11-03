@@ -67,6 +67,21 @@ export class Input {
     this.keys.delete(code);
   }
 
+  /** エイムスティックの照準(単位ベクトル)。マウス未使用時のみ main が読む */
+  touchAimX = 0;
+  touchAimY = 0;
+  touchAimActive = false;
+
+  setTouchAim(x: number, y: number): void {
+    this.touchAimX = x;
+    this.touchAimY = y;
+    this.touchAimActive = true;
+  }
+
+  clearTouchAim(): void {
+    this.touchAimActive = false;
+  }
+
   /**
    * キー押下(リピート除く)/ ポインタ押下のたびに呼ぶ(AudioContext の開始と resume。ブラウザの自動再生制限)。
    * 初回だけにすると、最初のキーが Esc などユーザー操作に数えられないものだったとき音が永久に出ない
