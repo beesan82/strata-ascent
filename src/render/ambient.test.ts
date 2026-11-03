@@ -127,6 +127,16 @@ describe('fallingDropsInView', () => {
     expect(fallingDropsInView(seed, bc.x, bc.top + 24, 3000, 100, 2).length).toBeLessThanOrEqual(DROPS_MAX);
     expect(fallingDropsInView(seed, bc.x, bc.top + 24, 3000, 100, 2).length).toBe(DROPS_MAX);
   });
+  it('裾(光溜まり ±48)だけが視野に掛かり柱(±12)が外にある光柱には粒を配らない', () => {
+    const { seed, cell } = water;
+    const bc = beaconOf(seed, cell);
+    const cy = (bc.top + bc.floor) / 2;
+    const spanY = bc.floor - bc.top + 4;
+    // 視野の左端が bc.x+47: 裾(bc.x+48)は 1 タイル掛かるが、柱(bc.x±12)は視野の外
+    expect(fallingDropsInView(seed, bc.x + 77, cy, 60, spanY, 3.3).length).toBe(0);
+    // 柱が視野に掛かれば粒は出る(同じ光柱・同じ時刻)
+    expect(fallingDropsInView(seed, bc.x + 40, cy, 60, spanY, 3.3).length).toBeGreaterThan(0);
+  });
   it('粒は時間で下へ動き(14 タイル/秒)、床で折り返す', () => {
     const { seed, cell } = water;
     const bc = beaconOf(seed, cell);
