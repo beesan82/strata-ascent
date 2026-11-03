@@ -13,6 +13,12 @@ export class Graviton {
     return Math.min(1, this.chargeT / CHARGE_TIME);
   }
 
+  /** 溜めを破棄する(タッチ照準のキャンセル用)。この後の解放では発射しない */
+  cancelCharge(): void {
+    this.charging = false;
+    this.chargeT = 0;
+  }
+
   /**
    * held: 発射キーが押されているか。fire: チャージ完了→離した瞬間に呼ぶコールバック。
    * 弾数プールを消費し、時間で自動回復する。

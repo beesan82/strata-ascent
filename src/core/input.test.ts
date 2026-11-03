@@ -34,14 +34,22 @@ describe('Input のタッチ入口', () => {
     expect(input.fireHeld).toBe(false);
   });
 
-  it('タッチ照準は既定で無効、setTouchAim で有効になり clearTouchAim で戻る', () => {
+  it('タッチ照準点は既定で無効、setTouchPoint で有効になり clearTouchPoint で戻る', () => {
     const input = new Input();
-    expect(input.touchAimActive).toBe(false);
-    input.setTouchAim(0.6, -0.8);
-    expect(input.touchAimActive).toBe(true);
-    expect(input.touchAimX).toBeCloseTo(0.6);
-    expect(input.touchAimY).toBeCloseTo(-0.8);
-    input.clearTouchAim();
-    expect(input.touchAimActive).toBe(false);
+    expect(input.touchPointActive).toBe(false);
+    input.setTouchPoint(123, 456);
+    expect(input.touchPointActive).toBe(true);
+    expect(input.touchPointX).toBe(123);
+    expect(input.touchPointY).toBe(456);
+    input.clearTouchPoint();
+    expect(input.touchPointActive).toBe(false);
+  });
+
+  it('発射キャンセルの要求は takeFireCancel で 1 回だけ取れる', () => {
+    const input = new Input();
+    expect(input.takeFireCancel()).toBe(false);
+    input.requestFireCancel();
+    expect(input.takeFireCancel()).toBe(true);
+    expect(input.takeFireCancel()).toBe(false);
   });
 });
