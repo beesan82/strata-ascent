@@ -9,9 +9,6 @@ workflows:
     integrations:
       app_store_connect: Pocket Agent ASC
     environment:
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.strataascent.app
       vars:
         XCODE_PROJECT: ios/App/App.xcodeproj
         XCODE_SCHEME: App
@@ -38,7 +35,7 @@ workflows:
         script: keychain initialize
       - name: 署名情報の取得
         script: |
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+          app-store-connect fetch-signing-files "com.strataascent.app" \
             --type IOS_APP_STORE --create
       - name: 署名の適用
         script: keychain add-certificates
