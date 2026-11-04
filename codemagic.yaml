@@ -27,10 +27,6 @@ workflows:
           for f in splash-2732x2732.png splash-2732x2732-1.png splash-2732x2732-2.png; do
             sips -z 2732 2732 "ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png" --out "ios/App/App/Assets.xcassets/Splash.imageset/$f" > /dev/null
           done
-      - name: CocoaPods
-        script: |
-          cd ios/App
-          pod install
       - name: 署名の初期化
         script: keychain initialize
       - name: 署名情報の取得
