@@ -5,9 +5,15 @@ export const CAPTION_HOLD_SECONDS = 2;
 /** その後のフェードアウト時間(秒) */
 export const CAPTION_FADE_SECONDS = 0.5;
 
-/** 「第 n 階層」、大界面を越えたときは「第 n 階層 — 大界面」 */
-export function captionText(layer: number, great: boolean): string {
-  return great ? `第 ${layer} 階層 — 大界面` : `第 ${layer} 階層`;
+/**
+ * 「第 n 階層」。大界面を越えたときは「— 大界面」を添える。
+ * 地区名が渡された場合（地区が変わったとき、または大界面）は末尾に「— 〈地区名〉」を併記する。
+ */
+export function captionText(layer: number, great: boolean, districtName?: string): string {
+  let text = `第 ${layer} 階層`;
+  if (great) text += ' — 大界面';
+  if (districtName) text += ` — ${districtName}`;
+  return text;
 }
 
 /** 表示開始からの経過秒 → 不透明度。2 秒は 1、続く 0.5 秒で線形に 0 へ */

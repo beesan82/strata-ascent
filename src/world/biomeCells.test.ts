@@ -3,10 +3,12 @@ import {
   BIOME_BLEND_HALF_WIDTH,
   BIOME_CELL_BASE,
   BIOME_CELL_JITTER,
+  BIOME_DISTRICT_NAME,
   BIOME_IDS,
   biomeBoundary,
   biomeCellAt,
   biomeIdForCell,
+  districtNameForCell,
 } from './biomeCells';
 
 describe('biome cells', () => {
@@ -67,6 +69,44 @@ describe('biome cells', () => {
       }
     }
     expect(selectedIds).toEqual(new Set(BIOME_IDS));
+  });
+
+  it('fixes cell 0 to coldSteel for every seed', () => {
+    for (const seed of seeds) {
+      expect(biomeIdForCell(seed, 0)).toBe('coldSteel');
+    }
+  });
+
+  it('contains every district exactly once per 5-cell cycle', () => {
+    for (const seed of seeds) {
+      for (let cycle = -20; cycle <= 20; cycle++) {
+        const ids = Array.from({ length: 5 }, (_, i) => biomeIdForCell(seed, cycle * 5 + i));
+        expect(new Set(ids)).toEqual(new Set(BIOME_IDS));
+      }
+    }
+  });
+
+  it('never repeats a district across a cycle boundary', () => {
+    for (const seed of seeds) {
+      for (let cycle = -20; cycle < 20; cycle++) {
+        expect(biomeIdForCell(seed, cycle * 5 + 4)).not.toBe(biomeIdForCell(seed, (cycle + 1) * 5));
+      }
+    }
+  });
+
+  it('gives every district a Japanese district name', () => {
+    expect(BIOME_DISTRICT_NAME).toEqual({
+      coldSteel: '寒鋼基層',
+      habitation: '居住区画',
+      disposal: '廃棄沈殿層',
+      waterVoid: '大空洞水域',
+      power: '電力区',
+    });
+    for (const seed of seeds) {
+      for (let cell = -20; cell <= 20; cell++) {
+        expect(districtNameForCell(seed, cell)).toBe(BIOME_DISTRICT_NAME[biomeIdForCell(seed, cell)]);
+      }
+    }
   });
 
   it('keeps positive and negative 20-cell ID sequences independent', () => {

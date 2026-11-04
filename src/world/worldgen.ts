@@ -33,7 +33,7 @@ function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: T
   // Floor bands use the active biome profile while their phase stays in world coordinates.
   const band = Math.floor(y / profile.floorSpacing);
   const isFloorRow = mod(y, profile.floorSpacing) === 0;
-  const seg = Math.floor(x / 16);
+  const seg = Math.floor(x / profile.segLen);
   const floorGap = isFloorRow && hash2(seed + 303, seg, band) < profile.gapChance;
 
   // Ladder columns take precedence over all terrain features.
@@ -44,15 +44,15 @@ function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: T
   // 前室の底は連続した床。
   if (mods?.forceFloor) return TILE.SOLID;
 
-  // 2. 巨大空洞(低頻度ノイズ)。空洞内は4床帯ごとの橋だけ残る
-  const cavity = valueNoise2(seed + 101, x / 160, y / 160) > profile.cavityThreshold * (mods?.cavityScale ?? 1);
+  // 2. 巨大空洞(低頻度ノイズ)。空洞内は bridgeEvery 床帯ごとの橋だけ残る
+  const cavity = valueNoise2(seed + 101, x / profile.cavityScale, y / profile.cavityScale) > profile.cavityThreshold * (mods?.cavityScale ?? 1);
   if (cavity) {
-    if (isFloorRow && mod(band, 4) === 0 && !floorGap) return TILE.SOLID;
+    if (isFloorRow && mod(band, profile.bridgeEvery) === 0 && !floorGap) return TILE.SOLID;
     return TILE.AIR;
   }
 
   // 3. 柱・壁塊(中頻度ノイズ)
-  const mass = valueNoise2(seed + 202, x / 28, y / 28) > profile.massThreshold - (mods?.massDrop ?? 0);
+  const mass = valueNoise2(seed + 202, x / profile.massScale, y / profile.massScale) > profile.massThreshold - (mods?.massDrop ?? 0);
   if (mass) return TILE.SOLID;
 
   // 4. 床
