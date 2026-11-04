@@ -1,5 +1,5 @@
 # STRATA ASCENT(Capacitor)の iOS ビルド → TestFlight 配布。
-# 前提: Codemagic 側に App Store Connect 連携(名前 app_store_connect)が設定済みで、
+# 前提: Codemagic 側に App Store Connect 連携「Pocket Agent ASC」が設定済みで、
 # コード署名はその連携キーで自動取得する。連携名が違う場合は environment の参照を合わせる。
 workflows:
   ios-testflight:
@@ -7,7 +7,7 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m2
     integrations:
-      app_store_connect: app_store_connect
+      app_store_connect: Pocket Agent ASC
     environment:
       ios_signing:
         distribution_type: app_store
