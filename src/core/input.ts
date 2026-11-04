@@ -1,4 +1,5 @@
 import type { PlayerInput } from '../entities/player';
+import { aimKeeper, pulseTrigger } from './stick';
 
 const GAME_KEYS = new Set([
   'ArrowLeft',
@@ -95,6 +96,51 @@ export class Input {
     this.touchPointActive = false;
   }
 
+  /**
+   * 右スティックの照準(単位ベクトル)。スティックを倒している間だけ有効。
+   * 照準の合成・カメラ先行・眺望は main がこちらと保持照準(heldAim)を読む
+   */
+  touchAimX = 0;
+  touchAimY = 0;
+  touchAimActive = false;
+  /** 右スティックが発射閾値を超えているか(pulseHeld に OR される。タッチ以外では常に false) */
+  private touchAimFiring = false;
+  /** 保持中の照準(単位ベクトル)。スティックを離しても残り、次の照準でだけ更新される */
+  heldAimX = 1;
+  heldAimY = 0;
+  heldAimActive = false;
+
+  /**
+   * 右スティックの現在値を流す。(x, y) は単位ベクトル、mag はストローク比。
+   * 照準有効・発射の判定は stick.ts の pulseTrigger に集約する。
+   */
+  setTouchAim(x: number, y: number, mag: number): void {
+    const t = pulseTrigger(mag);
+    this.touchAimFiring = t.fire;
+    if (t.aim) {
+      this.touchAimX = x;
+      this.touchAimY = y;
+      this.touchAimActive = true;
+      const held = aimKeeper(
+        this.heldAimActive ? { x: this.heldAimX, y: this.heldAimY } : null,
+        { x, y },
+      );
+      if (held) {
+        this.heldAimX = held.x;
+        this.heldAimY = held.y;
+        this.heldAimActive = true;
+      }
+    } else {
+      this.touchAimActive = false;
+    }
+  }
+
+  /** 右スティックを離した。現在の照準は無効になるが、保持照準は残る */
+  clearTouchAim(): void {
+    this.touchAimActive = false;
+    this.touchAimFiring = false;
+  }
+
   private fireCancelRequested = false;
 
   /** タッチ側からの発射キャンセル要求(砲ボタンのキャンセル圏内で離したとき) */
@@ -128,9 +174,9 @@ export class Input {
     return out;
   }
 
-  /** パルス発射中か(KeyJ / マウス左 / タッチの「射」ボタン=KeyJ) */
+  /** パルス発射中か(KeyJ / マウス左 / 右スティックの発射閾値超え) */
   get pulseHeld(): boolean {
-    return this.keys.has('KeyJ') || this.mouseDown;
+    return this.keys.has('KeyJ') || this.mouseDown || this.touchAimFiring;
   }
 
   get state(): PlayerInput {

@@ -54,6 +54,48 @@ describe('Input のタッチ入口', () => {
     expect(input.pulseHeld).toBe(false);
   });
 
+  it('右スティック照準は既定で無効、setTouchAim で有効になり clearTouchAim で戻る', () => {
+    const input = new Input();
+    expect(input.touchAimActive).toBe(false);
+    input.setTouchAim(0.6, -0.8, 0.8);
+    expect(input.touchAimActive).toBe(true);
+    expect(input.touchAimX).toBeCloseTo(0.6);
+    expect(input.touchAimY).toBeCloseTo(-0.8);
+    input.clearTouchAim();
+    expect(input.touchAimActive).toBe(false);
+  });
+
+  it('発射閾値(0.55)を超えた倒し量では pulseHeld が立ち、照準だけ(0.4)では立たない', () => {
+    const input = new Input();
+    input.setTouchAim(1, 0, 0.4);
+    expect(input.touchAimActive).toBe(true);
+    expect(input.pulseHeld).toBe(false);
+    input.setTouchAim(1, 0, 0.8);
+    expect(input.pulseHeld).toBe(true);
+    input.clearTouchAim();
+    expect(input.pulseHeld).toBe(false);
+  });
+
+  it('デッドゾーン内(0.2)の倒し量では照準も有効にならない', () => {
+    const input = new Input();
+    input.setTouchAim(1, 0, 0.2);
+    expect(input.touchAimActive).toBe(false);
+    expect(input.pulseHeld).toBe(false);
+  });
+
+  it('保持照準はスティックを離しても残り、次の照準でだけ更新される', () => {
+    const input = new Input();
+    expect(input.heldAimActive).toBe(false);
+    input.setTouchAim(1, 0, 0.8);
+    input.clearTouchAim();
+    expect(input.heldAimActive).toBe(true);
+    expect(input.heldAimX).toBeCloseTo(1);
+    expect(input.heldAimY).toBeCloseTo(0);
+    input.setTouchAim(0, -1, 0.8);
+    expect(input.heldAimX).toBeCloseTo(0);
+    expect(input.heldAimY).toBeCloseTo(-1);
+  });
+
   it('発射キャンセルの要求は takeFireCancel で 1 回だけ取れる', () => {
     const input = new Input();
     expect(input.takeFireCancel()).toBe(false);
