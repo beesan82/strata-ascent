@@ -1,6 +1,9 @@
 # STRATA ASCENT(Capacitor)の iOS ビルド → TestFlight 配布。
-# 前提: Codemagic 側に App Store Connect 連携「Pocket Agent ASC」が設定済みで、
-# コード署名はその連携キーで自動取得する。連携名が違う場合は environment の参照を合わせる。
+# 署名は Pocket Agent / MUSICAGE と同じ実績方式: ビルド中に API で署名ファイルを
+# 作らず、Codemagic のアプリ設定(Settings -> Code signing identities)に保存済みの
+# 証明書・プロファイルを environment.ios_signing が選ぶだけ。
+# 前提: App Store Connect 連携「Pocket Agent ASC」、Code signing identities に
+# Apple Distribution 証明書とプロファイル「STRATA ASCENT App Store」を用意しておくこと。
 workflows:
   ios-testflight:
     name: STRATA ASCENT iOS (TestFlight)
@@ -9,9 +12,13 @@ workflows:
     integrations:
       app_store_connect: Pocket Agent ASC
     environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.strataascent.app
       vars:
         XCODE_PROJECT: ios/App/App.xcodeproj
         XCODE_SCHEME: App
+        APP_STORE_APPLE_ID: "6830440859"
       node: 22
     scripts:
       - name: 依存関係のインストール
@@ -27,16 +34,13 @@ workflows:
           for f in splash-2732x2732.png splash-2732x2732-1.png splash-2732x2732-2.png; do
             sips -z 2732 2732 "ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png" --out "ios/App/App/Assets.xcassets/Splash.imageset/$f" > /dev/null
           done
-      - name: 署名の初期化
-        script: keychain initialize
-      - name: 署名情報の取得
-        script: |
-          app-store-connect fetch-signing-files "com.strataascent.app" \
-            --type IOS_APP_STORE --create
-      - name: 署名の適用
-        script: keychain add-certificates
       - name: プロファイルの適用
         script: xcode-project use-profiles
+      - name: ビルド番号の設定
+        script: |
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" || echo 0)
+          cd ios/App
+          agvtool new-version -all $((LATEST + 1))
       - name: IPA のビルド
         script: |
           xcode-project build-ipa \
@@ -47,4 +51,4 @@ workflows:
     publishing:
       app_store_connect:
         auth: integration
-        submit_to_testflight: true
+        submit_to_testflight: false
