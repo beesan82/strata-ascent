@@ -1,4 +1,5 @@
 import { Camera } from './core/camera';
+import { hapticCannonFire, hapticDamage, hapticEnemyDown, initNativeShell } from './core/haptics';
 import { Input, MOVE_KEYS } from './core/input';
 import { installTouchControls, setTouchLadderVisible } from './core/touch';
 import { MAX_HP, Player } from './entities/player';
@@ -154,6 +155,7 @@ let lastBeam: { angle: number; ttl: number } | null = null;
 
 /** チャージ完了→離した瞬間: エイム方向へ地形を貫通破壊し、タイルへ反映して焼き込みを無効化する */
 function fire(): void {
+  hapticCannonFire();
   const aim = renderer.aimAngle; // ライトコーンと同一の角度(=ビーム=破壊方向を保証)
   // 未生成チャンクは生成せず破壊マスクだけ記録する(発射フレームでの同期生成を避ける)
   const affected = destruction.bore(
@@ -270,7 +272,7 @@ function update(dt: number): void {
           p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
           p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
         ) {
-          e.walker.hit(PULSE_DAMAGE);
+          if (e.walker.hit(PULSE_DAMAGE)) hapticEnemyDown();
           spent.add(p);
           break;
         }
@@ -286,7 +288,7 @@ function update(dt: number): void {
     for (const e of enemies) {
       const b = e.walker.body;
       if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
-        player.damage(e.walker.centerX);
+        if (player.damage(e.walker.centerX)) hapticDamage();
         break;
       }
     }
@@ -427,4 +429,5 @@ function frame(now: number): void {
   requestAnimationFrame(frame);
 }
 
+void initNativeShell(); // アプリ版のみ: 横向きロックとステータスバー非表示(Web では no-op)
 requestAnimationFrame(frame);
