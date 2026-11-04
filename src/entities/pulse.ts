@@ -8,6 +8,7 @@ export const PULSE_INTERVAL = 1 / 6; // 連射間隔(秒)= 約 6 発/秒
 export const PULSE_SPEED = 30; // タイル/秒
 export const PULSE_RANGE = 14; // 射程(タイル)
 export const PULSE_SIZE = 0.4; // 弾の一辺(タイル)
+export const PULSE_DAMAGE = 1; // 敵への威力
 
 export interface Pulse {
   body: Body;
