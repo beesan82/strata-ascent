@@ -171,6 +171,48 @@ describe('Player 移動の手触り(アクション化 第1段)', () => {
   });
 });
 
+describe('Player HP と被弾(アクション化 第4段)', () => {
+  it('damage で HP が減り、ノックバックはダメージ源から離れる向き', () => {
+    const p = new Player(10, 0);
+    expect(p.damage(20)).toBe(true); // 源は右 → 左へ跳ねる
+    expect(p.hp).toBe(4);
+    expect(p.body.vx).toBeLessThan(0);
+    expect(p.body.vy).toBeLessThan(0);
+    const q = new Player(10, 0);
+    expect(q.damage(0)).toBe(true); // 源は左 → 右へ跳ねる
+    expect(q.body.vx).toBeGreaterThan(0);
+  });
+
+  it('無敵中はダメージを受けない。1 秒たてば再び受ける', () => {
+    const p = new Player(0, 0);
+    expect(p.damage(5)).toBe(true);
+    expect(p.damage(5)).toBe(false);
+    expect(p.hp).toBe(4);
+    for (let i = 0; i < 70; i++) p.update(noInput, 1 / 60, emptyTiles);
+    expect(p.damage(5)).toBe(true);
+    expect(p.hp).toBe(3);
+  });
+
+  it('ノックバック中は横入力を受けない', () => {
+    const p = new Player(10, 0);
+    p.damage(20); // vx は負(左向き)
+    p.update({ ...noInput, right: true }, 1 / 60, emptyTiles);
+    expect(p.body.vx).toBeLessThan(0); // 右入力に反転していない
+  });
+
+  it('HP が 0 で dead、revive で全回復する', () => {
+    const p = new Player(0, 0);
+    for (let k = 0; k < 5; k++) {
+      p.damage(5);
+      for (let i = 0; i < 70; i++) p.update(noInput, 1 / 60, emptyTiles);
+    }
+    expect(p.dead).toBe(true);
+    p.revive();
+    expect(p.hp).toBe(5);
+    expect(p.dead).toBe(false);
+  });
+});
+
 describe('Player 向きと歩行位相', () => {
   it('左右入力で向きが変わり、入力がなければ維持される', () => {
     const p = new Player(0, 8);
