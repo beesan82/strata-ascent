@@ -1,7 +1,7 @@
 import { Camera } from './core/camera';
 import { Input, MOVE_KEYS } from './core/input';
 import { installTouchControls, setTouchLadderVisible } from './core/touch';
-import { Player } from './entities/player';
+import { MAX_HP, Player } from './entities/player';
 import { Graviton } from './entities/graviton';
 import { pulseAimDir, PulseGun, PULSE_DAMAGE, PULSE_SIZE, type Pulse } from './entities/pulse';
 import { Walker } from './entities/enemy';
@@ -105,6 +105,8 @@ const qx = params.get('x');
 const qy = params.get('y');
 const spawn = qx !== null && qy !== null ? { x: Number(qx), y: Number(qy) } : findSpawn(seed);
 const player = new Player(spawn.x, spawn.y);
+/** 復活点(ボディ左上)。休憩点に触れるたびに更新される */
+let respawnPoint = { x: spawn.x, y: spawn.y };
 const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
 installTouchControls(input); // タッチ端末でのみ画面ボタンが出る(それ以外は何もしない)
@@ -237,6 +239,16 @@ function update(dt: number): void {
       }
     }
     setTouchLadderVisible(ladderNear);
+    // 休憩点の箱の中に立ったら全回復し、復活点をここへ更新する
+    const rp = nearestRestPoint(seed, player.centerX, player.centerY);
+    const feet = player.body.y + player.body.h;
+    if (
+      player.centerX > rp.left && player.centerX < rp.right &&
+      player.centerY < rp.floorY && Math.abs(feet - rp.floorY) < 0.6
+    ) {
+      respawnPoint = { x: rp.x - player.body.w / 2, y: rp.floorY - player.body.h };
+      if (player.hp < MAX_HP) player.hp = MAX_HP;
+    }
   }
   // 眺望中は view.zoom が 0.35、それ以外は開放度由来の zoomTarget(1 フレーム前の値で十分)
   camera.zoomTo(view.zoom, dt);
@@ -266,6 +278,25 @@ function update(dt: number): void {
     }
     if (spent.size > 0) pulseGun.pulses = pulseGun.pulses.filter((p) => !spent.has(p));
     enemies = enemies.filter((e) => !e.walker.dead);
+  }
+
+  // 敵との接触ダメージと、死亡時の復活(最後の休憩点、無ければスポーン地点)
+  if (!player.dead) {
+    const pb = player.body;
+    for (const e of enemies) {
+      const b = e.walker.body;
+      if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
+        player.damage(e.walker.centerX);
+        break;
+      }
+    }
+  }
+  if (player.dead) {
+    player.body.x = respawnPoint.x;
+    player.body.y = respawnPoint.y;
+    player.revive();
+    enemies = [];
+    pulseGun.pulses = [];
   }
   updateAudio();
   if (lastBeam) {
@@ -328,7 +359,8 @@ function updateHud(): void {
     const bars = Math.round(r * 4);
     cannon += ` [${'#'.repeat(bars)}${'-'.repeat(4 - bars)}]`;
   }
-  hud.textContent = `第 ${maxLayer} 階層 / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${cannon}`;
+  const hearts = '♥'.repeat(player.hp) + '♡'.repeat(Math.max(0, MAX_HP - player.hp));
+  hud.textContent = `第 ${maxLayer} 階層 / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${cannon} — HP ${hearts}`;
 }
 
 let last = performance.now();

@@ -322,6 +322,9 @@ export class Renderer {
     ) / this.pipeline.scale;
     const angle = Math.atan2(mby - py, mbx - px);
     const isWalking = player.body.onGround && player.body.vx !== 0;
+    // 無敵中は点滅させる(半透明に落とす)
+    const invulnDim = player.invulnT > 0 && Math.floor(timeSec * 12) % 2 === 0;
+    if (invulnDim) ctx.globalAlpha = 0.35;
     const visualAnchors = drawPlayer(
       ctx,
       px,
@@ -334,6 +337,7 @@ export class Renderer {
       bb.ambientColor,
       timeSec,
     );
+    if (invulnDim) ctx.globalAlpha = 1;
     this.mark('player');
 
     // バイオーム環境光+プレイヤー補助光
