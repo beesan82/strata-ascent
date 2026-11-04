@@ -3,7 +3,10 @@ import { Input, MOVE_KEYS } from './core/input';
 import { installTouchControls, setTouchLadderVisible } from './core/touch';
 import { Player } from './entities/player';
 import { Graviton } from './entities/graviton';
-import { pulseAimDir, PulseGun, PULSE_SIZE } from './entities/pulse';
+import { pulseAimDir, PulseGun, PULSE_DAMAGE, PULSE_SIZE, type Pulse } from './entities/pulse';
+import { Walker } from './entities/enemy';
+import { chooseSpawns, findFloorRuns } from './world/spawn';
+import { nearestRestPoint } from './world/restpoint';
 import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
 import { ChunkStore } from './world/chunks';
 import { Destruction } from './world/destruction';
@@ -71,6 +74,32 @@ const destruction = new Destruction();
 const store = new ChunkStore(seed, destruction);
 const graviton = new Graviton();
 const pulseGun = new PulseGun();
+
+/** 生存中の歩行敵(スポーン識別子つき)。出現の決定は world/spawn の決定論スキャン */
+let enemies: { spawnId: string; walker: Walker }[] = [];
+const ENEMY_SCAN_INTERVAL_FRAMES = 30;
+const ENEMY_SCAN_X = 40;
+const ENEMY_SCAN_Y = 24;
+
+/** プレイヤー近傍の地形を走査して敵の出現集合を更新する(倒した敵は範囲を離れると再出現する) */
+function refreshEnemies(): void {
+  const layer = layerNumber(seed, biomeCellAt(seed, Math.floor(player.body.y)));
+  const cx = Math.floor(player.centerX);
+  const cy = Math.floor(player.centerY);
+  const runs = findFloorRuns(tiles, cx - ENEMY_SCAN_X, cy - ENEMY_SCAN_Y, cx + ENEMY_SCAN_X, cy + ENEMY_SCAN_Y);
+  const rp = nearestRestPoint(seed, player.centerX, player.centerY);
+  const desired = chooseSpawns(seed, layer, runs, [
+    { x: spawn.x, y: spawn.y, r: 10 },
+    { x: rp.x, y: rp.floorY, r: 20 },
+  ]);
+  const ids = new Set(desired.map((d) => d.id));
+  enemies = enemies.filter((e) => ids.has(e.spawnId));
+  for (const d of desired) {
+    if (!enemies.some((e) => e.spawnId === d.id)) {
+      enemies.push({ spawnId: d.id, walker: new Walker(d.x, d.y, d.dir) });
+    }
+  }
+}
 // デバッグ/スクリーンショット用: ?x=&y= でスポーン位置を上書き(埋まり座標は自己責任)
 const qx = params.get('x');
 const qy = params.get('y');
@@ -216,6 +245,28 @@ function update(dt: number): void {
   // パルス(連射武器): 照準は移動入力から作る 8 方向。溜め中は移動が止まるので競合しない
   const pulseDir = pulseAimDir(input.state, player.facing);
   pulseGun.update(dt, input.pulseHeld, player.centerX, player.centerY, pulseDir.x, pulseDir.y, tiles);
+
+  // 歩行敵: 出現集合の更新、巡回、パルスとの命中判定(接触ダメージは第4段)
+  if (frames % ENEMY_SCAN_INTERVAL_FRAMES === 0) refreshEnemies();
+  for (const e of enemies) e.walker.update(dt, tiles);
+  if (enemies.length > 0 && pulseGun.pulses.length > 0) {
+    const spent = new Set<Pulse>();
+    for (const p of pulseGun.pulses) {
+      for (const e of enemies) {
+        const b = e.walker.body;
+        if (
+          p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
+          p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
+        ) {
+          e.walker.hit(PULSE_DAMAGE);
+          spent.add(p);
+          break;
+        }
+      }
+    }
+    if (spent.size > 0) pulseGun.pulses = pulseGun.pulses.filter((p) => !spent.has(p));
+    enemies = enemies.filter((e) => !e.walker.dead);
+  }
   updateAudio();
   if (lastBeam) {
     lastBeam.ttl -= dt;
@@ -313,6 +364,11 @@ function frame(now: number): void {
       y: p.body.y + PULSE_SIZE / 2,
       dx: p.dx,
       dy: p.dy,
+    })),
+    enemies: enemies.map((e) => ({
+      x: e.walker.centerX,
+      y: e.walker.centerY,
+      flash: e.walker.flashT > 0,
     })),
   });
   if (collectStats) {

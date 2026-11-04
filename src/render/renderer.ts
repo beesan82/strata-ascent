@@ -55,6 +55,8 @@ export interface GravitonFx {
   beam: { angle: number; alpha: number } | null;
   /** パルスの弾(ワールド座標の中心と方向)。平坦色の短矩形で描く */
   pulses?: readonly { x: number; y: number; dx: number; dy: number }[];
+  /** 歩行敵(ワールド座標の中心と被弾フラッシュ)。平坦色の矩形で描く */
+  enemies?: readonly { x: number; y: number; flash: boolean }[];
 }
 
 /**
@@ -367,6 +369,20 @@ export class Renderer {
         const bw = horiz ? long : short;
         const bh = horiz ? short : long;
         ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy - bh / 2), bw, bh);
+      }
+    }
+
+    // 歩行敵: 同じ fx 相乗りで平坦色の矩形 + 足元の帯だけ(新規パスなし)
+    if (fx.enemies && fx.enemies.length > 0) {
+      const s = Math.max(2, Math.round(0.9 * ppt));
+      const band = Math.max(1, Math.round(0.18 * ppt));
+      for (const e of fx.enemies) {
+        const sx = Math.round((e.x - renderCam.x) * ppt + w / 2);
+        const sy = Math.round((e.y - renderCam.y) * ppt + h / 2);
+        ctx.fillStyle = e.flash ? '#f2d7d7' : '#8a4b52';
+        ctx.fillRect(Math.round(sx - s / 2), Math.round(sy - s / 2), s, s);
+        ctx.fillStyle = '#3a2b30';
+        ctx.fillRect(Math.round(sx - s / 2), Math.round(sy + s / 2) - band, s, band);
       }
     }
     this.mark('fx');
