@@ -25,7 +25,7 @@ import { Caption, captionText } from './render/caption';
 import { AudioEngine } from './audio/engine';
 import { beaconHum, HUM_RANGE, nearestPlateDistance } from './audio/params';
 import { beaconsInView } from './render/beacon';
-import { biomeIdForCell } from './world/biomeCells';
+import { biomeIdForCell, districtNameForCell } from './world/biomeCells';
 
 const DEFAULT_SEED = 20260711;
 const STEP_MS = 1000 / 60;
@@ -229,9 +229,14 @@ function update(dt: number): void {
     baseZoom: zoomTarget,
   }, dt);
   if (autoViewStarted(view, next)) {
-    // 字幕(§6.5): 板 cell を越えた先の層は cell−1。大界面ならその旨を添える
+    // 字幕(§6.5): 板 cell を越えた先の層は cell−1。大界面ならその旨を添える。
+    // 地区が前セルと変わった場合と大界面では、入った先の地区名も併記する(地区化段階1)
     const cell = next.autoFiredMinCell!;
-    caption.show(captionText(layerNumber(seed, cell - 1), isGreatInterface(cell)), simTime);
+    const entered = cell - 1;
+    const great = isGreatInterface(cell);
+    const districtChanged = biomeIdForCell(seed, entered) !== biomeIdForCell(seed, cell);
+    const district = districtChanged || great ? districtNameForCell(seed, entered) : undefined;
+    caption.show(captionText(layerNumber(seed, entered), great, district), simTime);
     audio.passage(); // 通過音(§6.7): 見晴らし台に出た瞬間に 1 音
   }
   view = next;

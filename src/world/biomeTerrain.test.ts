@@ -5,11 +5,11 @@ import { TERRAIN_PROFILE, terrainProfileFor } from './biomeTerrain';
 describe('biome terrain profiles', () => {
   it('assigns the specified terrain parameters to every biome', () => {
     expect(TERRAIN_PROFILE).toEqual({
-      coldSteel: { floorSpacing: 8, gapChance: 0.18, massThreshold: 0.55, cavityThreshold: 0.84 },
-      habitation: { floorSpacing: 6, gapChance: 0.12, massThreshold: 0.48, cavityThreshold: 0.9 },
-      disposal: { floorSpacing: 10, gapChance: 0.48, massThreshold: 0.61, cavityThreshold: 0.74 },
-      waterVoid: { floorSpacing: 14, gapChance: 0.32, massThreshold: 0.72, cavityThreshold: 0.56 },
-      power: { floorSpacing: 9, gapChance: 0.28, massThreshold: 0.58, cavityThreshold: 0.7 },
+      coldSteel: { floorSpacing: 8, gapChance: 0.18, massThreshold: 0.55, cavityThreshold: 0.84, massScale: 28, cavityScale: 160, bridgeEvery: 4, segLen: 16 },
+      habitation: { floorSpacing: 5, gapChance: 0.08, massThreshold: 0.42, cavityThreshold: 0.92, massScale: 14, cavityScale: 120, bridgeEvery: 3, segLen: 8 },
+      disposal: { floorSpacing: 10, gapChance: 0.55, massThreshold: 0.6, cavityThreshold: 0.78, massScale: 40, cavityScale: 160, bridgeEvery: 4, segLen: 24 },
+      waterVoid: { floorSpacing: 15, gapChance: 0.3, massThreshold: 0.74, cavityThreshold: 0.42, massScale: 36, cavityScale: 260, bridgeEvery: 6, segLen: 16 },
+      power: { floorSpacing: 9, gapChance: 0.28, massThreshold: 0.58, cavityThreshold: 0.7, massScale: 28, cavityScale: 160, bridgeEvery: 4, segLen: 16 },
     });
 
     for (const id of BIOME_IDS) {
@@ -24,14 +24,20 @@ describe('biome terrain profiles', () => {
   it('keeps all profile values in valid terrain ranges', () => {
     for (const id of BIOME_IDS) {
       const profile = terrainProfileFor(id);
-      expect(profile.floorSpacing).toBeGreaterThanOrEqual(6);
-      expect(profile.floorSpacing).toBeLessThanOrEqual(14);
+      expect(profile.floorSpacing).toBeGreaterThanOrEqual(5);
+      expect(profile.floorSpacing).toBeLessThanOrEqual(15);
       expect(profile.gapChance).toBeGreaterThanOrEqual(0);
       expect(profile.gapChance).toBeLessThanOrEqual(1);
       expect(profile.massThreshold).toBeGreaterThanOrEqual(0);
       expect(profile.massThreshold).toBeLessThanOrEqual(1);
       expect(profile.cavityThreshold).toBeGreaterThanOrEqual(0);
       expect(profile.cavityThreshold).toBeLessThanOrEqual(1);
+      expect(profile.massScale).toBeGreaterThan(0);
+      expect(profile.cavityScale).toBeGreaterThan(0);
+      expect(profile.bridgeEvery).toBeGreaterThanOrEqual(1);
+      expect(Number.isInteger(profile.bridgeEvery)).toBe(true);
+      expect(profile.segLen).toBeGreaterThanOrEqual(1);
+      expect(Number.isInteger(profile.segLen)).toBe(true);
     }
   });
 
@@ -52,8 +58,8 @@ describe('biome terrain profiles', () => {
 
   it('keeps each biome terrain tuple distinct', () => {
     const tuples = BIOME_IDS.map((id) => {
-      const { floorSpacing, gapChance, massThreshold, cavityThreshold } = TERRAIN_PROFILE[id];
-      return `${floorSpacing}/${gapChance}/${massThreshold}/${cavityThreshold}`;
+      const p = TERRAIN_PROFILE[id];
+      return `${p.floorSpacing}/${p.gapChance}/${p.massThreshold}/${p.cavityThreshold}/${p.massScale}/${p.cavityScale}/${p.bridgeEvery}/${p.segLen}`;
     });
 
     expect(new Set(tuples)).toHaveLength(BIOME_IDS.length);
