@@ -25,3 +25,13 @@
 - PC 開始画面の差分 321 px は第4段で足した HUD の HP 表示分のみで、
   本変更による描画差分は 0(bbox が HUD の HP 領域と一致)。
 - 検証: テスト 505 件、tsc、build、`npx cap sync ios` すべて成功。
+
+## 実装時の裁定(2026-11-04、TestFlight 配信完了後に追記)
+
+- Codemagic ビルド 1〜9 を経て、ビルド 9 で App Store Connect へのアップロード成功、輸出コンプライアンス申告(「どれでもない」)と Internal Testers グループ追加まで完了し、TestFlight でインストール可能な状態になった。
+- 署名は「保存済み identities 方式」が正解だった。ビルド中に `app-store-connect fetch-signing-files` で取得する方式は、証明書の秘密鍵が Codemagic 側に無いため `Cannot save Signing Certificates without certificate private key` で必ず失敗する。Pocket Agent / MUSICAGE と同じく、チーム設定の Code signing identities に証明書(pocketagent-dist)とプロファイル(strata-appstore)を保存し、yaml の `ios_signing` は選ぶだけにする(PR #27)。`environment.ios_signing` の自動照合だけでも、identities 未保存だと "No matching profiles found" で落ちる(PR #24 の連携名修正だけでは不十分)。
+- Capacitor 8 は Swift Package Manager 方式で Podfile が生成されない。`pod install` ステップは置かない(PR #26)。
+- 横向き専用は `UIRequiresFullScreen=true` が必須。無いと iPad マルチタスク検証(ASC エラー 90474)でアップロードが拒否される(PR #28)。
+- 輸出コンプライアンスは `ITSAppUsesNonExemptEncryption=false` を Info.plist に入れて恒常化した(PR #29)。本アプリは完全オフラインで暗号化を使わない。
+- publishing は `submit_to_testflight: false` + ASC 側の内部テストグループ(自動配信)という Pocket Agent / MUSICAGE の運用に合わせた。ただし altool アップロードではグループへ自動で入らなかったため、初回は ASC で手動追加した。
+- 残る確認: 実機での起動・全画面・横向き・振動の確認と、面白さ判定(第1弾の3点)。その後の第2歩は描画 GPU 化の検証スパイク。
