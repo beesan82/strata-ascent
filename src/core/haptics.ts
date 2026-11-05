@@ -33,6 +33,11 @@ export function hapticCannonFire(): void {
   void impact('heavy');
 }
 
+/** 武器を切り替えたとき(弱。設計 2026-11-05-weapon-switch §2-5) */
+export function hapticWeaponSwitch(): void {
+  void impact('light');
+}
+
 /**
  * アプリ起動時のネイティブ初期化: 横向きロックとステータスバー非表示。
  * Web では no-op。main の起動時に 1 回だけ呼ぶ。

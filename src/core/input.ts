@@ -1,5 +1,12 @@
 import type { PlayerInput } from '../entities/player';
-import { aimKeeper, pulseTrigger } from './stick';
+import { aimKeeper, cannonStickPhase, pulseTrigger, STICK_DEADZONE, type CannonStickPhase } from './stick';
+import {
+  INITIAL_WEAPON_STATE,
+  weaponReducer,
+  type WeaponEvent,
+  type WeaponMode,
+  type WeaponState,
+} from './weapon';
 
 const GAME_KEYS = new Set([
   'ArrowLeft',
@@ -81,19 +88,111 @@ export class Input {
     this.keys.delete(code);
   }
 
-  /** タッチ照準の点(CSS px、砲ボタンのドラッグ位置)。マウス未使用時のみ main が読む */
-  touchPointX = 0;
-  touchPointY = 0;
-  touchPointActive = false;
+  // ---- 武器モード(設計 2026-11-05-weapon-switch)。状態遷移は core/weapon.ts の reducer に委ね、
+  // ここは「切り替え時点のスティック状態」のような実入力との接合だけを持つ ----
+  private weaponState: WeaponState = INITIAL_WEAPON_STATE;
+  private weaponCbs: ((mode: WeaponMode) => void)[] = [];
+  /** 右スティックの直近の倒し比(デッドゾーン処理済みの mag と未加工 ratio の大きい方)。切り替え時の stickEngaged 判定に使う */
+  private touchStickRatioNow = 0;
 
-  setTouchPoint(x: number, y: number): void {
-    this.touchPointX = x;
-    this.touchPointY = y;
-    this.touchPointActive = true;
+  get weaponMode(): WeaponMode {
+    return this.weaponState.mode;
   }
 
-  clearTouchPoint(): void {
-    this.touchPointActive = false;
+  get weaponNeedsNeutral(): boolean {
+    return this.weaponState.needsNeutral;
+  }
+
+  /** モードが変わったときだけ呼ばれる(DOM 表示の同期用) */
+  onWeaponChange(cb: (mode: WeaponMode) => void): void {
+    this.weaponCbs.push(cb);
+  }
+
+  private applyWeapon(event: WeaponEvent): void {
+    const prev = this.weaponState;
+    this.weaponState = weaponReducer(prev, event);
+    if (this.weaponState.mode !== prev.mode) {
+      for (const cb of this.weaponCbs) cb(this.weaponState.mode);
+    }
+  }
+
+  /**
+   * 切替ボタンの押下エッジ。スティックが倒れたまま切り替わったらニュートラル要求を立てる
+   * (安全策の消費 = 発射・溜めの抑止は setTouchAim / touchStick 側で行う)。
+   * 溜め中に切り替えたら、先に溜めをキャンセルしてから切り替える(設計 §3-6)。
+   */
+  toggleWeapon(): void {
+    if (this.cannonStickHeldFlag || this.stickPhase !== 'idle') {
+      this.requestFireCancel();
+      this.cannonStickHeldFlag = false;
+      this.stickPhase = 'idle';
+      this.cannonReleasePending = false;
+    }
+    this.applyWeapon({ type: 'toggle', stickEngaged: this.touchStickRatioNow > STICK_DEADZONE });
+  }
+
+  /** 重粒子砲の発射が成立した(main の fire から呼ぶ)。砲モードなら自動でパルスへ復帰する(設計 §3-3) */
+  notifyCannonFired(): void {
+    this.applyWeapon({ type: 'fired' });
+  }
+
+  // ---- 砲スティック(砲モードの右スティック文法。設計 §1.2、§1.3) ----
+  private stickPhase: CannonStickPhase = 'idle';
+  private cannonStickHeldFlag = false;
+  /** スティック砲の発射候補(charging のまま離した)。発射の成否は Graviton 側が決め、fire の中でだけ消費できる */
+  private cannonReleasePending = false;
+
+  /** 砲の溜め中か(右スティックを倒して離すまで)。左スティック抑止の判定に使う */
+  get cannonStickHeld(): boolean {
+    return this.cannonStickHeldFlag;
+  }
+
+  /**
+   * 右スティックの未加工の倒し比(最大ストローク比、デッドゾーン処理前)を毎イベント流す。
+   * 砲モードのときだけ位相を進める。ニュートラル要求中は位相を進めず、
+   * デッドゾーン以下へ戻った時点で要求を解除する(このセッションでは開始しない)。
+   * 眺望中は溜め開始も位相の進行も受け付けない(設計 §3-7)。
+   */
+  touchStick(ratio: number): void {
+    this.touchStickRatioNow = ratio;
+    if (this.weaponState.needsNeutral) {
+      if (ratio <= STICK_DEADZONE) this.applyWeapon({ type: 'neutral' });
+      return;
+    }
+    if (this.weaponState.mode !== 'cannon') return;
+    if (this.shiftHeld) return;
+    this.stickPhase = cannonStickPhase(this.stickPhase, ratio);
+    if (this.stickPhase !== 'idle') this.cannonStickHeldFlag = true;
+  }
+
+  /**
+   * 右スティックのセッション終了(指を離した)。離す直前の位相で発射候補 / キャンセルを振り分ける:
+   * charging のまま離したら発射候補(成否は Graviton の溜め量が決める)、
+   * cancel-armed か眺望中の解放はキャンセル要求にする。発射可否の判定自体は作らない(二重化しない)。
+   */
+  touchStickEnd(): void {
+    this.touchStickRatioNow = 0;
+    if (this.weaponState.needsNeutral) this.applyWeapon({ type: 'neutral' });
+    const phase = this.stickPhase;
+    this.stickPhase = 'idle';
+    this.cannonStickHeldFlag = false;
+    if (phase === 'cancel-armed' || (phase === 'charging' && this.shiftHeld)) {
+      this.requestFireCancel();
+    } else if (phase === 'charging') {
+      this.cannonReleasePending = true;
+    }
+  }
+
+  /** スティック砲の発射候補を 1 回だけ取り出す(main の fire の中でだけ呼ぶ) */
+  takeCannonRelease(): boolean {
+    const v = this.cannonReleasePending;
+    this.cannonReleasePending = false;
+    return v;
+  }
+
+  /** 発射候補の失効(graviton.update の直後に毎フレーム呼ぶ。発射しなかった候補を残さない) */
+  expireCannonRelease(): void {
+    this.cannonReleasePending = false;
   }
 
   /**
@@ -115,8 +214,11 @@ export class Input {
    * 照準有効・発射の判定は stick.ts の pulseTrigger に集約する。
    */
   setTouchAim(x: number, y: number, mag: number): void {
+    this.touchStickRatioNow = mag; // 直近値(切り替え時の stickEngaged 判定用。touchStick の未加工 ratio で上書きされる)
     const t = pulseTrigger(mag);
-    this.touchAimFiring = t.fire;
+    // 発射の意味論は武器モードで変わる: 砲モードとニュートラル要求中は連射を受け付けない
+    // (照準の更新自体は両モード共通で受ける。設計 §1.2、§3-2)
+    this.touchAimFiring = t.fire && this.weaponState.mode === 'pulse' && !this.weaponState.needsNeutral;
     if (t.aim) {
       this.touchAimX = x;
       this.touchAimY = y;
@@ -139,6 +241,9 @@ export class Input {
   clearTouchAim(): void {
     this.touchAimActive = false;
     this.touchAimFiring = false;
+    this.touchStickRatioNow = 0;
+    // 中心へ戻す/離す = ニュートラルへ戻った(設計 §3-2 の解除条件)
+    if (this.weaponState.needsNeutral) this.applyWeapon({ type: 'neutral' });
   }
 
   private fireCancelRequested = false;
@@ -190,7 +295,8 @@ export class Input {
   }
 
   get fireHeld(): boolean {
-    return this.keys.has('KeyF');
+    // KeyF は PC 経路(現行維持)。タッチは砲スティックの held が合流する
+    return this.keys.has('KeyF') || this.cannonStickHeldFlag;
   }
 
   /** 眺望(§6.4): 左 Shift 長押し。右 Shift は Windows の固定キー機能(8 秒長押しでダイアログ)を避けて使わない */

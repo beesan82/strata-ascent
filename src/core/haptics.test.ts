@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hapticCannonFire, hapticDamage, hapticEnemyDown, initNativeShell } from './haptics';
+import { hapticCannonFire, hapticDamage, hapticEnemyDown, hapticWeaponSwitch, initNativeShell } from './haptics';
 
 describe('haptics(Web 環境では no-op)', () => {
   it('例外なく解決する', async () => {
@@ -8,6 +8,7 @@ describe('haptics(Web 環境では no-op)', () => {
     expect(() => hapticDamage()).not.toThrow();
     expect(() => hapticEnemyDown()).not.toThrow();
     expect(() => hapticCannonFire()).not.toThrow();
+    expect(() => hapticWeaponSwitch()).not.toThrow();
     await new Promise((r) => setTimeout(r, 10));
   });
 });

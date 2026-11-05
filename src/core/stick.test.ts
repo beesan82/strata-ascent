@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   aimKeeper,
+  CANNON_CANCEL_RATIO,
+  cannonStickPhase,
   lookahead,
   pulseTrigger,
   stickKeys,
@@ -84,6 +86,44 @@ describe('aimKeeper(照準の保持)', () => {
 
   it('何も狙ったことがなければ null のまま', () => {
     expect(aimKeeper(null, null)).toBeNull();
+  });
+});
+
+describe('cannonStickPhase(砲スティックの位相遷移)', () => {
+  it('定数: 開始はデッドゾーン 0.25、キャンセル圏は 0.45', () => {
+    expect(CANNON_CANCEL_RATIO).toBe(0.45);
+  });
+
+  it('idle は 0.25 を超えて初めて charging になる(境界ちょうどは含まない)', () => {
+    expect(cannonStickPhase('idle', 0)).toBe('idle');
+    expect(cannonStickPhase('idle', 0.25)).toBe('idle');
+    expect(cannonStickPhase('idle', 0.26)).toBe('charging');
+    expect(cannonStickPhase('idle', 1)).toBe('charging');
+  });
+
+  it('charging は 0.45 以下へ戻ると cancel-armed、超えていれば charging のまま', () => {
+    expect(cannonStickPhase('charging', 1)).toBe('charging');
+    expect(cannonStickPhase('charging', 0.46)).toBe('charging');
+    expect(cannonStickPhase('charging', 0.45)).toBe('cancel-armed');
+    expect(cannonStickPhase('charging', 0)).toBe('cancel-armed');
+  });
+
+  it('cancel-armed は 0.45 を超えると charging に戻り、圏内では維持される(ヒステリシスの往復)', () => {
+    expect(cannonStickPhase('cancel-armed', 0.45)).toBe('cancel-armed');
+    expect(cannonStickPhase('cancel-armed', 0.3)).toBe('cancel-armed');
+    expect(cannonStickPhase('cancel-armed', 0.46)).toBe('charging');
+    // 往復: charging →(0.4)→ cancel-armed →(0.5)→ charging →(0.4)→ cancel-armed
+    const s1 = cannonStickPhase('charging', 0.4);
+    const s2 = cannonStickPhase(s1, 0.5);
+    const s3 = cannonStickPhase(s2, 0.4);
+    expect([s1, s2, s3]).toEqual(['cancel-armed', 'charging', 'cancel-armed']);
+  });
+
+  it('0.25〜0.45 の帯は charging と cancel-armed のどちらにもなりうる(開始より広いキャンセル圏)', () => {
+    // 開始側: idle からは 0.3 で charging
+    expect(cannonStickPhase('idle', 0.3)).toBe('charging');
+    // 維持側: charging から 0.3 へ戻すと cancel-armed(同じ倒し量でも履歴で変わる)
+    expect(cannonStickPhase('charging', 0.3)).toBe('cancel-armed');
   });
 });
 

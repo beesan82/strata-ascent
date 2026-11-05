@@ -64,10 +64,13 @@
         user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
       }
       .tbtn.on { background: rgba(130, 150, 165, 0.55); }
-      /* キャンセル圏内での予告色 */
-      .tbtn.cancel-armed { background: rgba(170, 60, 60, 0.55); border-color: rgba(255, 130, 130, 0.7); }
+      /* 砲モードの明示色(パレットの紫 #8d62cb 系。DOM/CSS は 32 色量子化の対象外で、ゲーム内描画ではない) */
+      .tbtn.mode-cannon { background: rgba(141, 98, 203, 0.45); border-color: rgba(188, 150, 255, 0.75); }
+      #touch.mode-cannon .tstick-base { border-color: rgba(188, 150, 255, 0.55); }
+      #touch.mode-cannon .tstick-knob { background: rgba(141, 98, 203, 0.5); border-color: rgba(188, 150, 255, 0.6); }
       .sz-jump { width: 84px; height: 84px; font-size: 26px; }
-      .sz-cannon { width: 76px; height: 76px; font-size: 22px; }
+      /* 切替ボタン(旧 .sz-cannon の枠)。ラベル「パルス」が 76px 円に収まるよう font-size を下げる */
+      .sz-weapon { width: 76px; height: 76px; font-size: 16px; }
       .sz-view { width: 48px; height: 48px; font-size: 16px; }
     }
   </style>

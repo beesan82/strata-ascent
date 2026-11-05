@@ -34,17 +34,6 @@ describe('Input のタッチ入口', () => {
     expect(input.fireHeld).toBe(false);
   });
 
-  it('タッチ照準点は既定で無効、setTouchPoint で有効になり clearTouchPoint で戻る', () => {
-    const input = new Input();
-    expect(input.touchPointActive).toBe(false);
-    input.setTouchPoint(123, 456);
-    expect(input.touchPointActive).toBe(true);
-    expect(input.touchPointX).toBe(123);
-    expect(input.touchPointY).toBe(456);
-    input.clearTouchPoint();
-    expect(input.touchPointActive).toBe(false);
-  });
-
   it('pulseHeld は KeyJ のタッチ押下で立ち、離すと落ちる', () => {
     const input = new Input();
     expect(input.pulseHeld).toBe(false);
@@ -96,11 +85,175 @@ describe('Input のタッチ入口', () => {
     expect(input.heldAimY).toBeCloseTo(-1);
   });
 
+  it('武器モードは既定でパルス、toggleWeapon で切り替わり、変更が通知される', () => {
+    const input = new Input();
+    const cb = vi.fn();
+    input.onWeaponChange(cb);
+    expect(input.weaponMode).toBe('pulse');
+    input.toggleWeapon();
+    expect(input.weaponMode).toBe('cannon');
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenLastCalledWith('cannon');
+    input.toggleWeapon();
+    expect(input.weaponMode).toBe('pulse');
+    expect(cb).toHaveBeenCalledTimes(2);
+    expect(cb).toHaveBeenLastCalledWith('pulse');
+  });
+
+  it('スティックを倒したまま切り替えるとニュートラル要求が立つ', () => {
+    const input = new Input();
+    input.setTouchAim(1, 0, 0.8); // 発射閾値超えで倒し中
+    input.toggleWeapon();
+    expect(input.weaponMode).toBe('cannon');
+    expect(input.weaponNeedsNeutral).toBe(true);
+    // スティックを離した状態での切り替えでは立たない
+    const input2 = new Input();
+    input2.setTouchAim(1, 0, 0.8);
+    input2.clearTouchAim();
+    input2.toggleWeapon();
+    expect(input2.weaponNeedsNeutral).toBe(false);
+  });
+
   it('発射キャンセルの要求は takeFireCancel で 1 回だけ取れる', () => {
     const input = new Input();
     expect(input.takeFireCancel()).toBe(false);
     input.requestFireCancel();
     expect(input.takeFireCancel()).toBe(true);
     expect(input.takeFireCancel()).toBe(false);
+  });
+});
+
+describe('Input の砲スティック(武器切り替え段階1)', () => {
+  /** 砲モードへ切り替えた Input を作る */
+  const cannonInput = (): Input => {
+    const input = new Input();
+    input.toggleWeapon();
+    expect(input.weaponMode).toBe('cannon');
+    return input;
+  };
+
+  it('砲モードでスティックを倒すと溜め(held)が立ち、fireHeld にも反映される', () => {
+    const input = cannonInput();
+    expect(input.cannonStickHeld).toBe(false);
+    input.touchStick(0.8);
+    expect(input.cannonStickHeld).toBe(true);
+    expect(input.fireHeld).toBe(true);
+    input.touchStickEnd();
+    expect(input.cannonStickHeld).toBe(false);
+    expect(input.fireHeld).toBe(false);
+  });
+
+  it('パルスモードではスティックを倒しても砲の溜めは始まらない', () => {
+    const input = new Input();
+    input.touchStick(0.8);
+    expect(input.cannonStickHeld).toBe(false);
+    input.touchStickEnd();
+    expect(input.takeCannonRelease()).toBe(false);
+  });
+
+  it('charging のまま離すと発射候補が立ち、takeCannonRelease で 1 回だけ取れる', () => {
+    const input = cannonInput();
+    input.touchStick(0.8);
+    input.touchStickEnd();
+    expect(input.takeCannonRelease()).toBe(true);
+    expect(input.takeCannonRelease()).toBe(false);
+    expect(input.takeFireCancel()).toBe(false);
+  });
+
+  it('中心(0.45 圏内)へ戻して離すとキャンセル要求になり、発射候補は立たない', () => {
+    const input = cannonInput();
+    input.touchStick(0.8);
+    input.touchStick(0.3); // cancel-armed
+    expect(input.cannonStickHeld).toBe(true); // 解放までは溜め継続
+    input.touchStickEnd();
+    expect(input.takeFireCancel()).toBe(true);
+    expect(input.takeCannonRelease()).toBe(false);
+  });
+
+  it('発射候補は expireCannonRelease で失効する(発射しなかったフレームの残り)', () => {
+    const input = cannonInput();
+    input.touchStick(0.8);
+    input.touchStickEnd();
+    input.expireCannonRelease();
+    expect(input.takeCannonRelease()).toBe(false);
+  });
+
+  it('切り替え直後のニュートラル要求: 倒し続けても溜めは始まらず、戻してから倒すと始まる', () => {
+    const input = new Input();
+    input.setTouchAim(1, 0, 0.8); // パルス連射中
+    expect(input.pulseHeld).toBe(true);
+    input.toggleWeapon(); // 砲へ(スティックは倒れたまま)
+    expect(input.weaponNeedsNeutral).toBe(true);
+    input.touchStick(0.8); // 倒し続ける
+    expect(input.cannonStickHeld).toBe(false);
+    input.touchStick(0.1); // デッドゾーン以下へ戻す → 解除
+    expect(input.weaponNeedsNeutral).toBe(false);
+    input.touchStick(0.8); // 倒し直すと溜めが始まる
+    expect(input.cannonStickHeld).toBe(true);
+  });
+
+  it('ニュートラル要求中はスティックを離しても解除され、その間パルスの暴発もしない', () => {
+    const input = new Input();
+    input.setTouchAim(1, 0, 0.8);
+    input.toggleWeapon(); // 砲へ(needsNeutral)
+    input.toggleWeapon(); // パルスへ戻す(スティックはまだ倒れている想定)
+    expect(input.weaponMode).toBe('pulse');
+    expect(input.weaponNeedsNeutral).toBe(true);
+    input.setTouchAim(1, 0, 0.8); // 倒し続けても連射しない
+    expect(input.pulseHeld).toBe(false);
+    input.clearTouchAim(); // 指を離す
+    input.touchStickEnd();
+    expect(input.weaponNeedsNeutral).toBe(false);
+    input.setTouchAim(1, 0, 0.8); // 倒し直せば連射する
+    expect(input.pulseHeld).toBe(true);
+  });
+
+  it('砲モードではスティックを深く倒してもパルスは連射しない', () => {
+    const input = cannonInput();
+    input.setTouchAim(1, 0, 0.9);
+    expect(input.touchAimActive).toBe(true); // 照準は共通で有効
+    expect(input.pulseHeld).toBe(false);
+  });
+
+  it('溜め中の切り替えはキャンセル要求を出してから切り替わる', () => {
+    const input = cannonInput();
+    input.touchStick(0.8);
+    expect(input.cannonStickHeld).toBe(true);
+    input.toggleWeapon();
+    expect(input.weaponMode).toBe('pulse');
+    expect(input.cannonStickHeld).toBe(false);
+    expect(input.takeFireCancel()).toBe(true);
+    expect(input.takeCannonRelease()).toBe(false);
+  });
+
+  it('眺望中はスティックを倒しても溜めが始まらない', () => {
+    const input = cannonInput();
+    input.touchDown('ShiftLeft');
+    input.touchStick(0.8);
+    expect(input.cannonStickHeld).toBe(false);
+    input.touchStickEnd();
+    expect(input.takeCannonRelease()).toBe(false);
+    input.touchUp('ShiftLeft');
+  });
+
+  it('溜め中に眺望へ入って離すと発射せずキャンセルになる', () => {
+    const input = cannonInput();
+    input.touchStick(0.8);
+    expect(input.cannonStickHeld).toBe(true);
+    input.touchDown('ShiftLeft');
+    input.touchStickEnd();
+    expect(input.takeFireCancel()).toBe(true);
+    expect(input.takeCannonRelease()).toBe(false);
+    input.touchUp('ShiftLeft');
+  });
+
+  it('notifyCannonFired で砲モードからパルスへ自動復帰し、変更が通知される', () => {
+    const input = cannonInput();
+    const cb = vi.fn();
+    input.onWeaponChange(cb);
+    input.notifyCannonFired();
+    expect(input.weaponMode).toBe('pulse');
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenLastCalledWith('pulse');
   });
 });

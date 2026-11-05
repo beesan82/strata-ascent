@@ -58,6 +58,32 @@ export function pulseTrigger(mag: number): { aim: boolean; fire: boolean } {
   return { aim: mag > STICK_DEADZONE, fire: mag > STICK_FIRE_THRESHOLD };
 }
 
+/** 砲スティックの溜め開始・照準有効のストローク比(設計 2026-11-05-weapon-switch §1.3。デッドゾーンと同値でパルス側と文法を揃える) */
+export const CANNON_AIM_RATIO = STICK_DEADZONE;
+/** 砲スティックのキャンセル圏のストローク比(開始閾値より広いヒステリシス。設計 §1.3 で新設した唯一の定数) */
+export const CANNON_CANCEL_RATIO = 0.45;
+
+export type CannonStickPhase = 'idle' | 'charging' | 'cancel-armed';
+
+/**
+ * 砲モードの右スティック位相遷移(純粋関数。Vitest で固定)。ratio は最大ストロークに対する
+ * 未加工の倒し比(デッドゾーン処理前の値)。境界値ちょうどは「超えた」に含めない。
+ * - idle: CANNON_AIM_RATIO を超えたら溜め開始(charging)
+ * - charging: CANNON_CANCEL_RATIO 以下へ戻したらキャンセル予告(cancel-armed)
+ * - cancel-armed: CANNON_CANCEL_RATIO を超えたら charging へ復帰できる
+ * 解放時の発射/キャンセルの振り分けは「離す直前の位相」で行う(呼び出し側)。
+ */
+export function cannonStickPhase(prev: CannonStickPhase, ratio: number): CannonStickPhase {
+  switch (prev) {
+    case 'idle':
+      return ratio > CANNON_AIM_RATIO ? 'charging' : 'idle';
+    case 'charging':
+      return ratio <= CANNON_CANCEL_RATIO ? 'cancel-armed' : 'charging';
+    case 'cancel-armed':
+      return ratio > CANNON_CANCEL_RATIO ? 'charging' : 'cancel-armed';
+  }
+}
+
 export interface AimVec {
   x: number;
   y: number;
