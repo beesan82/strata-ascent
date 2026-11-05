@@ -1,8 +1,48 @@
+import { biomeCellAt, biomeIdForCell, type BiomeId } from '../world/biomeCells';
+import { terrainProfileFor } from '../world/biomeTerrain';
+import {
+  ANTECHAMBER_DEPTH, ANTECHAMBER_FADE, ANTECHAMBER_HALF_WIDTH, interfaceBottom, nearestPassage,
+} from '../world/interface';
 import { hash2 } from '../world/noise';
 import { stratumIndexAt } from '../world/strata';
 import { CHUNK_SIZE, TILE, isSolid } from '../world/tiles';
 import { tileAt } from '../world/worldgen';
+import { VISUAL_BIOME } from './biome';
 import { STEEL, mixHex } from './steel';
+
+/**
+ * 前室の先行表示(ゾーン化 段階 3、設計 §3-2)。(wx, wy) が前室の帯(その層の板の直下
+ * ANTECHAMBER_DEPTH 行 + 底の床の行、孔の周り ANTECHAMBER_HALF_WIDTH + FADE)の中にあれば、
+ * 板の向こう(上の層 = 上昇の旅の「次の地区」)の地区 ID を返す。前室でない、
+ * または上下で地区が同じなら null。
+ */
+/**
+ * 地区固有の小物・装飾の署名色(ゾーン化 段階 3)。地区の accent を鋼に混ぜ、
+ * 既存のパレット色とは重ならない色で「その地区の物」と分かるようにする。
+ */
+export const DISTRICT_DECOR_COLORS = {
+  /** 居住区画: 残光の窓灯 */
+  habitationWindow: mixHex('#caa64a', VISUAL_BIOME.habitation.accent, 0.25),
+  /** 廃棄沈殿層: 錆色の残骸 */
+  disposalDebris: mixHex(STEEL.base, VISUAL_BIOME.disposal.accent, 0.35),
+  /** 大空洞水域: 結露の滴 */
+  waterCondensation: mixHex('#9fc4e8', STEEL.post, 0.45),
+  /** 精錬区: 煤 */
+  foundrySoot: '#17100c',
+  /** 精錬区: 燃え残りの火種 */
+  foundryEmber: mixHex('#d06a3c', STEEL.black, 0.25),
+  /** 生体異物区: 根状構造 */
+  biomechRoot: mixHex(VISUAL_BIOME.biomech.accent, STEEL.shadow, 0.35),
+} as const;
+
+export function antechamberNextBiome(seed: number, wx: number, wy: number): BiomeId | null {
+  const cell = biomeCellAt(seed, wy);
+  const dy = wy - interfaceBottom(seed, cell);
+  if (dy < 0 || dy > ANTECHAMBER_DEPTH) return null;
+  if (Math.abs(wx - nearestPassage(seed, cell, wx).x) > ANTECHAMBER_HALF_WIDTH + ANTECHAMBER_FADE) return null;
+  const next = biomeIdForCell(seed, cell - 1);
+  return next === biomeIdForCell(seed, cell) ? null : next;
+}
 
 export function hatchSpacingAt(worldY: number): number {
   const index = stratumIndexAt(worldY);
@@ -265,6 +305,9 @@ function segmentOps(
       }
       if (!ok) continue;
       const lx0 = x0 - bx;
+      // 前室の先行表示(段階 3): 前室の床セグメントでは、次の地区の素材を滲ませる
+      const anteNext = antechamberNextBiome(seed, x0 + 8, wy);
+      const anteAccent = anteNext ? VISUAL_BIOME[anteNext].accent : null;
       // ── 段階F: 歩廊/床の接合ディテール(モックの片持ち歩廊。既存の這う配管・瓦礫とは独立) ──
       // グレーチングの目(歩ける上面のすぐ下に短い縦目。上端リムはrelief側が引く)
       for (let i = 0; i < 32; i++) {
@@ -318,11 +361,12 @@ function segmentOps(
       }
       const r = hash2(seed + 701, s, wy);
       if (r < 0.52) {
-        // 這う配管(太)+ときどき細い並走管、4タイルごとにブラケット
+        // 這う配管(太)+ときどき細い並走管、4タイルごとにブラケット。
+        // 前室では配管そのものが次の地区の accent に染まる(先行表示)
         const yy = ly - 0.22;
-        ops.push({ kind: 'line', x1: lx0, y1: yy, x2: lx0 + 16, y2: yy, w: 0.22, color: PALETTE.pipe });
+        ops.push({ kind: 'line', x1: lx0, y1: yy, x2: lx0 + 16, y2: yy, w: 0.22, color: anteAccent ? mixHex(PALETTE.pipe, anteAccent, 0.5) : PALETTE.pipe });
         if (r < 0.3) {
-          ops.push({ kind: 'line', x1: lx0, y1: yy - 0.32, x2: lx0 + 16, y2: yy - 0.32, w: 0.13, color: PALETTE.pipeThin });
+          ops.push({ kind: 'line', x1: lx0, y1: yy - 0.32, x2: lx0 + 16, y2: yy - 0.32, w: 0.13, color: anteAccent ? mixHex(PALETTE.pipeThin, anteAccent, 0.4) : PALETTE.pipeThin });
         }
         for (let i = 2; i < 16; i += 4) {
           ops.push({ kind: 'line', x1: lx0 + i, y1: yy, x2: lx0 + i, y2: ly, w: 0.1, color: PALETTE.bracket });
@@ -343,6 +387,27 @@ function segmentOps(
           w: 0.06,
           color: PALETTE.debrisLine,
         });
+      }
+      // 前室で配管が無い床には、床の上端に次の地区の細い帯を引く(先行表示)
+      if (anteAccent && r >= 0.52) {
+        ops.push({ kind: 'line', x1: lx0, y1: ly + 0.12, x2: lx0 + 16, y2: ly + 0.12, w: 0.09, color: mixHex(STEEL.post, anteAccent, 0.55) });
+      }
+      // 地区固有の小物(段階 3): 床の上の当たり判定なしの装飾。密度は TerrainProfile.decorMul
+      const segBiome = biomeIdForCell(seed, biomeCellAt(seed, wy));
+      const segMul = terrainProfileFor(segBiome).decorMul;
+      if (segBiome === 'disposal' && hash2(seed + 741, s, wy) < 0.3 * segMul) {
+        // 錆色の残骸(通常の瓦礫より小さく、地区色に寄る)
+        const dx = lx0 + 2 + hash2(seed + 744, s, wy) * 10;
+        ops.push({ kind: 'poly', pts: [dx, ly, dx + 0.7, ly - 0.4, dx + 1.6, ly - 0.18, dx + 2.4, ly], w: 0, color: DISTRICT_DECOR_COLORS.disposalDebris, fill: true });
+      } else if (segBiome === 'foundry' && hash2(seed + 741, s, wy) < 0.3 * segMul) {
+        // 燃え残りの火種
+        for (let i = 0; i < 3; i++) {
+          ops.push({ kind: 'dot', x: lx0 + 2 + hash2(seed + 745 + i, s, wy) * 12, y: ly - 0.06, r: 0.07, color: DISTRICT_DECOR_COLORS.foundryEmber });
+        }
+      } else if (segBiome === 'biomech' && hash2(seed + 741, s, wy) < 0.22 * segMul) {
+        // 床を這う根状構造
+        const rx = lx0 + 2 + hash2(seed + 746, s, wy) * 6;
+        ops.push({ kind: 'poly', pts: [rx, ly - 0.02, rx + 2.5, ly - 0.2, rx + 5, ly - 0.04, rx + 7.5, ly - 0.24], w: 0.09, color: DISTRICT_DECOR_COLORS.biomechRoot });
       }
     }
   }
@@ -402,6 +467,23 @@ function segmentOps(
           color: PALETTE.wire,
         });
       }
+      // 地区固有の小物(段階 3): 天井の下の装飾。密度は TerrainProfile.decorMul
+      const segBiomeC = biomeIdForCell(seed, biomeCellAt(seed, wy));
+      const segMulC = terrainProfileFor(segBiomeC).decorMul;
+      if (segBiomeC === 'power' && hash2(seed + 742, s, wy) < 0.3 * segMulC) {
+        // ケーブル束(真っ直ぐな並走線。垂れ下がるカテナリーとは別物として読める)
+        ops.push({ kind: 'line', x1: lx0, y1: ly + 1.14, x2: lx0 + 8, y2: ly + 1.14, w: 0.06, color: PALETTE.cable });
+        ops.push({ kind: 'line', x1: lx0, y1: ly + 1.3, x2: lx0 + 8, y2: ly + 1.3, w: 0.05, color: PALETTE.pipeThin });
+      } else if (segBiomeC === 'foundry' && hash2(seed + 742, s, wy) < 0.35 * segMulC) {
+        // 天井から垂れる煤
+        const sx = lx0 + 1 + hash2(seed + 747, s, wy) * 5;
+        ops.push({ kind: 'grad', x: sx, y: ly + 1, w: 0.5, h: 1.8, dir: 'v', stops: [[0, DISTRICT_DECOR_COLORS.foundrySoot], [1, 'rgba(23,16,12,0)']], alpha: 0.5 });
+      } else if (segBiomeC === 'waterVoid' && hash2(seed + 742, s, wy) < 0.5 * segMulC) {
+        // 結露の滴
+        for (let i = 0; i < 3; i++) {
+          ops.push({ kind: 'dot', x: lx0 + 1 + hash2(seed + 748 + i, s, wy) * 6, y: ly + 1.12, r: 0.06, color: DISTRICT_DECOR_COLORS.waterCondensation });
+        }
+      }
     }
   }
 
@@ -432,6 +514,24 @@ function segmentOps(
           // 壁面を走る縦配管
           ops.push({ kind: 'line', x1: face, y1: ly0, x2: face, y2: ly0 + 4, w: 0.14, color: PALETTE.pipe });
           ops.push({ kind: 'dot', x: face, y: ly0 + 2, r: 0.12, color: PALETTE.bracket });
+        }
+        // 前室の先行表示(段階 3): 前室の壁面には次の地区の accent のリベットを打つ
+        const anteNextW = antechamberNextBiome(seed, wx, y0 + 2);
+        if (anteNextW && hash2(seed + 732, wx, s * 2 + (dir < 0 ? 0 : 1)) < 0.55) {
+          const dotColor = mixHex(PALETTE.rivet, VISUAL_BIOME[anteNextW].accent, 0.6);
+          ops.push({ kind: 'dot', x: face, y: ly0 + 1.2, r: 0.09, color: dotColor });
+          ops.push({ kind: 'dot', x: face, y: ly0 + 2.8, r: 0.09, color: dotColor });
+        }
+        // 地区固有の小物(段階 3): 壁面の装飾。密度は TerrainProfile.decorMul
+        const segBiomeW = biomeIdForCell(seed, biomeCellAt(seed, y0 + 2));
+        const segMulW = terrainProfileFor(segBiomeW).decorMul;
+        if (segBiomeW === 'habitation' && hash2(seed + 743, wx, s * 2 + (dir < 0 ? 0 : 1)) < 0.3 * segMulW) {
+          // 残光の窓灯(設計 §2.3: 居住区画の灯の密度は decor で表現する)
+          ops.push({ kind: 'dot', x: face, y: ly0 + 2, r: 0.12, color: DISTRICT_DECOR_COLORS.habitationWindow });
+        } else if (segBiomeW === 'biomech' && hash2(seed + 743, wx, s * 2 + (dir < 0 ? 0 : 1)) < 0.26 * segMulW) {
+          // 壁を伝う根状構造
+          const out = dir === -1 ? -0.16 : 0.16;
+          ops.push({ kind: 'poly', pts: [face, ly0 + 0.2, face + out, ly0 + 1.6, face - out, ly0 + 3.1], w: 0.09, color: DISTRICT_DECOR_COLORS.biomechRoot });
         }
       }
     }

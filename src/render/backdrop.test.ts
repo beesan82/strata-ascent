@@ -5,10 +5,8 @@ import { BACKDROP_JPEG_BASE64 } from './backdropData';
 import { VISUAL_BIOME } from './biome';
 
 describe('backdropData', () => {
-  it('精錬区以外の 6 地区ぶんの base64 があり、JPEG として復号できる大きさ', () => {
-    expect(Object.keys(BACKDROP_JPEG_BASE64).sort()).toEqual(
-      BIOME_IDS.filter((id) => id !== 'foundry').sort(),
-    );
+  it('全 7 地区ぶんの base64 があり、JPEG として復号できる大きさ', () => {
+    expect(Object.keys(BACKDROP_JPEG_BASE64).sort()).toEqual([...BIOME_IDS].sort());
     for (const b64 of Object.values(BACKDROP_JPEG_BASE64)) {
       expect(b64!.length).toBeGreaterThan(1000);
       // JPEG の SOI マーカー(0xFFD8)で始まる
