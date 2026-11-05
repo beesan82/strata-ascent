@@ -81,14 +81,16 @@ const DENSITY_DY = 12;
 /**
  * ランごとに hash で出現を決め、保護点の近傍と密度上限(近傍に既選がある)を除く。
  * 位置はラン内のオフセットも hash で決める。完全に決定論。
+ * rateMul は地区倍率(ゾーン化 段階 2、設計 §5): 層番号ベースの基礎率に乗算する接続点。
  */
 export function chooseSpawns(
   seed: number,
   layer: number,
   runs: readonly FloorRun[],
   protectedPoints: readonly ProtectedPoint[],
+  rateMul = 1,
 ): EnemySpawn[] {
-  const rate = spawnRateForLayer(layer);
+  const rate = spawnRateForLayer(layer) * rateMul;
   if (rate <= 0) return [];
   const spawns: EnemySpawn[] = [];
   for (const run of runs) {

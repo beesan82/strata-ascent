@@ -18,7 +18,7 @@ describe('biome cells', () => {
     expect(BIOME_CELL_BASE).toBe(375);
     expect(BIOME_CELL_JITTER).toBe(75);
     expect(BIOME_BLEND_HALF_WIDTH).toBe(50);
-    expect(BIOME_IDS).toEqual(['coldSteel', 'habitation', 'disposal', 'waterVoid', 'power']);
+    expect(BIOME_IDS).toEqual(['coldSteel', 'habitation', 'disposal', 'waterVoid', 'power', 'foundry', 'biomech']);
   });
 
   it('keeps every sampled cell width between 300 and 450 tiles', () => {
@@ -77,10 +77,10 @@ describe('biome cells', () => {
     }
   });
 
-  it('contains every district exactly once per 5-cell cycle', () => {
+  it('contains every district exactly once per 7-cell cycle', () => {
     for (const seed of seeds) {
       for (let cycle = -20; cycle <= 20; cycle++) {
-        const ids = Array.from({ length: 5 }, (_, i) => biomeIdForCell(seed, cycle * 5 + i));
+        const ids = Array.from({ length: 7 }, (_, i) => biomeIdForCell(seed, cycle * 7 + i));
         expect(new Set(ids)).toEqual(new Set(BIOME_IDS));
       }
     }
@@ -89,7 +89,7 @@ describe('biome cells', () => {
   it('never repeats a district across a cycle boundary', () => {
     for (const seed of seeds) {
       for (let cycle = -20; cycle < 20; cycle++) {
-        expect(biomeIdForCell(seed, cycle * 5 + 4)).not.toBe(biomeIdForCell(seed, (cycle + 1) * 5));
+        expect(biomeIdForCell(seed, cycle * 7 + 6)).not.toBe(biomeIdForCell(seed, (cycle + 1) * 7));
       }
     }
   });
@@ -101,6 +101,8 @@ describe('biome cells', () => {
       disposal: '廃棄沈殿層',
       waterVoid: '大空洞水域',
       power: '電力区',
+      foundry: '精錬区',
+      biomech: '生体異物区',
     });
     for (const seed of seeds) {
       for (let cell = -20; cell <= 20; cell++) {

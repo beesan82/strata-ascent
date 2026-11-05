@@ -1,25 +1,29 @@
 import { biomeCellAt } from '../world/biomeCells';
 import { PASSAGE_SLOT } from '../world/interface';
-import { landmarkAt, rampTopY, TOWER_TOP_HALF_WIDTH, type Landmark } from '../world/landmark';
+import { isTowerFamily, landmarkAt, rampTopY, type Landmark } from '../world/landmark';
+import { hash2 } from '../world/noise';
 import { REST_HEIGHT, restPointAt } from '../world/restpoint';
 import { beaconPulse } from './beacon';
 import { biomeForCell } from './biome';
 
 /**
- * 大構造の固有の光(設計書 §6.2: 塔は頂部の点滅、崩落は裂け目からの光条)と休憩点の暖色(§6.3)。
+ * 大構造の固有の光(設計書 §6.2、ゾーン化 段階 2 で地区変種の光へ拡張)と休憩点の暖色(§6.3)。
+ * 色は地区の accent を使う: 冷却塔=青い光柱、変圧塔=放電の明滅、煙突塔=常時点灯の熱光、
+ * 椎骨柱=脈打つ淡紫。崩落は裂け目からの光条。大桁橋・吹き抜けホールは無光(構造そのものが顔)。
  * 幾何は純粋関数 landmarkLightsInView が平坦な矩形(ワールド座標)として返し、LandmarkLights が
  * Lighting の半解像度 overlay へ lighter で塗るだけ。新しい描画パスは足さず、色数も矩形 1 枚 1 色。
- * 枚数は標準ズームで塔 2・崩落 3・休憩点 1 程度。眺望(0.35)で休憩点が複数入ると、段階5 の灯
+ * 枚数は標準ズームで塔系 2〜3・崩落 3・休憩点 1 程度。眺望(0.35)で休憩点が複数入ると、段階5 の灯
  * (ambient.ts、1 灯 2 枚)を合わせて 10〜20 枚になるが、1 枚は 1〜3 タイル(0.35 では 1 px 前後)で
  * lighter の画素数は小さい(段階2 の性能ルールの範囲内)。
  */
 
-/** 塔の頂部の点滅: 周期(秒)と点灯割合 */
-export const TOWER_BLINK_PERIOD = 1.6;
-export const TOWER_BLINK_DUTY = 0.15;
-/** 点滅の色(赤橙。層の accent とは別の「人工の灯」として遠くから読める) */
-export const TOWER_BLINK_COLOR = '#ff5a3c';
-/** 点滅の灯のアルファと暈のアルファ */
+/** 変圧塔の放電: 判定の頻度(回/秒)と点灯率。hash で不規則に明滅する */
+export const DISCHARGE_RATE = 9;
+export const DISCHARGE_DUTY = 0.3;
+/** 冷却塔の光柱の高さ(頂部から上へ)とアルファ */
+export const COOLING_BEAM_HEIGHT = 48;
+const COOLING_BEAM_ALPHA = 0.08;
+/** 塔系の頂部の灯のアルファと暈のアルファ */
 const TOWER_LAMP_ALPHA = 0.7;
 const TOWER_HALO_ALPHA = 0.12;
 /**
@@ -46,18 +50,35 @@ export interface LightRect {
   color: string;
 }
 
-/** 塔の頂部の点滅。k で位相をずらす(隣の塔と同期しない) */
-export function towerBlink(timeSec: number, k: number): boolean {
-  const phase = (timeSec + k * 0.37) / TOWER_BLINK_PERIOD;
-  return phase - Math.floor(phase) < TOWER_BLINK_DUTY;
+/** 変圧塔の放電の明滅。時刻を DISCHARGE_RATE で量子化し hash で決める(不規則・決定論) */
+export function dischargeOn(timeSec: number, k: number): boolean {
+  return hash2(9177, Math.floor(timeSec * DISCHARGE_RATE), k) < DISCHARGE_DUTY;
 }
 
-function towerLights(lm: Landmark, timeSec: number, out: LightRect[]): void {
-  if (!towerBlink(timeSec, lm.k)) return;
+/** 塔系の頂部の光。色は地区の accent(設計 §2.3 ③: 変種ごとの光) */
+function towerFamilyLights(seed: number, lm: Landmark, timeSec: number, out: LightRect[]): void {
+  const color = biomeForCell(seed, lm.cell).accent;
   // 灯(2×1 タイル)と暈(6×3)。頂部の開口(top−8..top)のすぐ上に浮かぶ
   const y = lm.top - 8;
-  out.push({ x0: lm.x - 1, y0: y - 1, x1: lm.x + 1, y1: y, alpha: TOWER_LAMP_ALPHA, color: TOWER_BLINK_COLOR });
-  out.push({ x0: lm.x - 3, y0: y - 3, x1: lm.x + 3, y1: y, alpha: TOWER_HALO_ALPHA, color: TOWER_BLINK_COLOR });
+  if (lm.kind === 'cooling') {
+    // 青い光柱が頂部から上へ伸びる + 灯と暈
+    out.push({ x0: lm.x - 2, y0: lm.top - COOLING_BEAM_HEIGHT, x1: lm.x + 2, y1: y, alpha: COOLING_BEAM_ALPHA, color });
+    out.push({ x0: lm.x - 1, y0: y - 1, x1: lm.x + 1, y1: y, alpha: TOWER_LAMP_ALPHA, color });
+    out.push({ x0: lm.x - 3, y0: y - 3, x1: lm.x + 3, y1: y, alpha: TOWER_HALO_ALPHA, color });
+  } else if (lm.kind === 'transformer') {
+    if (!dischargeOn(timeSec, lm.k)) return;
+    out.push({ x0: lm.x - 1, y0: y - 1, x1: lm.x + 1, y1: y, alpha: 0.8, color });
+    out.push({ x0: lm.x - 4, y0: y - 4, x1: lm.x + 4, y1: y, alpha: 0.16, color });
+  } else if (lm.kind === 'chimney') {
+    // 熱光は常時点灯
+    out.push({ x0: lm.x - 1, y0: y - 1, x1: lm.x + 1, y1: y, alpha: TOWER_LAMP_ALPHA, color });
+    out.push({ x0: lm.x - 3, y0: y - 3, x1: lm.x + 3, y1: y, alpha: TOWER_HALO_ALPHA + 0.02, color });
+  } else {
+    // 椎骨柱: 脈打つ淡紫(beaconPulse に相乗り)
+    const pulse = beaconPulse(timeSec);
+    out.push({ x0: lm.x - 1, y0: y - 1, x1: lm.x + 1, y1: y, alpha: 0.5 * pulse, color });
+    out.push({ x0: lm.x - 3, y0: y - 3, x1: lm.x + 3, y1: y, alpha: 0.08 * pulse, color });
+  }
 }
 
 function collapseLights(seed: number, lm: Landmark, timeSec: number, out: LightRect[]): void {
@@ -75,7 +96,7 @@ function collapseLights(seed: number, lm: Landmark, timeSec: number, out: LightR
 
 /**
  * 視野(camX ± spanX/2, camY ± spanY/2)に掛かる大構造の光と休憩点の暖色。
- * 塔は点灯中だけ 2 枚、崩落は 3 本、休憩点は箱の内側 1 枚。
+ * 塔系は変種ごとの灯 2〜3 枚、崩落は 3 本、休憩点は箱の内側 1 枚。
  */
 export function landmarkLightsInView(seed: number, camX: number, camY: number, spanX: number, spanY: number, timeSec: number): LightRect[] {
   const x0 = camX - spanX / 2;
@@ -91,10 +112,10 @@ export function landmarkLightsInView(seed: number, camX: number, camY: number, s
     for (let k = k0; k <= k1; k++) {
       const lm = landmarkAt(seed, cell, k);
       if (lm) {
-        if (lm.kind === 'tower') {
-          // 塔の頂部の灯は頂部の開口の上 4 タイルまで
-          if (lm.top - 12 <= y1 && lm.top - 8 >= y0 && lm.x + TOWER_TOP_HALF_WIDTH >= x0 && lm.x - TOWER_TOP_HALF_WIDTH <= x1) towerLights(lm, timeSec, out);
-        } else if (lm.top - RIFT_RAY_TOP <= y1 && lm.baseY >= y0 && lm.gapRight >= x0 && lm.gapLeft <= x1) {
+        if (isTowerFamily(lm.kind)) {
+          // 頂部の灯と冷却塔の光柱(頂部から上へ COOLING_BEAM_HEIGHT)が視野に掛かるときだけ
+          if (lm.top - COOLING_BEAM_HEIGHT - 8 <= y1 && lm.top >= y0 && lm.x + 8 >= x0 && lm.x - 8 <= x1) towerFamilyLights(seed, lm, timeSec, out);
+        } else if (lm.kind === 'collapse' && lm.top - RIFT_RAY_TOP <= y1 && lm.baseY >= y0 && lm.gapRight >= x0 && lm.gapLeft <= x1) {
           collapseLights(seed, lm, timeSec, out);
         }
       }

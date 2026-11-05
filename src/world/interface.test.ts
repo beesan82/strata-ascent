@@ -6,7 +6,7 @@ import {
   isGreatInterface, layerNumber, mod, nearestPassage, overlookCellAt, OVERLOOK_LEFT, passageX, PASSAGE_SLOT, terrainModsAt,
 } from './interface';
 
-import { landmarkAt, towerTopFloorAt } from './landmark';
+import { isTowerFamily, landmarkAt, towerTopFloorAt } from './landmark';
 
 const seeds = [1, 42, 20260711];
 
@@ -148,11 +148,11 @@ describe('overlookCellAt', () => {
     expect(overlookCellAt(seed, px + HOLE_OFFSET, top)).toBe(null);
     expect(overlookCellAt(seed, px + 4, top + 1)).toBe(null);
   });
-  it('塔の頂部の床(幅 12、梯子列を除く)でも述語を渡せばその板の cell を返す。述語無しなら null', () => {
+  it('塔系の頂部の床(幅 12、梯子列を除く)でも述語を渡せばその板の cell を返す。述語無しなら null', () => {
     let towers = 0;
-    for (const seed of seeds) for (const cell of [-2, 1]) for (const k of [-3, 0, 3]) {
-      const lm = landmarkAt(seed, cell, k)!;
-      if (lm.kind !== 'tower') continue;
+    for (const seed of seeds) for (let cell = -3; cell <= 3; cell++) for (let k = -4; k <= 4; k++) {
+      const lm = landmarkAt(seed, cell, k);
+      if (!lm || !isTowerFamily(lm.kind)) continue;
       towers++;
       const towerTop = (c: number, x: number) => towerTopFloorAt(seed, c, x);
       expect(overlookCellAt(seed, lm.x + 3, lm.top, towerTop)).toBe(cell);

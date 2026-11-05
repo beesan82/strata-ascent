@@ -11,7 +11,7 @@ import { terrainProfileFor } from './biomeTerrain';
 import { hash2 } from './noise';
 import { CHUNK_SIZE, isSolid, TILE } from './tiles';
 import { SPAWN_OFFSET_FROM_PASSAGE, findSpawn, generateChunk, isHardAt, noiseTileAt, tileAt, tileAtLive } from './worldgen';
-import { landmarkAt, landmarkTileAt, rampTopY, type Landmark } from './landmark';
+import { girderY, isTowerFamily, landmarkAt, landmarkTileAt, rampTopY, shaftLadderX, towerSpec, type Landmark } from './landmark';
 import { restPointAt, restPointTileAt } from './restpoint';
 import { Destruction } from './destruction';
 import { ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceTileAt, interfaceTop, passageX, terrainModsAt } from './interface';
@@ -394,8 +394,9 @@ describe('界面と前室の合成', () => {
     for (const seed of seeds) for (let cell = -2; cell <= 2; cell++) for (const k of [-1, 0, 2]) {
       const bottom = interfaceBottom(seed, cell), px = passageX(seed, cell, k);
       for (let x = px - 120; x <= px + 120; x++) {
+        if (landmarkTileAt(seed, x, bottom + ANTECHAMBER_DEPTH) !== null) continue; // 大構造(縦坑・斜路・橋)が前室の床を横切る
         const t = tileAt(seed, x, bottom + ANTECHAMBER_DEPTH);
-        expect(t === TILE.SOLID || t === TILE.LADDER || t === TILE.HARD).toBe(true); // HARD は崩落の斜路の足
+        expect(t === TILE.SOLID || t === TILE.LADDER || t === TILE.HARD).toBe(true);
       }
       for (let x = px - 119; x < px + 120; x++) {
         if (x === px) continue;
@@ -431,19 +432,24 @@ describe('界面と前室の合成', () => {
 describe('段階4: 大構造と休憩点の合成', () => {
   const seeds = [1, 42, 20260711];
   const landmarks = (): { seed: number; lm: Landmark }[] =>
-    seeds.flatMap((seed) => [-2, 1].flatMap((cell) => [-3, 0, 3].map((k) => ({ seed, lm: landmarkAt(seed, cell, k)! }))));
-  it('塔の縦坑は板を貫き、殻は板の上の層・板の中・層の中で HARD。孔・見晴らし台・大穴は塔に勝つ', () => {
+    seeds.flatMap((seed) => [-3, -2, -1, 0, 1, 2, 3].flatMap((cell) =>
+      [-4, -3, -2, -1, 0, 1, 2, 3, 4].flatMap((k) => {
+        const lm = landmarkAt(seed, cell, k);
+        return lm ? [{ seed, lm }] : [];
+      })));
+  it('塔系の縦坑は板を貫き、殻は板の上の層・板の中・層の中で HARD。孔・見晴らし台・大穴は塔系に勝つ', () => {
     let towers = 0;
     for (const { seed, lm } of landmarks()) {
-      if (lm.kind !== 'tower') continue;
+      if (!isTowerFamily(lm.kind)) continue;
       towers++;
-      for (let y = lm.floor - 1; y >= lm.top - 4; y--) expect(tileAt(seed, lm.x, y)).toBe(TILE.LADDER);
-      expect(tileAt(seed, lm.x - 20, lm.top + 5)).toBe(TILE.HARD);
-      expect(tileAt(seed, lm.x - 20, lm.bottom + 10)).toBe(TILE.HARD);
-      expect(tileAt(seed, lm.x + 1, lm.top + 5)).toBe(TILE.AIR);
-      // 板の下(cell+1)の孔・見晴らし台・大穴と塔の X が重なる座標は界面のタイルのまま
+      const spec = towerSpec(lm.kind)!;
+      for (let y = lm.floor - 1; y >= lm.top - 4; y--) expect(tileAt(seed, shaftLadderX(lm, y), y)).toBe(TILE.LADDER);
+      expect(tileAt(seed, lm.x - (spec.halfWidth - 4), lm.top + 5)).toBe(TILE.HARD);
+      expect(tileAt(seed, lm.x - (spec.halfWidth - 4), lm.bottom + 10)).toBe(TILE.HARD);
+      if (lm.kind !== 'vertebra') expect(tileAt(seed, lm.x + 1, lm.top + 5)).toBe(TILE.AIR);
+      // 板の下(cell+1)の孔・見晴らし台・大穴と塔系の X が重なる座標は界面のタイルのまま
       const px1 = passageX(seed, lm.cell + 1, lm.k);
-      for (let x = px1 - 12; x < px1 + 72; x++) if (Math.abs(x - lm.x) < 24) {
+      for (let x = px1 - 12; x < px1 + 72; x++) if (Math.abs(x - lm.x) < spec.halfWidth) {
         for (const y of [lm.floor - 1, lm.floor - 8]) {
           expect(tileAt(seed, x, y)).toBe(interfaceTileAt(seed, x, y));
         }
@@ -474,20 +480,24 @@ describe('段階4: 大構造と休憩点の合成', () => {
       }
     }
   });
-  it('isHardAt は tileAt === HARD と同値(板・塔の殻・斜路・普通の SOLID)', () => {
+  it('isHardAt は tileAt === HARD と同値(板・塔系の殻・斜路・橋床・柱・普通の SOLID)', () => {
     for (const { seed, lm } of landmarks()) {
-      const pts: [number, number][] = lm.kind === 'tower'
-        ? [[lm.x - 20, lm.bottom + 10], [lm.x, lm.bottom + 10], [lm.x - 200, lm.top + 3], [lm.x - 20, lm.floor - 1]]
-        : [[lm.gapLeft + 4, rampTopY(lm, lm.gapLeft + 4)], [lm.gapLeft + 4, lm.top + 1], [lm.gapLeft - 50, lm.top + 3]];
+      const pts: [number, number][] = isTowerFamily(lm.kind)
+        ? [[lm.x - (towerSpec(lm.kind)!.halfWidth - 4), lm.bottom + 10], [shaftLadderX(lm, lm.bottom + 10), lm.bottom + 10], [lm.x - 200, lm.top + 3], [lm.x - (towerSpec(lm.kind)!.halfWidth - 4), lm.floor - 1]]
+        : lm.kind === 'collapse'
+          ? [[lm.gapLeft + 4, rampTopY(lm, lm.gapLeft + 4)], [lm.gapLeft + 4, lm.top + 1], [lm.gapLeft - 50, lm.top + 3]]
+          : lm.kind === 'girder'
+            ? [[lm.gapLeft + 4, girderY(lm)], [lm.gapLeft + 4, girderY(lm) - 5], [lm.gapLeft - 50, lm.top + 3]]
+            : [[lm.x, lm.bottom + 20], [lm.gapLeft + 1, lm.bottom + 20], [lm.gapLeft - 50, lm.top + 3]];
       for (const [x, y] of pts) expect(isHardAt(seed, x, y)).toBe(tileAt(seed, x, y) === TILE.HARD);
     }
     let solids = 0;
     for (let y = 40; y < 300 && solids < 20; y += 13) for (let x = 0; x < 400; x += 17) if (tileAt(42, x, y) === TILE.SOLID) { solids++; expect(isHardAt(42, x, y)).toBe(false); }
     expect(solids).toBeGreaterThan(0);
   });
-  it('bore は塔の殻の HARD を残す(未生成でも、生成+applyTo 後も、tileAtLive でも)', () => {
-    const { seed, lm } = landmarks().find((e) => e.lm.kind === 'tower')!;
-    const x = lm.x - 20, y = lm.bottom + 10;
+  it('bore は塔系の殻の HARD を残す(未生成でも、生成+applyTo 後も、tileAtLive でも)', () => {
+    const { seed, lm } = landmarks().find((e) => isTowerFamily(e.lm.kind))!;
+    const x = lm.x - (towerSpec(lm.kind)!.halfWidth - 4), y = lm.bottom + 10;
     expect(tileAt(seed, x, y)).toBe(TILE.HARD);
     const d = new Destruction();
     d.bore(x - 5, y, 0, 10, 1, () => undefined, (ax, ay) => isHardAt(seed, ax, ay));
@@ -505,27 +515,74 @@ describe('段階4: 大構造と休憩点の合成', () => {
 describe('大構造の到達可能性', () => {
   const seeds = [1, 42, 20260711];
   const landmarks = (): { seed: number; lm: Landmark }[] =>
-    seeds.flatMap((seed) => [-2, 1].flatMap((cell) => [-3, 0, 3].map((k) => ({ seed, lm: landmarkAt(seed, cell, k)! }))));
-  it('塔: 床の板の上から内部の梯子を登り切ると頂部の床に立てる(Player 結合)', () => {
+    seeds.flatMap((seed) => [-3, -2, -1, 0, 1, 2, 3].flatMap((cell) =>
+      [-4, -3, -2, -1, 0, 1, 2, 3, 4].flatMap((k) => {
+        const lm = landmarkAt(seed, cell, k);
+        return lm ? [{ seed, lm }] : [];
+      })));
+  it('塔系: 床の板の上から内部の梯子を登り切ると頂部の床に立てる(Player 結合。椎骨柱はうねりへ寄せながら登る)', () => {
     for (const { seed, lm } of landmarks()) {
-      if (lm.kind !== 'tower') continue;
+      if (!isTowerFamily(lm.kind)) continue;
       const tiles = (tx: number, ty: number) => tileAt(seed, tx, ty);
       const player = new Player(lm.x + 0.125, lm.floor - 1.75 - 0.05);
-      const up = { left: false, right: false, jump: false, up: true, down: false };
-      const idle = { ...up, up: false };
+      const idle = { left: false, right: false, jump: false, up: false, down: false };
       const right = { ...idle, right: true };
       // 層の高さは最大 400 タイル超、梯子は 4 タイル/秒なので 2 分ぶん回す
-      for (let i = 0; i < 7200; i++) player.update(up, 1 / 60, tiles);
+      for (let i = 0; i < 7200; i++) {
+        const feetRow = Math.floor(player.body.y + player.body.h);
+        const dir = shaftLadderX(lm, feetRow) + 0.5 - player.centerX;
+        player.update({ ...idle, up: true, left: dir < -0.1, right: dir > 0.1 }, 1 / 60, tiles);
+      }
       expect(player.body.y + player.body.h).toBeLessThanOrEqual(lm.top - 2);
       for (let i = 0; i < 60; i++) player.update(right, 1 / 60, tiles);
+      const feetBeforeIdle = player.body.y + player.body.h;
       for (let i = 0; i < 60; i++) player.update(idle, 1 / 60, tiles);
       const feet = player.body.y + player.body.h;
       expect(feet).toBeLessThanOrEqual(lm.top + 1e-6);
-      expect(feet).toBeGreaterThan(lm.top - 1 / 16 - 1e-6);
-      // 頂部の床の上に立つ。32 タイル梯子列が頂部の開口を通る配置では梯子に掴まったまま床の高さにいる
+      // 頂部の床の上に立つ。32 タイル梯子列が頂部の開口を通る配置では梯子に掴まったまま床の高さにいる。
+      // 中心が揃った上の層の塔系へ登り継いだ場合も、梯子に掴まって静止しているなら到達とみなす
       const onLadder = tileAt(seed, Math.floor(player.centerX), Math.floor(feet - 1e-6)) === TILE.LADDER;
-      expect(player.body.onGround || onLadder).toBe(true);
+      const hanging = !player.body.onGround && Math.abs(feet - feetBeforeIdle) <= 1e-6;
+      if (!onLadder && !hanging) expect(feet).toBeGreaterThan(lm.top - 1 / 16 - 1e-6);
+      expect(player.body.onGround || onLadder || hanging).toBe(true);
     }
+  });
+  it('大桁橋: 橋床の左端から右へ歩くと落ちずに渡れる(Player 結合)', () => {
+    let bridges = 0;
+    for (const { seed, lm } of landmarks()) {
+      if (lm.kind !== 'girder') continue;
+      bridges++;
+      const tiles = (tx: number, ty: number) => tileAt(seed, tx, ty);
+      const gy = girderY(lm);
+      const player = new Player(lm.gapLeft + 2 + 0.125, gy - 1.75 - 0.05);
+      const right = { left: false, right: true, jump: false, up: false, down: false };
+      for (let i = 0; i < 700; i++) player.update(right, 1 / 60, tiles);
+      expect(player.body.x).toBeGreaterThan(lm.x + 10);
+      const feet = player.body.y + player.body.h;
+      expect(feet).toBeLessThanOrEqual(gy + 1e-6);
+      expect(feet).toBeGreaterThan(gy - 1);
+    }
+    expect(bridges).toBeGreaterThan(0);
+  });
+  it('吹き抜けホール: 中に落ちても床の板に着地し、塞がれていない(Player 結合)', () => {
+    let halls = 0;
+    for (const { seed, lm } of landmarks()) {
+      if (lm.kind !== 'atrium') continue;
+      halls++;
+      const tiles = (tx: number, ty: number) => tileAt(seed, tx, ty);
+      // 梯子列でない列を選んで落とす
+      let sx = lm.x + 3;
+      while (tileAt(seed, sx, lm.bottom + 30) !== TILE.AIR && sx < lm.x + 12) sx++;
+      expect(tileAt(seed, sx, lm.bottom + 30)).toBe(TILE.AIR);
+      const player = new Player(sx + 0.125, lm.bottom + 2);
+      const idle = { left: false, right: false, jump: false, up: false, down: false };
+      for (let i = 0; i < 3600; i++) player.update(idle, 1 / 60, tiles);
+      const feet = player.body.y + player.body.h;
+      expect(feet).toBeLessThanOrEqual(lm.floor + 1e-6);
+      expect(feet).toBeGreaterThan(lm.floor - 1);
+      expect(player.body.onGround).toBe(true);
+    }
+    expect(halls).toBeGreaterThan(0);
   });
   it('崩落: 斜路の足から右へジャンプしながら歩くと板の上面に出る(Player 結合)', () => {
     for (const { seed, lm } of landmarks()) {

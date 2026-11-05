@@ -1,6 +1,6 @@
 import { hash2 } from './noise';
 
-export const BIOME_IDS = ['coldSteel', 'habitation', 'disposal', 'waterVoid', 'power'] as const;
+export const BIOME_IDS = ['coldSteel', 'habitation', 'disposal', 'waterVoid', 'power', 'foundry', 'biomech'] as const;
 export type BiomeId = (typeof BIOME_IDS)[number];
 
 /** 地区名（字幕で宣言する地名。設計書 2026-11-04-zones-design §2.3 のカタログ名） */
@@ -10,6 +10,8 @@ export const BIOME_DISTRICT_NAME: Record<BiomeId, string> = {
   disposal: '廃棄沈殿層',
   waterVoid: '大空洞水域',
   power: '電力区',
+  foundry: '精錬区',
+  biomech: '生体異物区',
 };
 
 export function districtNameForCell(seed: number, cell: number): string {

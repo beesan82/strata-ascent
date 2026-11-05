@@ -78,17 +78,22 @@ export const VISUAL_BIOME: Record<BiomeId, Biome> = {
     palette: steelPalette('#8157c8', 0.23), accent: '#bc7cff',
     bgLayers: bg('#8d52d8', [[0.16, 0.62, 'tower'], [0.36, 0.56, 'deck']], 0.22),
   },
+  foundry: {
+    name: '精錬炉', ambientColor: mixHex('#4a2620', '#020408', 0.72), ambientLevel: 0.44,
+    // 縁は溶鉱の熱で金色に光る(パレット 31 番)。廃棄沈殿層の鈍い金茶(30 番)と量子化後も分かれる
+    palette: { ...steelPalette('#d06a3c', 0.2), edge: '#caa64a' }, accent: '#ff6a35',
+    bgLayers: bg('#d06a3c', [[0.2, 0.5, 'tower'], [0.4, 0.45, 'deck']]),
+  },
+  biomech: {
+    name: '生体異物', ambientColor: '#1d1030', ambientLevel: 0.24,
+    // 縁は淡紫の膜・骨の色。電力区の紫・寒鋼の青灰と量子化後も分かれるよう明示する
+    palette: { ...steelPalette('#6a5a7d', 0.23), edge: '#978bab' }, accent: '#a58fc4',
+    bgLayers: bg('#a25174', [[0.18, 0.5, 'tower'], [0.4, 0.35, 'deck']], 0.3),
+  },
 };
 
 /** Ordered compatibility view of visual biomes. */
 export const BIOMES: readonly Biome[] = BIOME_IDS.map((id) => VISUAL_BIOME[id]);
-
-/** 精錬炉(foundry): 溶鉱の赤熱を帯びた系統配色 */
-const FOUNDRY: Biome = {
-  name: '精錬炉', ambientColor: mixHex('#4a2620', '#020408', 0.72), ambientLevel: 0.44,
-  palette: steelPalette('#d06a3c'), accent: '#e8834a',
-  bgLayers: bg('#d06a3c', [[0.2, 0.5, 'tower'], [0.4, 0.45, 'deck']]),
-};
 
 /** Facility system to biome lookup; visual landscape selection uses coordinate cells below. */
 export const SYSTEM_BIOME: Record<System, Biome> = {
@@ -96,7 +101,7 @@ export const SYSTEM_BIOME: Record<System, Biome> = {
   habitation: VISUAL_BIOME.habitation,
   disposal: VISUAL_BIOME.disposal,
   power: VISUAL_BIOME.power,
-  foundry: FOUNDRY,
+  foundry: VISUAL_BIOME.foundry,
 };
 
 export function biomeForSystem(system: System): Biome {
