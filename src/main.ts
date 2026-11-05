@@ -157,6 +157,9 @@ let lastBeam: { angle: number; ttl: number } | null = null;
 /** チャージ完了→離した瞬間: エイム方向へ地形を貫通破壊し、タイルへ反映して焼き込みを無効化する */
 function fire(): void {
   hapticCannonFire();
+  // スティック砲の発射が成立したら、武器モードをパルスへ自動復帰させる(設計 §3-3)。
+  // PC の KeyF 発射では発射候補が無いのでモードには触れない
+  if (input.takeCannonRelease()) input.notifyCannonFired();
   const aim = renderer.aimAngle; // ライトコーンと同一の角度(=ビーム=破壊方向を保証)
   // 未生成チャンクは生成せず破壊マスクだけ記録する(発射フレームでの同期生成を避ける)
   const affected = destruction.bore(
@@ -203,8 +206,8 @@ function update(dt: number): void {
   const footRow = Math.round(player.body.y + player.body.h);
   const halfW = canvas.width / 2;
   const halfH = canvas.height / 2;
-  // 照準ベクトルの合成(優先順位: マウス > 砲のタッチ照準点 > 右スティック照準 >
-  // 保持照準 > 向きの水平)。タッチチャンネルは PC では常に無効なので従来どおり
+  // 照準ベクトルの合成(優先順位: マウス > 右スティック照準 > 保持照準 > 向きの水平)。
+  // タッチチャンネルは PC では常に無効なので従来どおり。砲のタッチ照準も右スティックに一本化した
   const touchAim = input.touchAimActive
     ? { x: input.touchAimX, y: input.touchAimY }
     : input.heldAimActive ? { x: input.heldAimX, y: input.heldAimY } : null;
@@ -214,16 +217,14 @@ function update(dt: number): void {
     newlyMoving: MOVE_KEYS.some((c) => pressed.has(c)),
     grounded: player.body.onGround,
     still: player.body.onGround && player.body.vx === 0,
-    // マウスが一度も動いていない(タッチ等)間は、タッチ照準点があればそれを使い、
-    // 次にスティック照準、無ければプレイヤーの向きの水平に倒す(左上に張り付かせない)
+    // マウスが一度も動いていない(タッチ等)間は、スティック照準があればそれを使い、
+    // 無ければプレイヤーの向きの水平に倒す(左上に張り付かせない)
     aimX: input.mouseSeen
       ? clamp(-1, 1, (input.mouseX * dpr - halfW) / halfW)
-      : input.touchPointActive ? clamp(-1, 1, (input.touchPointX * dpr - halfW) / halfW)
-        : touchAim ? touchAim.x : player.facing,
+      : touchAim ? touchAim.x : player.facing,
     aimY: input.mouseSeen
       ? clamp(-1, 1, (input.mouseY * dpr - halfH) / halfH)
-      : input.touchPointActive ? clamp(-1, 1, (input.touchPointY * dpr - halfH) / halfH)
-        : touchAim ? touchAim.y : 0,
+      : touchAim ? touchAim.y : 0,
     // 塔(§5.5)の頂部の床からも発火する(述語は interface.ts → landmark.ts の循環 import を避けるため)
     overlookCell: player.body.onGround ? overlookCellAt(seed, Math.floor(player.centerX), footRow, towerTop) : null,
     baseZoom: zoomTarget,
@@ -242,17 +243,12 @@ function update(dt: number): void {
   view = next;
   // カメラ先行(視線 = 照準方向): 狙った先が画面に入るよう、照準方向へ中心を寄せる。
   // 眺望オフセットとは別レイヤで加算し、眺望の状態遷移には触らない。
-  // 砲のドラッグ中は画面中心から照準点への方向へ寄せる(指を止めれば方向は一定で振動しない)
-  let laAim: { x: number; y: number } | null = null;
-  if (input.touchPointActive) {
-    const dx = input.touchPointX * dpr - halfW;
-    const dy = input.touchPointY * dpr - halfH;
-    const len = Math.hypot(dx, dy);
-    if (len > 0) laAim = { x: dx / len, y: dy / len };
-  } else if (touchAim) {
-    laAim = touchAim;
-  }
-  const la = lookahead(laAim, input.pulseHeld || graviton.chargeRatio > 0);
+  // 拡張(5 タイル)は発射中・砲の溜め中に加え、砲モードでスティック照準が有効な間も効かせる
+  // (砲は狙い始めた時点から先の視界が価値を持つため。設計 2026-11-05-weapon-switch §4)
+  const la = lookahead(
+    touchAim,
+    input.pulseHeld || graviton.chargeRatio > 0 || (input.weaponMode === 'cannon' && input.touchAimActive),
+  );
   camera.follow(player.centerX + view.offsetX + la.x, player.centerY + view.offsetY + la.y, dt);
   // 開放度は毎フレームだと重い(tileAt多数)ので6フレームごとに測る。
   // 求めた目標ズームは quantizeZoom で離散段へ量子化してから、毎フレーム平滑追従する
@@ -276,6 +272,7 @@ function update(dt: number): void {
   camera.zoomTo(view.zoom, dt);
   if (input.takeFireCancel()) graviton.cancelCharge(); // タッチ照準のキャンセル(解放より先に破棄)
   graviton.update(dt, input.fireHeld, fire);
+  input.expireCannonRelease(); // スティック砲の発射候補は、この update で発射しなければ失効する
   // パルス(連射武器): 照準は右スティックのアナログ方向 > 保持照準 > 移動入力の 8 方向。
   // タッチチャンネルは PC では常に無効なので、キーボード/マウス時は従来どおり 8 方向になる
   const pulseDir = input.touchAimActive
@@ -386,8 +383,10 @@ function updateHud(): void {
     const bars = Math.round(r * 4);
     cannon += ` [${'#'.repeat(bars)}${'-'.repeat(4 - bars)}]`;
   }
+  // 武器表示(設計 2026-11-05-weapon-switch §2-3): 現在の武器を角括弧で囲む
+  const weapon = input.weaponMode === 'pulse' ? `武器 [パルス] / ${cannon}` : `武器 パルス / [${cannon}]`;
   const hearts = '♥'.repeat(player.hp) + '♡'.repeat(Math.max(0, MAX_HP - player.hp));
-  hud.textContent = `第 ${maxLayer} 階層 / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${cannon} — HP ${hearts}`;
+  hud.textContent = `第 ${maxLayer} 階層 / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${weapon} — HP ${hearts}`;
 }
 
 let last = performance.now();
@@ -407,10 +406,9 @@ function frame(now: number): void {
   const beam = lastBeam ? { angle: lastBeam.angle, alpha: lastBeam.ttl / BEAM_TTL } : null;
   const t0 = collectStats ? performance.now() : 0;
   // マウスが一度も動いていない(タッチ等)間は、照準用のマウス位置を合成する:
-  // タッチ照準点があればその点、次にスティック照準/保持照準の方向の点、無ければ
-  // 「プレイヤーの向きの水平」(実マウス座標 0,0 だと照準が画面左上に張り付き、
-  // コーンとビームの向きが実用にならないため)
-  const stickAim = !input.mouseSeen && !input.touchPointActive
+  // スティック照準/保持照準の方向の点、無ければ「プレイヤーの向きの水平」
+  // (実マウス座標 0,0 だと照準が画面左上に張り付き、コーンとビームの向きが実用にならないため)
+  const stickAim = !input.mouseSeen
     ? input.touchAimActive
       ? { x: input.touchAimX, y: input.touchAimY }
       : input.heldAimActive ? { x: input.heldAimX, y: input.heldAimY } : null
@@ -418,12 +416,10 @@ function frame(now: number): void {
   const aimR = (canvas.height / 2) * 0.9; // 角度が歪まないよう両軸を同じ半径で取る
   const aimMouseX = input.mouseSeen
     ? input.mouseX * dpr
-    : input.touchPointActive ? input.touchPointX * dpr
-      : stickAim ? canvas.width / 2 + stickAim.x * aimR : canvas.width / 2 + (player.facing * canvas.width) / 4;
+    : stickAim ? canvas.width / 2 + stickAim.x * aimR : canvas.width / 2 + (player.facing * canvas.width) / 4;
   const aimMouseY = input.mouseSeen
     ? input.mouseY * dpr
-    : input.touchPointActive ? input.touchPointY * dpr
-      : stickAim ? canvas.height / 2 + stickAim.y * aimR : canvas.height / 2;
+    : stickAim ? canvas.height / 2 + stickAim.y * aimR : canvas.height / 2;
   renderer.render(store, camera, player, aimMouseX, aimMouseY, simTime, {
     chargeRatio: graviton.chargeRatio,
     beam,

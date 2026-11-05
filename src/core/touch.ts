@@ -1,39 +1,24 @@
+import { hapticWeaponSwitch } from './haptics';
 import type { Input } from './input';
 import { stickKeys, stickVector, type StickVector } from './stick';
+import type { WeaponMode } from './weapon';
 
 /**
- * タッチ端末向けの操作(設計書 2026-11-04-twin-stick-controls)。
- * 左浮動スティック = 移動/梯子、右浮動スティック = パルスの照準+発射。
- * 重粒子砲だけは従来の専用経路(押す→溜め、ドラッグ→照準点、離す→発射、
- * 戻して離す→キャンセル)を維持する。溜め中は左スティック入力を受けない。
+ * タッチ端末向けの操作(設計書 2026-11-04-twin-stick-controls、2026-11-05-weapon-switch)。
+ * 左浮動スティック = 移動/梯子、右浮動スティック = 現在の武器の照準+発射。
+ * 武器(パルス / 重粒子砲)は切替ボタンで切り替え、右スティックの意味論がモードで変わる
+ * (パルス = 倒して連射、砲 = 倒して溜め・離して発射・中心へ戻して離すとキャンセル)。
  * すべて Input のタッチ入口へ流すだけ。スタイルは index.html(pointer: coarse のみ)。
  */
-
-/** 照準ドラッグ開始とみなす、砲ボタン中心からの距離(px) */
-export const AIM_START_DIST = 24;
-/** この距離まで戻して離すとキャンセルになる(px) */
-export const CANCEL_DIST = 38;
-/** 照準点を指の位置から上にずらす量(px)。指の腹で目標を隠さないため */
-export const AIM_OFFSET_Y = 30;
 
 /** スティックの最大ストローク(px) */
 export const STICK_RADIUS = 56;
 /** スティック土台の直径(px) */
 export const STICK_BASE_SIZE = 112;
 
-export type CannonPhase = 'charging' | 'aiming' | 'cancel';
-
-/** 砲ドラッグの位相遷移(純粋関数。Vitest で固定) */
-export function cannonPhase(prev: CannonPhase, dist: number): CannonPhase {
-  if (prev === 'charging') return dist > AIM_START_DIST ? 'aiming' : 'charging';
-  if (prev === 'aiming') return dist <= CANCEL_DIST ? 'cancel' : 'aiming';
-  return dist > CANCEL_DIST ? 'aiming' : 'cancel';
-}
-
 type BtnHandlers = {
   onDown: (e: PointerEvent) => void;
   onUp: () => void;
-  onMove?: (e: PointerEvent) => void;
 };
 
 function makeButton(label: string, cls: string, handlers: BtnHandlers): HTMLButtonElement {
@@ -51,7 +36,6 @@ function makeButton(label: string, cls: string, handlers: BtnHandlers): HTMLButt
     btn.classList.add('on');
     handlers.onDown(e);
   });
-  if (handlers.onMove) btn.addEventListener('pointermove', handlers.onMove);
   const up = (): void => {
     btn.classList.remove('on');
     handlers.onUp();
@@ -67,12 +51,15 @@ const ZERO_STICK: StickVector = { x: 0, y: 0, mag: 0 };
 
 /**
  * 浮動スティックの汎用部品。ゾーン内の任意の点に触れると土台がその場に出現し、
- * 倒し量を stickVector で変換して onChange に流す。受け付けるのは 1 本の指だけ。
+ * 倒し量を stickVector で変換して onChange に流す。onChange の第 2 引数は未加工の倒し比
+ * (最大ストローク比。デッドゾーン処理前で、砲スティックの位相判定が中心への戻し量を見るために使う)。
+ * onEnd はセッション終了(指を離した/強制解放)で 1 回呼ばれる。受け付けるのは 1 本の指だけ。
  * release() は外部(砲の溜め開始)から強制的に離した状態にする。
  */
 function makeStick(
   zoneCls: string,
-  onChange: (vec: StickVector) => void,
+  onChange: (vec: StickVector, rawRatio: number) => void,
+  onEnd?: () => void,
 ): { el: HTMLElement; release: () => void } {
   const zone = document.createElement('div');
   zone.className = `tstick-zone ${zoneCls}`;
@@ -91,7 +78,10 @@ function makeStick(
     if (pointerId === null) return;
     pointerId = null;
     base.style.display = 'none';
-    onChange(ZERO_STICK);
+    // onEnd を先に呼ぶ: セッション終了の判定(砲スティックの発射/キャンセルの振り分け)は
+    // 「離す直前の位相」で行うため、終了に伴うゼロの onChange で位相を進めてはいけない
+    onEnd?.();
+    onChange(ZERO_STICK, 0);
   };
 
   zone.addEventListener('pointerdown', (e) => {
@@ -109,7 +99,7 @@ function makeStick(
     base.style.left = `${originX - STICK_BASE_SIZE / 2}px`;
     base.style.top = `${originY - STICK_BASE_SIZE / 2}px`;
     knob.style.transform = 'translate(-50%, -50%)';
-    onChange(ZERO_STICK);
+    onChange(ZERO_STICK, 0);
   });
   zone.addEventListener('pointermove', (e) => {
     if (e.pointerId !== pointerId) return;
@@ -119,7 +109,7 @@ function makeStick(
     const dist = Math.hypot(dx, dy);
     const cl = dist > STICK_RADIUS ? STICK_RADIUS / dist : 1;
     knob.style.transform = `translate(calc(-50% + ${dx * cl}px), calc(-50% + ${dy * cl}px))`;
-    onChange(stickVector(dx, dy, STICK_RADIUS));
+    onChange(stickVector(dx, dy, STICK_RADIUS), dist / STICK_RADIUS);
   });
   const up = (e: PointerEvent): void => {
     if (e.pointerId === pointerId) endStick();
@@ -137,8 +127,6 @@ export function installTouchControls(input: Input): void {
   const root = document.createElement('div');
   root.id = 'touch';
 
-  let cannonActive = false;
-
   // 左スティック: 実効ベクトルをデジタル変換し、差分だけ touchDown/touchUp に流す
   type MoveKeys = ReturnType<typeof stickKeys>;
   const NO_KEYS: MoveKeys = { left: false, right: false, up: false, down: false };
@@ -147,6 +135,9 @@ export function installTouchControls(input: Input): void {
     if (is && !was) input.touchDown(code);
     else if (!is && was) input.touchUp(code);
   };
+  // 砲の溜め中か(Input の cannonStickHeld と同期する。溜め中は左スティックを受けない)。
+  // 砲モードであるだけでは立たない — 拘束は「溜めている間」だけ(設計 §3-5)
+  let cannonActive = false;
   const applyLeftStick = (vec: StickVector): void => {
     // 溜め中は倒した入力を受けない(ゼロへの解放はいつでも通す)
     const next = cannonActive && vec.mag > 0 ? NO_KEYS : stickKeys(vec);
@@ -159,54 +150,63 @@ export function installTouchControls(input: Input): void {
   const leftStick = makeStick('left', applyLeftStick);
   root.appendChild(leftStick.el);
 
-  // 右スティック: 方向 = パルスの照準(アナログ)、倒し量で照準有効/発射を判定する。
-  // 単位ベクトルと大きさに分けて Input の照準チャンネルへ流す
-  const rightStick = makeStick('right', (vec) => {
-    if (vec.mag > 0) input.setTouchAim(vec.x / vec.mag, vec.y / vec.mag, vec.mag);
-    else input.clearTouchAim();
-  });
+  // 溜めの開始/終了に合わせて左スティックの拘束を同期する(開始時は移動入力を一括解放する)
+  const syncCannonActive = (): void => {
+    const active = input.cannonStickHeld;
+    if (active === cannonActive) return;
+    cannonActive = active;
+    if (active) {
+      leftStick.release(); // 溜め中は止まって狙う
+      root.classList.add('aiming');
+    } else {
+      root.classList.remove('aiming');
+    }
+  };
+
+  // 右スティック: 方向 = 現在の武器の照準(アナログ、両モード共通)、倒し量の意味論はモードで変わる。
+  // 照準は単位ベクトルと大きさに分けて Input の照準チャンネルへ、未加工の倒し比は砲スティックの
+  // 位相チャンネルへ流す(位相・発射候補・キャンセルの判定は Input 側)
+  const rightStick = makeStick(
+    'right',
+    (vec, rawRatio) => {
+      if (vec.mag > 0) input.setTouchAim(vec.x / vec.mag, vec.y / vec.mag, vec.mag);
+      else input.clearTouchAim();
+      input.touchStick(rawRatio);
+      syncCannonActive();
+    },
+    () => {
+      input.touchStickEnd();
+      syncCannonActive();
+    },
+  );
   root.appendChild(rightStick.el);
 
-  // 砲ボタン(押す→溜め、ドラッグ→照準点、離す→発射、戻して離す→キャンセル)
-  let phase: CannonPhase = 'charging';
-  let centerX = 0;
-  let centerY = 0;
-  const cannonBtn = makeButton('砲', 'sz-cannon', {
+  // 切替ボタン(旧「砲」ボタンの位置・サイズをそのまま使う)。ラベルは「切り替えた先」ではなく
+  // 現在の武器を表示し、モード明示の主担い手にする(設計 §1.1、§2-1)。切り替えは押下エッジのみ。
+  const weaponBtn = makeButton('パルス', 'sz-weapon', {
     onDown: () => {
-      cannonActive = true;
-      leftStick.release(); // 溜め中は止まって狙う(移動入力を一括解放)
-      root.classList.add('aiming');
-      const r = cannonBtn.getBoundingClientRect();
-      centerX = r.left + r.width / 2;
-      centerY = r.top + r.height / 2;
-      phase = 'charging';
-      input.touchDown('KeyF');
+      input.toggleWeapon(); // 溜め中なら Input 側でキャンセルしてから切り替わる
+      hapticWeaponSwitch();
+      syncCannonActive(); // キャンセルで溜めが落ちたら左スティックの拘束も解く
     },
-    onMove: (e) => {
-      if (!cannonActive) return;
-      const dist = Math.hypot(e.clientX - centerX, e.clientY - centerY);
-      phase = cannonPhase(phase, dist);
-      cannonBtn.classList.toggle('cancel-armed', phase === 'cancel');
-      if (phase === 'aiming') input.setTouchPoint(e.clientX, e.clientY - AIM_OFFSET_Y);
-      else input.clearTouchPoint();
-    },
-    onUp: () => {
-      if (!cannonActive) return;
-      if (phase === 'cancel') input.requestFireCancel();
-      input.touchUp('KeyF');
-      input.clearTouchPoint();
-      cannonBtn.classList.remove('cancel-armed');
-      root.classList.remove('aiming');
-      cannonActive = false;
-    },
+    onUp: () => {},
   });
+  // モード表示の同期: ボタンのラベルと色、#touch の mode-cannon(右スティックの色味、設計 §2-2)。
+  // 切替ボタンの押下だけでなく、発射後の自動復帰(段階1 Task 3)でも同じ経路で同期される
+  const syncWeaponUi = (mode: WeaponMode): void => {
+    weaponBtn.textContent = mode === 'cannon' ? '砲' : 'パルス';
+    weaponBtn.classList.toggle('mode-cannon', mode === 'cannon');
+    root.classList.toggle('mode-cannon', mode === 'cannon');
+  };
+  input.onWeaponChange(syncWeaponUi);
+  syncWeaponUi(input.weaponMode);
 
-  // 右クラスタは「砲」「跳」の 1 段だけ(パルスは右スティックへ移行した)
+  // 右クラスタは「武器(切替)」「跳」の 1 段だけ(発射は右スティックが担う)
   const right = document.createElement('div');
   right.className = 'tcluster right';
   const rightRow = document.createElement('div');
   rightRow.className = 'trow';
-  rightRow.appendChild(cannonBtn);
+  rightRow.appendChild(weaponBtn);
   rightRow.appendChild(
     makeButton('跳', 'sz-jump', {
       onDown: () => input.touchDown('Space'),
