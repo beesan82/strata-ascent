@@ -3,7 +3,7 @@ import { landmarkAt, rampTopY, type Landmark, type LandmarkKind } from '../world
 import { restPointAt } from '../world/restpoint';
 import { biomeForCell } from './biome';
 import {
-  COOLING_BEAM_HEIGHT, DISCHARGE_DUTY, dischargeOn, landmarkLightsInView, REST_WARM_ALPHA, REST_WARM_COLOR, RIFT_ALPHA,
+  COOLING_BEAM_HEIGHT, DISCHARGE_DUTY, dischargeOn, landmarkLightsInView, REST_WARM_ALPHA, REST_WARM_COLOR, restLampColor, RIFT_ALPHA,
 } from './landmarkLight';
 import { ambientDelta, REST_AMBIENT } from './beacon';
 
@@ -110,16 +110,32 @@ describe('landmarkLightsInView', () => {
       expect(landmarkLightsInView(seed, lm.x, lm.top + 600, 400, 200, 1).filter((r) => r.color === color).length).toBe(0);
     }
   });
-  it('休憩点: 視野内の箱の内側に 1 枚', () => {
+  it('休憩点: 視野内の箱の内側に 1 枚、色は地区 accent と暖色の中間', () => {
     const rp = restPointAt(20260711, 0, 0);
-    const warm = landmarkLightsInView(20260711, rp.x, rp.floorY, 60, 40, 0).filter((r) => r.color === REST_WARM_COLOR);
+    const color = restLampColor(20260711, rp.cell);
+    const warm = landmarkLightsInView(20260711, rp.x, rp.floorY, 60, 40, 0).filter((r) => r.color === color);
     expect(warm.length).toBe(1);
-    expect(warm[0]).toEqual({ x0: rp.left + 1, y0: rp.floorY - 12, x1: rp.right, y1: rp.floorY, alpha: REST_WARM_ALPHA, color: REST_WARM_COLOR });
-    expect(landmarkLightsInView(20260711, rp.x + 200, rp.floorY, 60, 40, 0).filter((r) => r.color === REST_WARM_COLOR).length).toBe(0);
+    expect(warm[0]).toEqual({ x0: rp.left + 1, y0: rp.floorY - 12, x1: rp.right, y1: rp.floorY, alpha: REST_WARM_ALPHA, color });
+    expect(landmarkLightsInView(20260711, rp.x + 200, rp.floorY, 60, 40, 0).filter((r) => r.color === color).length).toBe(0);
   });
   it('決定論', () => {
     const { seed, lm } = landmarks()[0];
     expect(landmarkLightsInView(seed, lm.x, lm.top, 200, 100, 0.5)).toEqual(landmarkLightsInView(seed, lm.x, lm.top, 200, 100, 0.5));
+  });
+});
+
+describe('restLampColor(段階 3: 灯色の地区 accent 追随)', () => {
+  it('地区 accent と暖色の中間色で、地区ごとに異なる', () => {
+    const colors = new Set<string>();
+    for (let cell = -14; cell < 14; cell++) {
+      const expected = biomeForCell(20260711, cell).accent;
+      const c = restLampColor(20260711, cell);
+      // 暖色と accent の中間: どちらとも一致しない(両成分が混ざる)
+      expect(c).not.toBe(REST_WARM_COLOR);
+      expect(c).not.toBe(expected);
+      colors.add(c);
+    }
+    expect(colors.size).toBeGreaterThanOrEqual(5);
   });
 });
 

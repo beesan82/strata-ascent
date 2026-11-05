@@ -4,7 +4,7 @@ import { isTowerFamily, landmarkAt, rampTopY, type Landmark } from '../world/lan
 import { hash2 } from '../world/noise';
 import { REST_HEIGHT, restPointAt } from '../world/restpoint';
 import { beaconPulse } from './beacon';
-import { biomeForCell } from './biome';
+import { biomeForCell, mixHex } from './biome';
 
 /**
  * 大構造の固有の光(設計書 §6.2、ゾーン化 段階 2 で地区変種の光へ拡張)と休憩点の暖色(§6.3)。
@@ -39,6 +39,14 @@ const RIFT_RAY_TOP = 6;
 /** 休憩点の暖色とそのアルファ(箱の内側に 1 枚)。0.1 では箱全体が橙の塊になり灯の暈が読めなかった */
 export const REST_WARM_COLOR = '#d8903a';
 export const REST_WARM_ALPHA = 0.05;
+
+/**
+ * 休憩点の灯の色(ゾーン化 段階 3、設計 §4.2)。暖色を基準に、その地区の accent へ
+ * 半分寄せる。箱の暖色矩形と、焼き込み側の灯の暈(chunkbake)が同じ色を共有する。
+ */
+export function restLampColor(seed: number, cell: number): string {
+  return mixHex(REST_WARM_COLOR, biomeForCell(seed, cell).accent, 0.5);
+}
 
 /** ワールド座標(タイル)の平坦な矩形 [x0,x1)×[y0,y1) */
 export interface LightRect {
@@ -121,7 +129,7 @@ export function landmarkLightsInView(seed: number, camX: number, camY: number, s
       }
       const rp = restPointAt(seed, cell, k);
       if (rp.right >= x0 && rp.left <= x1 && rp.floorY >= y0 && rp.floorY - REST_HEIGHT - 1 <= y1) {
-        out.push({ x0: rp.left + 1, y0: rp.floorY - REST_HEIGHT, x1: rp.right, y1: rp.floorY, alpha: REST_WARM_ALPHA, color: REST_WARM_COLOR });
+        out.push({ x0: rp.left + 1, y0: rp.floorY - REST_HEIGHT, x1: rp.right, y1: rp.floorY, alpha: REST_WARM_ALPHA, color: restLampColor(seed, rp.cell) });
       }
     }
   }

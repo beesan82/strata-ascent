@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { CHUNK_SIZE, TILE } from '../world/tiles';
 import { tileAt } from '../world/worldgen';
-import { DECOR_MARGIN, DecorCache, decorOpBounds, decorateChunk, hatchSpacingAt, PALETTE } from './decor';
+import {
+  ANTECHAMBER_DEPTH, ANTECHAMBER_FADE, ANTECHAMBER_HALF_WIDTH, interfaceBottom, nearestPassage, passageX,
+} from '../world/interface';
+import { biomeBoundary, biomeIdForCell, BIOME_IDS, type BiomeId } from '../world/biomeCells';
+import {
+  antechamberNextBiome, DECOR_MARGIN, DecorCache, decorOpBounds, decorateChunk, DISTRICT_DECOR_COLORS,
+  hatchSpacingAt, PALETTE, type DecorOp,
+} from './decor';
+import { VISUAL_BIOME } from './biome';
+import { STEEL, mixHex } from './steel';
 
 // decorateChunk は (seed,cx,cy) の純関数。段階Fの広域スキャンは同じチャンクを
 // 複数テストで走査するため、seed=42 の結果をメモ化して再計算を避ける(挙動不変・高速化)。
@@ -136,6 +145,105 @@ describe('decorateChunk セグメント装飾', () => {
       return set;
     };
     expect(collect(0)).toEqual(collect(1));
+  });
+});
+
+describe('前室の先行表示(ゾーン化 段階 3、設計 §3-2)', () => {
+  it('antechamberNextBiome: 前室の帯の中では上の層の地区、外では null', () => {
+    const seed = 42;
+    const cell = -1;
+    const bottom = interfaceBottom(seed, cell);
+    const px = passageX(seed, cell, 0);
+    // 孔の真下(前室の中心)は次の地区(上の層)を返す
+    expect(antechamberNextBiome(seed, px, bottom + 10)).toBe(biomeIdForCell(seed, cell - 1));
+    // 帯より下(圧縮帯以深)では null
+    expect(antechamberNextBiome(seed, px, bottom + ANTECHAMBER_DEPTH + 30)).toBeNull();
+    // 孔から十分に遠い場所(最寄りの孔まで 160 超)では null
+    let farX = px + 200;
+    while (Math.abs(farX - nearestPassage(seed, cell, farX).x) <= ANTECHAMBER_HALF_WIDTH + ANTECHAMBER_FADE) farX += 8;
+    expect(antechamberNextBiome(seed, farX, bottom + 10)).toBeNull();
+  });
+
+  it('前室の床セグメントに、次の地区の accent で染めた配管か帯が出る', () => {
+    const seed = 42;
+    const cell = -1;
+    const wy = interfaceBottom(seed, cell) + ANTECHAMBER_DEPTH; // 前室の底の床の行
+    const accent = VISUAL_BIOME[biomeIdForCell(seed, cell - 1)].accent;
+    const expected = new Set([mixHex(PALETTE.pipe, accent, 0.5), mixHex(STEEL.post, accent, 0.55)]);
+    let found = 0;
+    for (const cy of [Math.floor(wy / 64), Math.floor(wy / 64) + 1]) {
+      for (let cx = -4; cx < 4; cx++) {
+        for (const op of decorateChunk(seed, cx, cy)) {
+          if (op.kind !== 'line' || !expected.has(op.color)) continue;
+          const wyOp = cy * 64 + op.y1;
+          if (Math.abs(wyOp - wy) < 1.6) found++;
+        }
+      }
+    }
+    expect(found).toBeGreaterThan(0);
+  });
+
+  it('前室の accent リベットは前室の帯の中だけに出る', () => {
+    const seed = 42;
+    const colorToBiome = new Map(BIOME_IDS.map((id) => [mixHex(PALETTE.rivet, VISUAL_BIOME[id].accent, 0.6), id]));
+    let found = 0;
+    for (let cx = -2; cx < 3; cx++) {
+      for (let cy = -7; cy < 2; cy++) {
+        for (const op of decorateChunk(seed, cx, cy)) {
+          if (op.kind !== 'dot') continue;
+          const id = colorToBiome.get(op.color);
+          if (!id) continue;
+          const wx = cx * 64 + Math.floor(op.x);
+          const wy = cy * 64 + Math.floor(op.y);
+          expect(antechamberNextBiome(seed, wx, wy)).toBe(id);
+          found++;
+        }
+      }
+    }
+    expect(found).toBeGreaterThan(0);
+  });
+});
+
+describe('地区固有の小物・装飾(ゾーン化 段階 3)', () => {
+  /** seed 42 で地区 id のセルの中央付近 3x3 チャンクの装飾を集める */
+  function opsInDistrict(id: BiomeId): DecorOp[] {
+    const seed = 42;
+    let cell = 0;
+    while (biomeIdForCell(seed, cell) !== id) cell--;
+    const midY = Math.round((biomeBoundary(seed, cell) + biomeBoundary(seed, cell + 1)) / 2);
+    const cy = Math.floor(midY / CHUNK_SIZE);
+    const out: DecorOp[] = [];
+    for (let cx = -1; cx < 2; cx++) {
+      for (let cyy = cy - 1; cyy <= cy + 1; cyy++) out.push(...decorateChunk(seed, cx, cyy));
+    }
+    return out;
+  }
+
+  it('居住区画には残光の窓灯、電力区にはケーブル束(真っ直ぐな線)、精錬区には煤が出る', () => {
+    const hab = opsInDistrict('habitation');
+    expect(hab.some((op) => op.kind === 'dot' && op.color === DISTRICT_DECOR_COLORS.habitationWindow)).toBe(true);
+    const power = opsInDistrict('power');
+    expect(power.some((op) => op.kind === 'line' && op.color === PALETTE.cable)).toBe(true);
+    const foundry = opsInDistrict('foundry');
+    expect(foundry.some((op) => op.kind === 'grad' && op.stops[0][1] === DISTRICT_DECOR_COLORS.foundrySoot)).toBe(true);
+    expect(foundry.some((op) => op.kind === 'dot' && op.color === DISTRICT_DECOR_COLORS.foundryEmber)).toBe(true);
+  });
+
+  it('廃棄沈殿層には錆色の残骸、生体異物区には根、大空洞水域には結露が出る', () => {
+    const disposal = opsInDistrict('disposal');
+    expect(disposal.some((op) => op.kind === 'poly' && op.fill && op.color === DISTRICT_DECOR_COLORS.disposalDebris)).toBe(true);
+    const biomech = opsInDistrict('biomech');
+    expect(biomech.some((op) => op.kind === 'poly' && op.color === DISTRICT_DECOR_COLORS.biomechRoot)).toBe(true);
+    const water = opsInDistrict('waterVoid');
+    expect(water.some((op) => op.kind === 'dot' && op.color === DISTRICT_DECOR_COLORS.waterCondensation)).toBe(true);
+  });
+
+  it('地区固有の小物は他の地区には出ない(寒鋼基層は基準 = 固有物なし)', () => {
+    const cold = opsInDistrict('coldSteel');
+    expect(cold.some((op) => op.kind === 'dot' && op.color === DISTRICT_DECOR_COLORS.habitationWindow)).toBe(false);
+    expect(cold.some((op) => op.kind === 'line' && op.color === PALETTE.cable)).toBe(false);
+    expect(cold.some((op) => op.kind === 'poly' && op.color === DISTRICT_DECOR_COLORS.biomechRoot)).toBe(false);
+    expect(cold.some((op) => op.kind === 'dot' && op.color === DISTRICT_DECOR_COLORS.waterCondensation)).toBe(false);
   });
 });
 

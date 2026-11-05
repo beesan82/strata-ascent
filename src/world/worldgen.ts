@@ -3,6 +3,7 @@ import { megaFacilityAt } from './megafacility';
 import { networkTileAt, sectorTrunkTileAt } from './network';
 import { biomeCellAt, biomeIdForCell } from './biomeCells';
 import { ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceTileAt, passageX, terrainModsAt, type TerrainMods } from './interface';
+import { grandHallAt } from './grandhall';
 import { landmarkTileAt } from './landmark';
 import { restPointTileAt } from './restpoint';
 import { terrainProfileFor } from './biomeTerrain';
@@ -43,6 +44,13 @@ function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: T
   if (!mods?.suppressLadder && x === groupLadderX(seed, x)) return TILE.LADDER;
   // 前室の底は連続した床。
   if (mods?.forceFloor) return TILE.SOLID;
+
+  // 2a. 大広間(§4.3)。内側は空気、底に 1 本だけ床の行を残す。梯子列は上の判定で
+  // 既に返しているため、縦の到達可能性は広間の中でも保たれる
+  const hall = grandHallAt(seed, cell);
+  if (hall && x >= hall.x0 && x < hall.x1 && y >= hall.y0 && y < hall.y1) {
+    return y === hall.floorY ? TILE.SOLID : TILE.AIR;
+  }
 
   // 2. 巨大空洞(低頻度ノイズ)。空洞内は bridgeEvery 床帯ごとの橋だけ残る
   const cavity = valueNoise2(seed + 101, x / profile.cavityScale, y / profile.cavityScale) > profile.cavityThreshold * (mods?.cavityScale ?? 1);

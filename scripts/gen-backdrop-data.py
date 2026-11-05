@@ -46,7 +46,7 @@ def main() -> None:
         "",
         "/**",
         " * 地区別遠景(AI 生成)の JPEG base64。scripts/gen-backdrop-data.py で生成する(手で編集しない)。",
-        " * 精錬区は素材未生成のため不在(従来の手続きシルエットで表示する)。",
+        " * 全 7 地区ぶんの素材が揃っている。",
         " */",
         "export const BACKDROP_JPEG_BASE64: Partial<Record<BiomeId, string>> = {",
     ]

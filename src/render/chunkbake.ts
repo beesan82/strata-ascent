@@ -8,7 +8,7 @@ import { conduitAt } from '../world/network';
 import { facilityTileAt } from '../world/facility';
 import { megaFacilityAt } from '../world/megafacility';
 import { nearestPassage, terrainModsAt } from '../world/interface';
-import { biomeCellAt } from '../world/biomeCells';
+import { biomeCellAt, biomeIdForCell } from '../world/biomeCells';
 import {
   EDGE_PX, HARD_EDGE_BOTTOM, HARD_EDGE_SIDE, HARD_EDGE_TOP, HARD_FILL, HARD_SEAM,
   hardEdgeStrength, hardRibAt, hardSeamAt, holeCenterX,
@@ -17,11 +17,18 @@ import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome'
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
 import { DECOR_MARGIN, DecorCache, decorOpBounds, type DecorOp } from './decor';
 import { craterCells, dirtyBoundsAround, expandRect, type CellRect } from './dirtyBounds';
-import { traceAt, type Trace } from './traces';
+import { restLampCellAt, restTallyCellAt, REST_TALLY_STROKES, traceAt, type Trace } from './traces';
+import { restLampColor } from './landmarkLight';
 import { STEEL } from './steel';
 
 /** 焼き込み解像度(px/タイル)。表示は拡縮されるが16pxあれば線は読める */
 export const BAKE_PPT = 16;
+
+/** #rrggbb を rgba() 文字列にする(灯の暈のグラデーション用) */
+function rgbaOf(hex: string, alpha: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
 
 /** Bounds the atlas cache while retaining visible progress through the 400-tile blend band. */
 export const CHUNK_VISUAL_BLEND_STEPS = 16;
@@ -430,13 +437,22 @@ export class ChunkBaker {
         if (here === TILE.AIR) {
           if (!isSolid(around(tx, ty + 1))) continue;
           const tr = traceAt(this.seed, wx, wy, 'floor');
-          if (tr) this.drawFloorTrace(ctx, tr, tx, ty);
+          if (tr) {
+            // 休憩点の箱の灯だけは地区 accent に寄せた色で暈を描く(段階 3、設計 §4.2)
+            const lampCell = tr.type === 'lamp' ? restLampCellAt(this.seed, wx, wy) : null;
+            this.drawFloorTrace(ctx, tr, tx, ty, lampCell === null ? undefined : restLampColor(this.seed, lampCell));
+          }
         } else if (here === TILE.SOLID) {
           const faceLeft = !isSolid(around(tx - 1, ty));
           const faceRight = !isSolid(around(tx + 1, ty));
           if (!faceLeft && !faceRight) continue;
           const tr = traceAt(this.seed, wx, wy, 'wall');
-          if (tr) this.drawWallTrace(ctx, tr, tx, ty, faceLeft ? -1 : 1);
+          if (tr) {
+            // 休憩点の箱の刻印は地区ごとの刻線数で描く(段階 3、設計 §4.2 の刻印)
+            const tallyCell = tr.type === 'tally' ? restTallyCellAt(this.seed, wx, wy) : null;
+            const strokes = tallyCell === null ? undefined : REST_TALLY_STROKES[biomeIdForCell(this.seed, tallyCell)];
+            this.drawWallTrace(ctx, tr, tx, ty, faceLeft ? -1 : 1, strokes);
+          }
         }
       }
     }
@@ -524,8 +540,9 @@ export class ChunkBaker {
     }
   }
 
-  /** 床の縁の痕跡。タイル(tx,ty)内の正規化座標で描く(y=1が床面)。暗い色調。 */
-  private drawFloorTrace(ctx: CanvasRenderingContext2D, tr: Trace, tx: number, ty: number): void {
+  /** 床の縁の痕跡。タイル(tx,ty)内の正規化座標で描く(y=1が床面)。暗い色調。
+   * lampColor は休憩点の灯だけに渡る地区色の暈(通常の落ちている灯は従来の金色)。 */
+  private drawFloorTrace(ctx: CanvasRenderingContext2D, tr: Trace, tx: number, ty: number, lampColor?: string): void {
     const P = BAKE_PPT;
     const X = (x: number) => (tx + x) * P;
     const Y = (y: number) => (ty + y) * P;
@@ -551,8 +568,8 @@ export class ChunkBaker {
       case 'lamp': {
         const gx = X(0.5), gy = Y(0.9);
         const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, 0.6 * P);
-        g.addColorStop(0, 'rgba(202,166,74,0.35)');
-        g.addColorStop(1, 'rgba(202,166,74,0)');
+        g.addColorStop(0, lampColor ? rgbaOf(lampColor, 0.35) : 'rgba(202,166,74,0.35)');
+        g.addColorStop(1, lampColor ? rgbaOf(lampColor, 0) : 'rgba(202,166,74,0)');
         ctx.fillStyle = g;
         ctx.beginPath(); ctx.arc(gx, gy, 0.6 * P, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = '#141d27';
@@ -583,8 +600,9 @@ export class ChunkBaker {
     ctx.restore();
   }
 
-  /** 壁面の痕跡。露出面側(dir: -1=左,1=右)寄りに描く。 */
-  private drawWallTrace(ctx: CanvasRenderingContext2D, tr: Trace, tx: number, ty: number, dir: -1 | 1): void {
+  /** 壁面の痕跡。露出面側(dir: -1=左,1=右)寄りに描く。
+   * tallyStrokes は休憩点の刻印だけに渡る地区ごとの刻線数(通常の刻印は従来の 4 本)。 */
+  private drawWallTrace(ctx: CanvasRenderingContext2D, tr: Trace, tx: number, ty: number, dir: -1 | 1, tallyStrokes?: number): void {
     const P = BAKE_PPT;
     const base = dir === -1 ? 0.12 : 0.62;
     const X = (x: number) => (tx + base + x) * P;
@@ -596,8 +614,10 @@ export class ChunkBaker {
         ctx.strokeStyle = '#5a6a70';
         ctx.globalAlpha = 0.8;
         ctx.lineWidth = Math.max(1, 0.04 * P);
-        for (let i = 0; i < 4; i++) {
-          ctx.beginPath(); ctx.moveTo(X(0.02 + i * 0.07), Y(0.35)); ctx.lineTo(X(0.02 + i * 0.07), Y(0.6)); ctx.stroke();
+        const strokes = tallyStrokes ?? 4;
+        const step = strokes > 1 ? 0.21 / (strokes - 1) : 0;
+        for (let i = 0; i < strokes; i++) {
+          ctx.beginPath(); ctx.moveTo(X(0.02 + i * step), Y(0.35)); ctx.lineTo(X(0.02 + i * step), Y(0.6)); ctx.stroke();
         }
         ctx.beginPath(); ctx.moveTo(X(-0.02), Y(0.48)); ctx.lineTo(X(0.24), Y(0.47)); ctx.stroke();
         break;
