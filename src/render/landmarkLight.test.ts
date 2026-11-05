@@ -1,58 +1,101 @@
 import { describe, expect, it } from 'vitest';
-import { landmarkAt, rampTopY, type Landmark } from '../world/landmark';
+import { landmarkAt, rampTopY, type Landmark, type LandmarkKind } from '../world/landmark';
 import { restPointAt } from '../world/restpoint';
 import { biomeForCell } from './biome';
 import {
-  landmarkLightsInView, REST_WARM_ALPHA, REST_WARM_COLOR, RIFT_ALPHA, TOWER_BLINK_COLOR, TOWER_BLINK_DUTY,
-  TOWER_BLINK_PERIOD, towerBlink,
+  COOLING_BEAM_HEIGHT, DISCHARGE_DUTY, dischargeOn, landmarkLightsInView, REST_WARM_ALPHA, REST_WARM_COLOR, RIFT_ALPHA,
 } from './landmarkLight';
 import { ambientDelta, REST_AMBIENT } from './beacon';
 
 const seeds = [1, 42, 20260711];
 const landmarks = (): { seed: number; lm: Landmark }[] =>
-  seeds.flatMap((seed) => [-2, 1].flatMap((cell) => [-3, 0, 3].map((k) => ({ seed, lm: landmarkAt(seed, cell, k)! }))));
+  seeds.flatMap((seed) => [-3, -2, -1, 0, 1, 2, 3].flatMap((cell) =>
+    [-4, -3, -2, -1, 0, 1, 2, 3, 4].flatMap((k) => {
+      const lm = landmarkAt(seed, cell, k);
+      return lm ? [{ seed, lm }] : [];
+    })));
+const byKind = (kind: LandmarkKind): { seed: number; lm: Landmark }[] => landmarks().filter(({ lm }) => lm.kind === kind);
 
-describe('towerBlink', () => {
-  it('周期 1.6 秒で約 15% 点灯し、k で位相がずれる', () => {
+describe('dischargeOn', () => {
+  it('点灯率は DISCHARGE_DUTY 前後で、k でずれ、決定論', () => {
     let on = 0;
-    const N = 160;
-    for (let i = 0; i < N; i++) if (towerBlink((i / N) * TOWER_BLINK_PERIOD, 0)) on++;
-    expect(on / N).toBeCloseTo(TOWER_BLINK_DUTY, 1);
+    const N = 900;
+    for (let i = 0; i < N; i++) if (dischargeOn(i / 90, 0)) on++;
+    expect(on / N).toBeGreaterThan(DISCHARGE_DUTY - 0.12);
+    expect(on / N).toBeLessThan(DISCHARGE_DUTY + 0.12);
     let differs = false;
-    for (let i = 0; i < N; i++) if (towerBlink((i / N) * TOWER_BLINK_PERIOD, 0) !== towerBlink((i / N) * TOWER_BLINK_PERIOD, 1)) differs = true;
+    for (let i = 0; i < N; i++) if (dischargeOn(i / 90, 0) !== dischargeOn(i / 90, 1)) differs = true;
     expect(differs).toBe(true);
-    expect(towerBlink(0.3, 2)).toBe(towerBlink(0.3 + TOWER_BLINK_PERIOD, 2));
+    expect(dischargeOn(0.3, 2)).toBe(dischargeOn(0.3, 2));
   });
 });
 
 describe('landmarkLightsInView', () => {
-  it('塔: 点灯中だけ 2 枚、頂部の床の上に。消灯中は無し', () => {
-    let towers = 0;
-    for (const { seed, lm } of landmarks()) {
-      if (lm.kind !== 'tower') continue;
-      towers++;
-      let tOn = 0, tOff = 0;
-      for (let t = 0; t < TOWER_BLINK_PERIOD; t += 0.01) { if (towerBlink(t, lm.k)) tOn = t; else tOff = t; }
-      const on = landmarkLightsInView(seed, lm.x, lm.top, 60, 40, tOn).filter((r) => r.color === TOWER_BLINK_COLOR);
+  it('冷却塔: 青い光柱 + 灯 + 暈の 3 枚が常時、地区の accent で', () => {
+    const list = byKind('cooling');
+    expect(list.length).toBeGreaterThan(0);
+    for (const { seed, lm } of list) {
+      const color = biomeForCell(seed, lm.cell).accent;
+      const rects = landmarkLightsInView(seed, lm.x, lm.top - 20, 120, 120, 0).filter((r) => r.color === color);
+      expect(rects.length).toBe(3);
+      const beam = rects.find((r) => r.y0 === lm.top - COOLING_BEAM_HEIGHT);
+      expect(beam).toBeDefined();
+      expect(beam!.x0).toBe(lm.x - 2);
+      expect(beam!.x1).toBe(lm.x + 2);
+      // 視野外では出ない
+      expect(landmarkLightsInView(seed, lm.x + 500, lm.top, 60, 40, 0).filter((r) => r.color === color).length).toBe(0);
+    }
+  });
+  it('変圧塔: 放電が点いている間だけ 2 枚、消えている間は無し', () => {
+    const list = byKind('transformer');
+    expect(list.length).toBeGreaterThan(0);
+    for (const { seed, lm } of list) {
+      const color = biomeForCell(seed, lm.cell).accent;
+      let tOn = -1, tOff = -1;
+      for (let t = 0; t < 10 && (tOn < 0 || tOff < 0); t += 1 / 90) {
+        if (dischargeOn(t, lm.k)) { if (tOn < 0) tOn = t; } else if (tOff < 0) tOff = t;
+      }
+      expect(tOn).toBeGreaterThanOrEqual(0);
+      expect(tOff).toBeGreaterThanOrEqual(0);
+      const on = landmarkLightsInView(seed, lm.x, lm.top, 60, 40, tOn).filter((r) => r.color === color);
       expect(on.length).toBe(2);
       for (const r of on) {
-        expect(r.x0).toBeGreaterThanOrEqual(lm.x - 4);
-        expect(r.x1).toBeLessThanOrEqual(lm.x + 4);
         expect(r.y0).toBeGreaterThanOrEqual(lm.top - 12);
         expect(r.y1).toBeLessThanOrEqual(lm.top - 8);
         expect(r.alpha).toBeGreaterThan(0);
       }
-      expect(landmarkLightsInView(seed, lm.x, lm.top, 60, 40, tOff).filter((r) => r.color === TOWER_BLINK_COLOR).length).toBe(0);
-      // 視野外
-      expect(landmarkLightsInView(seed, lm.x + 500, lm.top, 60, 40, tOn).filter((r) => r.color === TOWER_BLINK_COLOR).length).toBe(0);
+      expect(landmarkLightsInView(seed, lm.x, lm.top, 60, 40, tOff).filter((r) => r.color === color).length).toBe(0);
     }
-    expect(towers).toBeGreaterThan(0);
+  });
+  it('煙突塔: 常時点灯の 2 枚、椎骨柱: 脈打つ 2 枚。どちらも地区の accent', () => {
+    for (const kind of ['chimney', 'vertebra'] as const) {
+      const list = byKind(kind);
+      expect(list.length).toBeGreaterThan(0);
+      for (const { seed, lm } of list) {
+        const color = biomeForCell(seed, lm.cell).accent;
+        for (const t of [0, 0.7, 2.3]) {
+          const rects = landmarkLightsInView(seed, lm.x, lm.top, 60, 40, t).filter((r) => r.color === color);
+          expect(rects.length).toBe(2);
+          for (const r of rects) expect(r.alpha).toBeGreaterThan(0);
+        }
+      }
+    }
+  });
+  it('大桁橋・吹き抜けホールは無光', () => {
+    for (const kind of ['girder', 'atrium'] as const) {
+      for (const { seed, lm } of byKind(kind)) {
+        // 視野は層の内側だけに絞る(上下の層の崩落・塔系の光が色で混ざらないように)
+        const spanY = Math.min(200, lm.floor - lm.top - 40);
+        const rects = landmarkLightsInView(seed, lm.x, (lm.top + lm.floor) / 2, 300, spanY, 1);
+        const color = biomeForCell(seed, lm.cell).accent;
+        expect(rects.filter((r) => r.color === color).length).toBe(0);
+      }
+    }
   });
   it('崩落: 上の層の accent の帯 3 本が裂け目の中、板の上 6 行から斜路の上面まで', () => {
-    let collapses = 0;
-    for (const { seed, lm } of landmarks()) {
-      if (lm.kind !== 'collapse') continue;
-      collapses++;
+    const list = byKind('collapse');
+    expect(list.length).toBeGreaterThan(0);
+    for (const { seed, lm } of list) {
       const color = biomeForCell(seed, lm.cell - 1).accent;
       const rays = landmarkLightsInView(seed, lm.x, lm.top + 20, 400, 200, 1).filter((r) => r.color === color);
       expect(rays.length).toBe(3);
@@ -66,7 +109,6 @@ describe('landmarkLightsInView', () => {
       }
       expect(landmarkLightsInView(seed, lm.x, lm.top + 600, 400, 200, 1).filter((r) => r.color === color).length).toBe(0);
     }
-    expect(collapses).toBeGreaterThan(0);
   });
   it('休憩点: 視野内の箱の内側に 1 枚', () => {
     const rp = restPointAt(20260711, 0, 0);

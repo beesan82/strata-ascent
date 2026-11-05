@@ -69,4 +69,21 @@ describe('chooseSpawns / spawnRateForLayer', () => {
     const runs = findFloorRuns(world, 0, 0, 40, 20);
     expect(chooseSpawns(999, 4, runs, [])).toEqual(chooseSpawns(999, 4, runs, []));
   });
+
+  it('地区倍率 rateMul は出現率に乗る(0 で消え、既定 1 は従来と同じ)', () => {
+    const runs = findFloorRuns(world, 0, 0, 40, 20);
+    expect(chooseSpawns(999, 4, runs, [], 0)).toHaveLength(0);
+    expect(chooseSpawns(999, 4, runs, [], 1)).toEqual(chooseSpawns(999, 4, runs, []));
+  });
+
+  it('地区倍率を上げると出現が単調に増える', () => {
+    // 長さ 20 の床を 60 間隔で並べ、倍率 0.7 / 1.0 / 1.3 で数える(密度上限に当たらない間隔)
+    const segments = (tx: number, ty: number): Tile =>
+      ty === 10 && tx >= 0 && tx < 6000 && tx % 60 < 20 ? TILE.SOLID : TILE.AIR;
+    const runs = findFloorRuns(segments, 0, 0, 6000, 20);
+    expect(runs.length).toBe(100);
+    const counts = [0.7, 1.0, 1.3].map((mul) => chooseSpawns(7, 30, runs, [], mul).length);
+    expect(counts[0]).toBeLessThan(counts[1]);
+    expect(counts[1]).toBeLessThan(counts[2]);
+  });
 });

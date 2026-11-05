@@ -26,6 +26,7 @@ import { AudioEngine } from './audio/engine';
 import { beaconHum, HUM_RANGE, nearestPlateDistance } from './audio/params';
 import { beaconsInView } from './render/beacon';
 import { biomeIdForCell, districtNameForCell } from './world/biomeCells';
+import { terrainProfileFor } from './world/biomeTerrain';
 
 const DEFAULT_SEED = 20260711;
 const STEP_MS = 1000 / 60;
@@ -85,7 +86,10 @@ const ENEMY_SCAN_Y = 24;
 
 /** プレイヤー近傍の地形を走査して敵の出現集合を更新する(倒した敵は範囲を離れると再出現する) */
 function refreshEnemies(): void {
-  const layer = layerNumber(seed, biomeCellAt(seed, Math.floor(player.body.y)));
+  const cell = biomeCellAt(seed, Math.floor(player.body.y));
+  const layer = layerNumber(seed, cell);
+  // 地区倍率(ゾーン化 段階 2、設計 §5): 基礎率は層番号ベースのまま、地区の spawnMul を乗せる
+  const spawnMul = terrainProfileFor(biomeIdForCell(seed, cell)).spawnMul;
   const cx = Math.floor(player.centerX);
   const cy = Math.floor(player.centerY);
   const runs = findFloorRuns(tiles, cx - ENEMY_SCAN_X, cy - ENEMY_SCAN_Y, cx + ENEMY_SCAN_X, cy + ENEMY_SCAN_Y);
@@ -93,7 +97,7 @@ function refreshEnemies(): void {
   const desired = chooseSpawns(seed, layer, runs, [
     { x: spawn.x, y: spawn.y, r: 10 },
     { x: rp.x, y: rp.floorY, r: 20 },
-  ]);
+  ], spawnMul);
   const ids = new Set(desired.map((d) => d.id));
   enemies = enemies.filter((e) => ids.has(e.spawnId));
   for (const d of desired) {

@@ -1,5 +1,6 @@
 import { hash2 } from '../world/noise';
 import { mixHex, type BiomeBlend, type BgLayer } from './biome';
+import { backdropDrawRects, backdropIdOf, BACKDROP_ALPHA, createBackdropSet, type BackdropSet } from './backdrop';
 import { BAND_FACTOR, interfaceBandsNear } from './beacon';
 import { STEEL } from './steel';
 import { buildersInView } from './ambient';
@@ -86,7 +87,7 @@ export function backgroundLayerContributions(bb: BiomeBlend): BackgroundLayerCon
  * both complete biome layer sets are cross-faded so unmatched roles disappear smoothly.
  */
 export class Background {
-  constructor(private seed: number) {}
+  constructor(private seed: number, private backdrops: BackdropSet = createBackdropSet()) {}
 
   render(
     ctx: CanvasRenderingContext2D,
@@ -160,6 +161,27 @@ export class Background {
    * 巨大ゆえ画面上でも大きく、しかし距離ゆえパンにほぼ追従しない(圧倒的スケール)。
    * alphaは0.06〜0.10と非常に淡く、前景の可読性を損なわない。
    */
+  /** 地区別遠景(AI 生成)。デコード済みの地区だけ、手続きシルエットの背後に敷く。地区境界ではブレンド比でクロスフェード */
+  private backdropLayer(ctx: CanvasRenderingContext2D, camX: number, camY: number, w: number, h: number, ppt: number, bb: BiomeBlend): void {
+    const draw = (biome: BiomeBlend['from'], alpha: number): void => {
+      if (alpha <= 0) return;
+      const id = backdropIdOf(biome);
+      if (!id) return;
+      const img = this.backdrops.imageFor(id);
+      if (!img) return;
+      ctx.globalAlpha = alpha;
+      for (const r of backdropDrawRects(w, h, camX, camY, ppt, img.naturalWidth, img.naturalHeight)) {
+        ctx.drawImage(img, r.x, r.y, r.w, r.h);
+      }
+    };
+    if (bb.from === bb.to || bb.t <= 0) draw(bb.from, BACKDROP_ALPHA);
+    else {
+      draw(bb.from, BACKDROP_ALPHA * (1 - bb.t));
+      draw(bb.to, BACKDROP_ALPHA * bb.t);
+    }
+    ctx.globalAlpha = 1;
+  }
+
   private farLayer(ctx: CanvasRenderingContext2D, camX: number, camY: number, w: number, h: number, ppt: number, bb: BiomeBlend): void {
     const scale = FAR_FACTOR * ppt;            // far-tile → px
     const horizon = h * 0.9;                    // 巨大構造の基部(地平)を画面下寄りに
@@ -167,6 +189,9 @@ export class Background {
     const tint = mixHex('#0e141b', bb.ambientColor, 0.35);
     ctx.strokeStyle = tint;
     ctx.fillStyle = tint;
+
+    // 地区別遠景(最背面。稀少ランドマーク・シルエットはこの上に重なる)
+    this.backdropLayer(ctx, camX, camY, w, h, ppt, bb);
 
     // --- 稀少な巨大ランドマーク(最背面) ---
     const coarse = LANDMARK_SLOT * FAR_SLOT;

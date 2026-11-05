@@ -59,6 +59,8 @@ export const DRONE_TABLE: Record<BiomeId, DroneParams> = {
   disposal: { freq: 49, harmonics: [1, 2.01, 2.5], type: 'sawtooth', gainDb: -12 },
   waterVoid: { freq: 41.2, harmonics: [1, 2, 4], type: 'sine', gainDb: -6 },
   power: { freq: 73.42, harmonics: [1, 3, 5], type: 'square', gainDb: -15 },
+  foundry: { freq: 46.25, harmonics: [1, 2, 3.02], type: 'sawtooth', gainDb: -12 },
+  biomech: { freq: 36.71, harmonics: [1, 1.5, 2.02], type: 'sine', gainDb: -8 },
 };
 
 export function droneParams(id: BiomeId): DroneParams {
