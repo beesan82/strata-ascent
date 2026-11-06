@@ -10,6 +10,9 @@ import {
   quantizeZoom,
   ZOOM_STEPS,
   VIEW_ZOOM,
+  nextZoomStep,
+  advanceZoom,
+  ZOOM_STEP_MARGIN,
 } from './zoom';
 
 describe('sampleOpenness', () => {
@@ -117,6 +120,103 @@ describe('quantizeZoom', () => {
     expect(quantizeZoom(0.875)).toBe(0.75); // 0.75と1の等距離
     expect(quantizeZoom(0.625)).toBe(0.5); // 0.5と0.75の等距離
     expect(quantizeZoom(0.425)).toBe(VIEW_ZOOM); // 0.35と0.5の等距離
+  });
+});
+
+describe('nextZoomStep(段キーパー、ヒステリシス付き段選択)', () => {
+  // 0.75 と 1 の中点は 0.875。下りは中点−マージン、上りは中点+マージンが切替境界。
+  const downThreshold = 0.875 - ZOOM_STEP_MARGIN;
+  const upThreshold = 0.875 + ZOOM_STEP_MARGIN;
+
+  it('段そのものを渡せばその段を維持する', () => {
+    for (const s of ZOOM_STEPS) expect(nextZoomStep(s, s)).toBe(s);
+  });
+
+  it('中点+マージンを越えるまでは隣の段へ移らない(下り)', () => {
+    expect(nextZoomStep(1, downThreshold + 0.001)).toBe(1);
+    expect(nextZoomStep(1, downThreshold)).toBe(1); // 境界ちょうどは移らない(決定論)
+    expect(nextZoomStep(1, downThreshold - 0.001)).toBe(0.75);
+  });
+
+  it('中点+マージンを越えるまでは隣の段へ移らない(上り)', () => {
+    expect(nextZoomStep(0.75, upThreshold - 0.001)).toBe(0.75);
+    expect(nextZoomStep(0.75, upThreshold)).toBe(0.75); // 境界ちょうどは移らない(決定論)
+    expect(nextZoomStep(0.75, upThreshold + 0.001)).toBe(1);
+  });
+
+  it('中点±マージンの内側で小刻みに往復しても段がチャタリングしない', () => {
+    // 0.875 を中心に ±0.02(マージン 0.03 の内側)を往復させる
+    const wiggle = [0.855, 0.895, 0.86, 0.89, 0.865, 0.885];
+    let fromTop = 1;
+    let fromBottom = 0.75;
+    for (let round = 0; round < 10; round++) {
+      for (const z of wiggle) {
+        fromTop = nextZoomStep(fromTop, z);
+        fromBottom = nextZoomStep(fromBottom, z);
+        expect(fromTop).toBe(1);
+        expect(fromBottom).toBe(0.75);
+      }
+    }
+  });
+
+  it('大きく動けば複数段でも一気に追従する', () => {
+    expect(nextZoomStep(1, 0.5)).toBe(0.5);
+    expect(nextZoomStep(0.5, 1)).toBe(1);
+    expect(nextZoomStep(0.35, 0.99)).toBe(1);
+    // 0.4 は 0.35 と 0.5 の中点(0.425)−マージン(0.395)より上なので 0.5 で止まる
+    expect(nextZoomStep(1, 0.4)).toBe(0.5);
+    expect(nextZoomStep(1, 0.39)).toBe(VIEW_ZOOM);
+  });
+
+  it('結果は常に許可段のいずれか', () => {
+    for (const cur of ZOOM_STEPS) {
+      for (let z = 0.3; z <= 1.05; z += 0.01) {
+        expect(ZOOM_STEPS).toContain(nextZoomStep(cur, z));
+      }
+    }
+  });
+});
+
+describe('advanceZoom(描画ズームの滑らかな遷移)', () => {
+  const DT = 1 / 60;
+
+  it('目標段へ単調に近づき行き過ぎない', () => {
+    let z = 1;
+    let prev = z;
+    for (let i = 0; i < 600; i++) {
+      z = advanceZoom(z, 0.5, DT);
+      expect(z).toBeLessThanOrEqual(prev);
+      expect(z).toBeGreaterThanOrEqual(0.5);
+      prev = z;
+    }
+    expect(z).toBe(0.5); // 最後は段へ正確にスナップして静止する
+  });
+
+  it('0.25 の段差は 1 秒以内に段へ落ち着く', () => {
+    let z = 1;
+    let frames = 0;
+    while (z !== 0.75 && frames < 600) {
+      z = advanceZoom(z, 0.75, DT);
+      frames++;
+    }
+    expect(z).toBe(0.75);
+    expect(frames).toBeLessThan(60);
+  });
+
+  it('眺望段(0.35)への出入りも同じ経路で滑らかに着く', () => {
+    let z = 1;
+    for (let i = 0; i < 600 && z !== VIEW_ZOOM; i++) z = advanceZoom(z, VIEW_ZOOM, DT);
+    expect(z).toBe(VIEW_ZOOM);
+    for (let i = 0; i < 600 && z !== 1; i++) z = advanceZoom(z, 1, DT);
+    expect(z).toBe(1);
+  });
+
+  it('dt=0 では動かない', () => {
+    expect(advanceZoom(0.8, 0.5, 0)).toBe(0.8);
+  });
+
+  it('すでに段にいれば段に留まる', () => {
+    expect(advanceZoom(0.75, 0.75, DT)).toBe(0.75);
   });
 });
 
