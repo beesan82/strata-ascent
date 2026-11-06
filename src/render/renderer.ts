@@ -20,7 +20,6 @@ import { LandmarkLights, REST_WARM_COLOR } from './landmarkLight';
 import { restWarmthAt } from '../world/restpoint';
 import { HIGH_FIDELITY_TILE_PX, PixelPipeline } from './pixel';
 import { paletteRgb } from './palette';
-import { quantizeZoom } from '../core/zoom';
 import { nextBakeTask } from './bakeSchedule';
 import type { Vec2 } from './playerPose';
 
@@ -239,8 +238,10 @@ export class Renderer {
   ): void {
     const w = this.pipeline.bufW;
     const h = this.pipeline.bufH;
-    // cam.zoom<1 で ppt が縮み、画面に入るタイル数が増える(開放空間の豆粒化)
-    const renderZoom = quantizeZoom(cam.zoom);
+    // cam.zoom<1 で ppt が縮み、画面に入るタイル数が増える(開放空間の豆粒化)。
+    // cam.zoom は段キーパー+advanceZoom(core/zoom.ts)が段へ寄せた描画ズームそのもの:
+    // 段に静止しているときは段の値、段の間を遷移しているときだけ非段の値を取る
+    const renderZoom = cam.zoom;
     const ppt = (w / VIEW_TILES_X) * renderZoom;
     const ctx = this.ctx;
     const renderCam = new Camera(

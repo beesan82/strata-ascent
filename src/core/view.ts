@@ -1,7 +1,7 @@
 import { VIEW_ZOOM } from './zoom';
 
 // 眺望(§6.4)の状態遷移。純粋関数で、出力は「目標ズーム」と「カメラ中心の目標オフセット(タイル)」だけ。
-// カメラ(Camera.follow / zoomTo)はこの出力へ指数平滑で追従するだけで、ここでは平滑しない。
+// カメラ(Camera.follow / advanceZoom)はこの出力へ指数平滑で追従するだけで、ここでは平滑しない。
 
 /** 手動眺望でカメラ中心をマウス方向へずらす最大距離(タイル) */
 export const MANUAL_OFFSET_TILES = 40;

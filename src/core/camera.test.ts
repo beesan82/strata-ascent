@@ -23,16 +23,5 @@ describe('Camera', () => {
     expect(cam.zoom).toBe(1);
   });
 
-  it('zoomToは目標へ近づく', () => {
-    const cam = new Camera(0, 0);
-    cam.zoomTo(0.5, 1 / 60);
-    expect(cam.zoom).toBeLessThan(1);
-    expect(cam.zoom).toBeGreaterThan(0.5);
-  });
-
-  it('時間が経てば目標ズームにほぼ一致する', () => {
-    const cam = new Camera(0, 0);
-    for (let i = 0; i < 600; i++) cam.zoomTo(0.5, 1 / 60);
-    expect(cam.zoom).toBeCloseTo(0.5, 2);
-  });
+  // ズーム遷移のテストは core/zoom.ts の advanceZoom 側(zoom.test.ts)で固定する
 });

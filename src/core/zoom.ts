@@ -63,17 +63,17 @@ export function targetZoomForOpenness(openness: number): number {
 }
 
 /**
- * 許可ズーム段(離散)。開放度由来の目標ズームをこの段へ量子化する。ドット絵で
- * サブピクセルのにじみを避けるため、実際に描画へ使う zoom も renderer(段I)で
- * quantizeZoom(cam.zoom) によりこの段へスナップする(目標と描画の両方を段に乗せる)。
+ * 許可ズーム段(離散)。ドット絵でサブピクセルのにじみを避けるため、描画ズームは
+ * 原則この段のいずれかに静止する。段の選択はヒステリシス付きの nextZoomStep
+ * (段キーパー)、描画値の移動は advanceZoom(遷移中のみ非段の値を取る)が担う。
  * 眺望専用の VIEW_ZOOM(0.35)と、MIN_ZOOM(0.5)〜MAX_ZOOM(1)の3段の計4段。昇順。
- * 段境界でのチャタリングは既存のopenness EMA平滑で緩和し、残れば実機確認後に対処。
  */
 export const ZOOM_STEPS: readonly number[] = [VIEW_ZOOM, 0.5, 0.75, 1];
 
 /**
  * 連続ズーム値を最近傍の許可段へスナップ(範囲外はクランプ)。純関数・決定論・ヒステリシスなし
  * (前回段に依存しない)。同距離の中点は厳密不等号(d < bestD)により小さい段が勝つ。
+ * 段キーパーの起点を求める用途に使う(段選択そのものは nextZoomStep)。
  */
 export function quantizeZoom(z: number): number {
   let best = ZOOM_STEPS[0];
@@ -86,4 +86,56 @@ export function quantizeZoom(z: number): number {
     }
   }
   return best;
+}
+
+/**
+ * 段キーパーのヒステリシスマージン(ズーム単位)。隣の段との中点からこれだけ越えた
+ * ときにだけ段を移すため、中点の前後 ±ZOOM_STEP_MARGIN の帯がデッドゾーンになり、
+ * 連続ズームが段境界で小刻みに往復しても描画段はチャタリングしない。
+ * 最も狭い段間隔(0.35↔0.5 = 0.15)の半分(0.075)より小さく、両方向から到達可能に保つ。
+ */
+export const ZOOM_STEP_MARGIN = 0.03;
+
+/**
+ * ヒステリシス付き段選択(段キーパー)。現在の段 current と連続ズーム desired から、
+ * 維持すべき段を返す純関数(状態は「現在の段」だけ。呼び出し側が保持する)。
+ *
+ * - desired が現在の段より上: 隣の段との中点 + MARGIN を厳密に越えたときだけ上の段へ移る。
+ *   大きく動けば 1 回の呼び出しで複数段でも追従する。
+ * - desired が現在の段より下: 中点 − MARGIN を厳密に下回ったときだけ下の段へ移る。
+ * - 境界ちょうどでは移らない(決定論)。current が段でない値なら最近傍段を起点にする。
+ */
+export function nextZoomStep(current: number, desired: number): number {
+  let i = ZOOM_STEPS.indexOf(quantizeZoom(current));
+  while (i < ZOOM_STEPS.length - 1) {
+    const mid = (ZOOM_STEPS[i] + ZOOM_STEPS[i + 1]) / 2;
+    if (desired > mid + ZOOM_STEP_MARGIN) i++;
+    else break;
+  }
+  while (i > 0) {
+    const mid = (ZOOM_STEPS[i - 1] + ZOOM_STEPS[i]) / 2;
+    if (desired < mid - ZOOM_STEP_MARGIN) i--;
+    else break;
+  }
+  return ZOOM_STEPS[i];
+}
+
+/**
+ * 描画ズーム遷移の指数平滑係数(1/秒)。カメラ位置の追従(係数 8)と同じ速さで、
+ * 0.25 の段差が約 0.4 秒で ZOOM_SNAP_EPSILON 内へ収まる。「段へ即時スナップ」の
+ * ジャンプ(25〜33% のスケール変化が 1 フレーム)をこの遷移に置き換えるのが本対応の核。
+ */
+export const ZOOM_TRANSITION_RATE = 8;
+/** 目標段との差がこれ未満になったら段へ正確にスナップして静止する(にじみの恒常化を防ぐ) */
+export const ZOOM_SNAP_EPSILON = 0.002;
+
+/**
+ * 描画ズームを目標段へ 1 フレームぶん近づける純関数。指数平滑なので単調に近づき
+ * 行き過ぎない。差が ZOOM_SNAP_EPSILON 未満になったら目標段そのものを返して静止させる。
+ * 眺望段(VIEW_ZOOM)への出入りも、開放度由来の段移動も、この同じ経路を通す。
+ */
+export function advanceZoom(current: number, target: number, dt: number): number {
+  const k = 1 - Math.exp(-ZOOM_TRANSITION_RATE * dt);
+  const next = current + (target - current) * k;
+  return Math.abs(target - next) < ZOOM_SNAP_EPSILON ? target : next;
 }

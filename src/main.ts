@@ -17,7 +17,7 @@ import { biomeCellAt } from './world/biomeCells';
 import { towerTopFloorAt } from './world/landmark';
 import { CHUNK_SIZE } from './world/tiles';
 import { findSpawn, isHardAt } from './world/worldgen';
-import { sampleOpenness, targetZoomForOpenness, quantizeZoom } from './core/zoom';
+import { sampleOpenness, targetZoomForOpenness, nextZoomStep, advanceZoom } from './core/zoom';
 import { lookahead } from './core/stick';
 import { displayAltitude, highestLayer } from './core/coordinate';
 import { autoViewStarted, initialView, viewState, type ViewState } from './core/view';
@@ -182,8 +182,11 @@ function fire(): void {
 
 let frames = 0;
 let simTime = 0;
-// カメラの目標ズーム。開放度から毎数フレーム更新し、camera.zoomToで平滑追従する
+// カメラの目標ズーム(段)。開放度から毎数フレーム更新し、描画ズームは advanceZoom で追従する
 let zoomTarget = 1;
+// 段キーパー(core/zoom.ts の nextZoomStep)の現在の段。連続ズーム(開放度由来の目標)から
+// ヒステリシス付きで段を選び、境界付近での段の往復(チャタリング)を断つ
+let zoomStep = 1;
 // 開放度の時間平滑(EMA)状態。サンプル格子がタイル境界にスナップするため、歩くたび
 // 窓端の列が入れ替わって生の開放度が階段状にガタつく。数サンプルぶん時間平均することで
 // ズーム目標の微振動(=移動中の画面の伸び縮み・酔い)を断つ。nullは初回未計測。
@@ -255,12 +258,13 @@ function update(dt: number): void {
   );
   camera.follow(player.centerX + view.offsetX + la.x, player.centerY + view.offsetY + la.y, dt);
   // 開放度は毎フレームだと重い(tileAt多数)ので6フレームごとに測る。
-  // 求めた目標ズームは quantizeZoom で離散段へ量子化してから、毎フレーム平滑追従する
-  // (camera.zoomTo自体は連続補間。描画スケールの段スナップは段I Task5でrenderer側が行う)。
+  // 連続ズーム(開放度由来)から段キーパーがヒステリシス付きで段を選び、zoomTarget とする。
+  // 描画ズームは即時スナップせず、advanceZoom で段へ滑らかに遷移させる。
   if (frames % OPENNESS_SAMPLE_INTERVAL_FRAMES === 0) {
     const raw = sampleOpenness(tiles, player.centerX, player.centerY);
     opennessEma = opennessEma === null ? raw : opennessEma + (raw - opennessEma) * OPENNESS_EMA_ALPHA;
-    zoomTarget = quantizeZoom(targetZoomForOpenness(opennessEma));
+    zoomStep = nextZoomStep(zoomStep, targetZoomForOpenness(opennessEma));
+    zoomTarget = zoomStep;
     // 休憩点の箱の中に立ったら全回復し、復活点をここへ更新する
     const rp = nearestRestPoint(seed, player.centerX, player.centerY);
     const feet = player.body.y + player.body.h;
@@ -272,8 +276,10 @@ function update(dt: number): void {
       if (player.hp < MAX_HP) player.hp = MAX_HP;
     }
   }
-  // 眺望中は view.zoom が 0.35、それ以外は開放度由来の zoomTarget(1 フレーム前の値で十分)
-  camera.zoomTo(view.zoom, dt);
+  // 眺望中は view.zoom が 0.35、それ以外は段キーパー由来の zoomTarget(1 フレーム前の値で十分)。
+  // どちらも段の値なので、描画ズームは advanceZoom で段から段へ滑らかに遷移させる
+  // (眺望の出入りも開放度の段移動も同じ経路。ジャンプは起きない)
+  camera.zoom = advanceZoom(camera.zoom, view.zoom, dt);
   if (input.takeFireCancel()) graviton.cancelCharge(); // タッチ照準のキャンセル(解放より先に破棄)
   graviton.update(dt, input.fireHeld, fire);
   input.expireCannonRelease(); // スティック砲の発射候補は、この update で発射しなければ失効する

@@ -14,12 +14,6 @@ export class Camera {
     this.y += (targetY - this.y) * k;
   }
 
-  /**
-   * 目標ズームへ指数平滑で近づく。位置追従(係数8)よりゆるやか(係数4)にし、
-   * 空間の開閉に対してズームが穏やかに追従して酔いを防ぐ。
-   */
-  zoomTo(target: number, dt: number): void {
-    const k = 1 - Math.exp(-4 * dt);
-    this.zoom += (target - this.zoom) * k;
-  }
+  // ズームの追従は core/zoom.ts の advanceZoom(段への滑らかな遷移)が担う。
+  // Camera は表示値 zoom を保持するだけ(書き込みは main が advanceZoom の戻り値で行う)。
 }
