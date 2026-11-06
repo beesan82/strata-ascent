@@ -54,8 +54,8 @@ export interface GravitonFx {
   beam: { angle: number; alpha: number } | null;
   /** パルスの弾(ワールド座標の中心と方向)。平坦色の短矩形で描く */
   pulses?: readonly { x: number; y: number; dx: number; dy: number }[];
-  /** 歩行敵(ワールド座標の中心と被弾フラッシュ)。平坦色の矩形で描く */
-  enemies?: readonly { x: number; y: number; flash: boolean }[];
+  /** 敵(ワールド座標の中心と被弾フラッシュ)。平坦色の矩形で描く。flyer は飛行敵 */
+  enemies?: readonly { x: number; y: number; flash: boolean; flyer?: boolean }[];
 }
 
 /**
@@ -377,17 +377,19 @@ export class Renderer {
       }
     }
 
-    // 歩行敵: 同じ fx 相乗りで平坦色の矩形 + 足元の帯だけ(新規パスなし)
+    // 敵: 同じ fx 相乗りで平坦色の矩形 + 帯だけ(新規パスなし)。
+    // 歩行敵は足元の帯、飛行敵は上部の帯(回転翼の見立て)と色で区別する
     if (fx.enemies && fx.enemies.length > 0) {
-      const s = Math.max(2, Math.round(0.9 * ppt));
       const band = Math.max(1, Math.round(0.18 * ppt));
       for (const e of fx.enemies) {
+        const s = Math.max(2, Math.round((e.flyer ? 0.8 : 0.9) * ppt));
         const sx = Math.round((e.x - renderCam.x) * ppt + w / 2);
         const sy = Math.round((e.y - renderCam.y) * ppt + h / 2);
-        ctx.fillStyle = e.flash ? '#f2d7d7' : '#8a4b52';
+        ctx.fillStyle = e.flash ? '#f2d7d7' : e.flyer ? '#7fa3c0' : '#8a4b52';
         ctx.fillRect(Math.round(sx - s / 2), Math.round(sy - s / 2), s, s);
-        ctx.fillStyle = '#3a2b30';
-        ctx.fillRect(Math.round(sx - s / 2), Math.round(sy + s / 2) - band, s, band);
+        ctx.fillStyle = e.flyer ? '#2e3d4a' : '#3a2b30';
+        const bandY = e.flyer ? Math.round(sy - s / 2) : Math.round(sy + s / 2) - band;
+        ctx.fillRect(Math.round(sx - s / 2), bandY, s, band);
       }
     }
     this.mark('fx');

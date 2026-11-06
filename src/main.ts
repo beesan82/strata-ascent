@@ -5,8 +5,9 @@ import { installTouchControls } from './core/touch';
 import { MAX_HP, Player } from './entities/player';
 import { Graviton } from './entities/graviton';
 import { pulseAimDir, PulseGun, PULSE_DAMAGE, PULSE_SIZE, type Pulse } from './entities/pulse';
-import { Walker } from './entities/enemy';
-import { chooseSpawns, findFloorRuns } from './world/spawn';
+import { Flyer, Walker } from './entities/enemy';
+import { chooseFlyerSpawns, chooseSpawns, findAirPockets, findFloorRuns, flyerMulFor } from './world/spawn';
+import { grandHallAt } from './world/grandhall';
 import { nearestRestPoint } from './world/restpoint';
 import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
 import { ChunkStore } from './world/chunks';
@@ -80,30 +81,72 @@ const pulseGun = new PulseGun();
 
 /** 生存中の歩行敵(スポーン識別子つき)。出現の決定は world/spawn の決定論スキャン */
 let enemies: { spawnId: string; walker: Walker }[] = [];
+/** 生存中の飛行敵(スポーン識別子つき)。出現の決定は walker と同じスキャンに相乗りする */
+let flyers: { spawnId: string; flyer: Flyer }[] = [];
 const ENEMY_SCAN_INTERVAL_FRAMES = 30;
 const ENEMY_SCAN_X = 40;
 const ENEMY_SCAN_Y = 24;
 
-/** プレイヤー近傍の地形を走査して敵の出現集合を更新する(倒した敵は範囲を離れると再出現する) */
+/**
+ * 撃破済みスポーン ID のセッション内記録(第2弾 §4)。倒した敵は二度と出ない。
+ * プレイヤーの死亡でもリセットしない(破壊した地形の保持と揃える)。
+ * セッション跨ぎは保持しない(セーブ機構が無い現行の前提)。
+ */
+const defeatedEnemies = new Set<string>();
+/** 記録の安全弁: 数百体規模が前提だが、際限なく伸びないよう古い順に落とす */
+const DEFEATED_LIMIT = 10000;
+function recordDefeated(id: string): void {
+  defeatedEnemies.add(id);
+  if (defeatedEnemies.size > DEFEATED_LIMIT) {
+    const oldest = defeatedEnemies.values().next().value;
+    if (oldest !== undefined) defeatedEnemies.delete(oldest);
+  }
+}
+
+/** プレイヤー近傍の地形を走査して敵の出現集合を更新する(倒していない敵は範囲を離れると再出現する) */
 function refreshEnemies(): void {
   const cell = biomeCellAt(seed, Math.floor(player.body.y));
   const layer = layerNumber(seed, cell);
+  const biomeId = biomeIdForCell(seed, cell);
   // 地区倍率(ゾーン化 段階 2、設計 §5): 基礎率は層番号ベースのまま、地区の spawnMul を乗せる
-  const spawnMul = terrainProfileFor(biomeIdForCell(seed, cell)).spawnMul;
+  const spawnMul = terrainProfileFor(biomeId).spawnMul;
   const cx = Math.floor(player.centerX);
   const cy = Math.floor(player.centerY);
   const runs = findFloorRuns(tiles, cx - ENEMY_SCAN_X, cy - ENEMY_SCAN_Y, cx + ENEMY_SCAN_X, cy + ENEMY_SCAN_Y);
   const rp = nearestRestPoint(seed, player.centerX, player.centerY);
-  const desired = chooseSpawns(seed, layer, runs, [
+  const protectedPoints = [
     { x: spawn.x, y: spawn.y, r: 10 },
     { x: rp.x, y: rp.floorY, r: 20 },
-  ], spawnMul);
+  ];
+  const desired = chooseSpawns(seed, layer, runs, protectedPoints, spawnMul, defeatedEnemies);
   const ids = new Set(desired.map((d) => d.id));
   enemies = enemies.filter((e) => ids.has(e.spawnId));
   for (const d of desired) {
     if (!enemies.some((e) => e.spawnId === d.id)) {
       enemies.push({ spawnId: d.id, walker: new Walker(d.x, d.y, d.dir) });
     }
+  }
+  // 飛行敵(第2弾 §1): 地区ゲートが閉じている間はポケット走査自体をしない(他地区では無コスト)
+  if (flyerMulFor(biomeId) > 0) {
+    const pockets = findAirPockets(tiles, cx - ENEMY_SCAN_X, cy - ENEMY_SCAN_Y, cx + ENEMY_SCAN_X, cy + ENEMY_SCAN_Y);
+    // スキャン範囲に重なるセルの大広間を集める(広間の中には出さない)
+    const halls = [];
+    const cellMin = biomeCellAt(seed, cy - ENEMY_SCAN_Y);
+    const cellMax = biomeCellAt(seed, cy + ENEMY_SCAN_Y);
+    for (let c = cellMin; c <= cellMax; c++) {
+      const hall = grandHallAt(seed, c);
+      if (hall) halls.push(hall);
+    }
+    const desiredFlyers = chooseFlyerSpawns(seed, layer, pockets, protectedPoints, biomeId, halls, defeatedEnemies);
+    const flyerIds = new Set(desiredFlyers.map((d) => d.id));
+    flyers = flyers.filter((e) => flyerIds.has(e.spawnId));
+    for (const d of desiredFlyers) {
+      if (!flyers.some((e) => e.spawnId === d.id)) {
+        flyers.push({ spawnId: d.id, flyer: new Flyer(d.x, d.y, d.phase) });
+      }
+    }
+  } else if (flyers.length > 0) {
+    flyers = [];
   }
 }
 // デバッグ/スクリーンショット用: ?x=&y= でスポーン位置を上書き(埋まり座標は自己責任)
@@ -292,10 +335,11 @@ function update(dt: number): void {
       : pulseAimDir(input.state, player.facing);
   pulseGun.update(dt, input.pulseHeld, player.centerX, player.centerY, pulseDir.x, pulseDir.y, tiles);
 
-  // 歩行敵: 出現集合の更新、巡回、パルスとの命中判定(接触ダメージは第4段)
+  // 歩行敵・飛行敵: 出現集合の更新、巡回/追尾、パルスとの命中判定(接触ダメージは第4段)
   if (frames % ENEMY_SCAN_INTERVAL_FRAMES === 0) refreshEnemies();
   for (const e of enemies) e.walker.update(dt, tiles);
-  if (enemies.length > 0 && pulseGun.pulses.length > 0) {
+  for (const e of flyers) e.flyer.update(dt, tiles, player.centerX, player.centerY);
+  if ((enemies.length > 0 || flyers.length > 0) && pulseGun.pulses.length > 0) {
     const spent = new Set<Pulse>();
     for (const p of pulseGun.pulses) {
       for (const e of enemies) {
@@ -309,9 +353,25 @@ function update(dt: number): void {
           break;
         }
       }
+      if (spent.has(p)) continue;
+      for (const e of flyers) {
+        const b = e.flyer.body;
+        if (
+          p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
+          p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
+        ) {
+          if (e.flyer.hit(PULSE_DAMAGE)) hapticEnemyDown();
+          spent.add(p);
+          break;
+        }
+      }
     }
     if (spent.size > 0) pulseGun.pulses = pulseGun.pulses.filter((p) => !spent.has(p));
+    // 撃破を記録してから実体を捨てる(記録保持 §4: 倒した敵は再出現しない)
+    for (const e of enemies) if (e.walker.dead) recordDefeated(e.spawnId);
     enemies = enemies.filter((e) => !e.walker.dead);
+    for (const e of flyers) if (e.flyer.dead) recordDefeated(e.spawnId);
+    flyers = flyers.filter((e) => !e.flyer.dead);
   }
 
   // 敵との接触ダメージと、死亡時の復活(最後の休憩点、無ければスポーン地点)
@@ -324,12 +384,22 @@ function update(dt: number): void {
         break;
       }
     }
+    if (!player.dead) {
+      for (const e of flyers) {
+        const b = e.flyer.body;
+        if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
+          if (player.damage(e.flyer.centerX)) hapticDamage();
+          break;
+        }
+      }
+    }
   }
   if (player.dead) {
     player.body.x = respawnPoint.x;
     player.body.y = respawnPoint.y;
     player.revive();
-    enemies = [];
+    enemies = []; // 実体は捨てるが撃破記録(defeatedEnemies)は残す(§4: 死亡でリセットしない)
+    flyers = [];
     pulseGun.pulses = [];
   }
   updateAudio();
@@ -439,11 +509,19 @@ function frame(now: number): void {
       dx: p.dx,
       dy: p.dy,
     })),
-    enemies: enemies.map((e) => ({
-      x: e.walker.centerX,
-      y: e.walker.centerY,
-      flash: e.walker.flashT > 0,
-    })),
+    enemies: [
+      ...enemies.map((e) => ({
+        x: e.walker.centerX,
+        y: e.walker.centerY,
+        flash: e.walker.flashT > 0,
+      })),
+      ...flyers.map((e) => ({
+        x: e.flyer.centerX,
+        y: e.flyer.centerY,
+        flash: e.flyer.flashT > 0,
+        flyer: true,
+      })),
+    ],
   });
   if (collectStats) {
     // present の getImageData が描画コマンドを同期ラスタ化させるので、ここの時間に描画全体が含まれる

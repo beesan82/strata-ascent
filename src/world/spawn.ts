@@ -1,6 +1,7 @@
 import { hash2 } from './noise';
 import { TILE, isSolid } from './tiles';
 import type { TileLookup } from '../entities/physics';
+import type { BiomeId } from './biomeCells';
 
 /**
  * 敵の出現決定(アクション化 第1弾・第3段、設計書 2026-11-04-action-phase1)。
@@ -22,7 +23,7 @@ export interface EnemySpawn {
   x: number;
   y: number;
   dir: 1 | -1;
-  /** スポーン識別子(ラン座標から決定。倒した記録の保持は第2弾) */
+  /** スポーン識別子(ラン座標から決定。撃破記録の保持は §4) */
   id: string;
 }
 
@@ -89,11 +90,13 @@ export function chooseSpawns(
   runs: readonly FloorRun[],
   protectedPoints: readonly ProtectedPoint[],
   rateMul = 1,
+  defeated?: ReadonlySet<string>,
 ): EnemySpawn[] {
   const rate = spawnRateForLayer(layer) * rateMul;
   if (rate <= 0) return [];
   const spawns: EnemySpawn[] = [];
   for (const run of runs) {
+    const id = `w:${run.x},${run.floorY}`;
     if (hash2(seed + 4001, run.x, run.floorY) >= rate) continue;
     const offset = Math.floor(hash2(seed + 4002, run.x, run.floorY) * Math.max(1, run.len - 2));
     const sx = run.x + offset;
@@ -110,8 +113,137 @@ export function chooseSpawns(
       x: sx,
       y: sy,
       dir: hash2(seed + 4003, run.x, run.floorY) < 0.5 ? -1 : 1,
-      id: `w:${run.x},${run.floorY}`,
+      id,
     });
   }
+  // 撃破済みは選定の最後に差し引く(第2弾 §4 の記録保持)。選定の途中で外すと
+  // 密度判定が緩んで別の候補が繰り上がり、「倒したら別の個体が出る」置換が起きるため、
+  // 出現集合は (seed, 地形, 出現率) だけで決め、撃破記録は減算としてのみ働かせる
+  if (defeated) return spawns.filter((s) => !defeated.has(s.id));
+  return spawns;
+}
+
+/**
+ * 飛行敵の出現(アクション化 第2弾・§1)。床ランではなく「空間のポケット」を使う。
+ * 地区ゲートはゾーン設計 §5 の予約どおり初出を大空洞水域に限り、
+ * 基礎率は Walker と共有するが地区倍率は spawnMul とは独立に掛ける。
+ */
+
+export interface AirPocket {
+  /** ポケット矩形(5 幅 × 4 高)の左上タイル */
+  x: number;
+  y: number;
+}
+
+export interface FlyerSpawn {
+  /** アンカー点(ポケット中心、タイル座標)。巡回はこの点を中心にする */
+  x: number;
+  y: number;
+  /** 巡回のうねりの位相(ラジアン、個体差) */
+  phase: number;
+  /** スポーン識別子(`f:` 接頭辞で Walker と名前空間を分ける) */
+  id: string;
+}
+
+/** 矩形(大広間の除外判定用。GrandHall と構造互換) */
+export interface SpawnRect {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+}
+
+export const POCKET_W = 5;
+export const POCKET_H = 4;
+
+/** 範囲 [x0, x1) × [y0, y1) で POCKET_W × POCKET_H の AIR 矩形が収まる左上を列挙する */
+export function findAirPockets(
+  tiles: TileLookup,
+  x0in: number,
+  y0in: number,
+  x1in: number,
+  y1in: number,
+): AirPocket[] {
+  const x0 = Math.floor(x0in);
+  const y0 = Math.floor(y0in);
+  const x1 = Math.floor(x1in) - POCKET_W;
+  const y1 = Math.floor(y1in) - POCKET_H;
+  const pockets: AirPocket[] = [];
+  for (let ay = y0; ay <= y1; ay++) {
+    for (let ax = x0; ax <= x1; ax++) {
+      let ok = true;
+      for (let dy = 0; dy < POCKET_H && ok; dy++) {
+        for (let dx = 0; dx < POCKET_W; dx++) {
+          if (tiles(ax + dx, ay + dy) !== TILE.AIR) {
+            ok = false;
+            break;
+          }
+        }
+      }
+      if (ok) pockets.push({ x: ax, y: ay });
+    }
+  }
+  return pockets;
+}
+
+/**
+ * 飛行敵の地区ゲート(第2弾 §1)。段階 1 では大空洞水域のみ開放する。
+ * 他地区への開放はこの表の数値を変えるだけで済む(段階 3 で判断)。
+ */
+const FLYER_MUL: Record<BiomeId, number> = {
+  coldSteel: 0,
+  habitation: 0,
+  disposal: 0,
+  waterVoid: 1.0,
+  power: 0,
+  foundry: 0,
+  biomech: 0,
+};
+
+export function flyerMulFor(biomeId: BiomeId): number {
+  return FLYER_MUL[biomeId];
+}
+
+const FLYER_DENSITY_DX = 32;
+const FLYER_DENSITY_DY = 16;
+
+/**
+ * ポケットごとに hash で飛行敵の出現を決める。Walker と同じ流儀:
+ * 保護点の近傍・密度上限・大広間との重なり・撃破済みを除く。完全に決定論。
+ */
+export function chooseFlyerSpawns(
+  seed: number,
+  layer: number,
+  pockets: readonly AirPocket[],
+  protectedPoints: readonly ProtectedPoint[],
+  biomeId: BiomeId,
+  halls: readonly SpawnRect[],
+  defeated?: ReadonlySet<string>,
+): FlyerSpawn[] {
+  const rate = spawnRateForLayer(layer) * flyerMulFor(biomeId);
+  if (rate <= 0) return [];
+  const spawns: FlyerSpawn[] = [];
+  for (const p of pockets) {
+    const id = `f:${p.x},${p.y}`;
+    // 大広間はボスの arena として空ける(§1): ポケット矩形が少しでも重なれば出さない
+    const inHall = halls.some(
+      (h) => p.x < h.x1 && p.x + POCKET_W > h.x0 && p.y < h.y1 && p.y + POCKET_H > h.y0,
+    );
+    if (inHall) continue;
+    if (hash2(seed + 4101, p.x, p.y) >= rate) continue;
+    const cx = p.x + POCKET_W / 2;
+    const cy = p.y + POCKET_H / 2;
+    const guarded = protectedPoints.some(
+      (pt) => Math.max(Math.abs(cx - pt.x), Math.abs(cy - pt.y)) <= pt.r,
+    );
+    if (guarded) continue;
+    const crowded = spawns.some(
+      (s) => Math.abs(s.x - cx) < FLYER_DENSITY_DX && Math.abs(s.y - cy) < FLYER_DENSITY_DY,
+    );
+    if (crowded) continue;
+    spawns.push({ x: cx, y: cy, phase: hash2(seed + 4103, p.x, p.y) * Math.PI * 2, id });
+  }
+  // 撃破済みは Walker と同じく選定の最後に差し引く(密度の繰り上がりによる置換を防ぐ)
+  if (defeated) return spawns.filter((s) => !defeated.has(s.id));
   return spawns;
 }
