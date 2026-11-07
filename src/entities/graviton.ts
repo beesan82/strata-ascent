@@ -1,4 +1,4 @@
-const MAX_CHARGES = 3;
+export const MAX_CHARGES = 3;
 const CHARGE_TIME = 0.6;   // 秒: 発射に必要な溜め
 const RECHARGE_TIME = 6;   // 秒: 弾1発の自動回復
 
