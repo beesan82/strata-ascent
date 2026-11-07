@@ -59,7 +59,9 @@ export interface GravitonFx {
    *  w/h と bossPhase がある要素はボス(体格と相で描き分ける) */
   enemies?: readonly { x: number; y: number; flash: boolean; flyer?: boolean; w?: number; h?: number; bossPhase?: BossPhase }[];
   /** ドロップ(ワールド座標の中心)。hidden は点滅の消灯側フレーム */
-  drops?: readonly { x: number; y: number; kind: 'charge' | 'heal'; hidden: boolean }[];
+  drops?: readonly { x: number; y: number; kind: 'charge' | 'heal' | 'ration'; hidden: boolean }[];
+  /** 補給キャッシュ(ワールド座標の中心)。未開封のものだけ渡す */
+  caches?: readonly { x: number; y: number }[];
 }
 
 /**
@@ -420,7 +422,8 @@ export class Renderer {
     }
 
     // ドロップ: 同じ fx 相乗りで平坦色だけ(新規パスなし)。
-    // 砲弾セルは紫の角型+暗い芯、回復セルは緑の十字+淡い芯で、色と形の両方で判別する。
+    // 砲弾セルは紫の角型+暗い芯、回復セルは緑の十字+淡い芯、糧食セルは金の横長+切り欠きで、
+    // 色と形の両方で判別する。
     // 色は 32 色パレットの実在色を使う(任意色は量子化で別色相へ寄る: 例 #7fc46a→金 #caa64a)
     if (fx.drops && fx.drops.length > 0) {
       const s = Math.max(2, Math.round(0.5 * ppt));
@@ -434,6 +437,14 @@ export class Renderer {
           const core = Math.max(1, Math.round(s * 0.45));
           ctx.fillStyle = '#30254c';
           ctx.fillRect(Math.round(sx - core / 2), Math.round(sy - core / 2), core, core);
+        } else if (d.kind === 'ration') {
+          // 糧食セル: 金の横長の塊+暗色の切り欠き(サバイバル設計 §5)。色はパレット実在色
+          const hgt = Math.max(2, Math.round(s * 0.62));
+          ctx.fillStyle = '#caa64a';
+          ctx.fillRect(Math.round(sx - s / 2), Math.round(sy - hgt / 2), s, hgt);
+          const notch = Math.max(1, Math.round(s * 0.3));
+          ctx.fillStyle = '#3d2618';
+          ctx.fillRect(Math.round(sx - notch / 2), Math.round(sy - hgt / 2), notch, hgt);
         } else {
           ctx.fillStyle = '#3c755f';
           const t = Math.max(1, Math.round(s * 0.38));
@@ -443,6 +454,25 @@ export class Renderer {
           ctx.fillStyle = '#c7d0ce';
           ctx.fillRect(Math.round(sx - core / 2), Math.round(sy - core / 2), core, core);
         }
+      }
+    }
+
+    // 補給キャッシュ(サバイバル §6): 同じ fx 相乗り。茶の荷袋+金の留め具+暗い底帯で、
+    // ドロップ(小さい単体セル)とは体格と色で分ける。色はパレット実在色
+    if (fx.caches && fx.caches.length > 0) {
+      for (const c of fx.caches) {
+        const sx = Math.round((c.x - renderCam.x) * ppt + w / 2);
+        const sy = Math.round((c.y - renderCam.y) * ppt + h / 2);
+        const bw = Math.max(3, Math.round(0.9 * ppt));
+        const bh = Math.max(2, Math.round(0.55 * ppt));
+        ctx.fillStyle = '#5a3a24';
+        ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy - bh / 2), bw, bh);
+        const band = Math.max(1, Math.round(bh * 0.3));
+        ctx.fillStyle = '#3d2618';
+        ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy + bh / 2) - band, bw, band);
+        const clasp = Math.max(1, Math.round(bw * 0.22));
+        ctx.fillStyle = '#caa64a';
+        ctx.fillRect(Math.round(sx - clasp / 2), Math.round(sy - bh / 2), clasp, Math.max(1, Math.round(bh * 0.45)));
       }
     }
     this.mark('fx');

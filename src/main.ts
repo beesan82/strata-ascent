@@ -7,8 +7,9 @@ import { Graviton, MAX_CHARGES, BORE_LENGTH, BORE_RADIUS } from './entities/grav
 import { pulseAimDir, PulseGun, PULSE_DAMAGE, PULSE_SIZE, type Pulse } from './entities/pulse';
 import { Boss, BOSS_BEAM_DAMAGE, BOSS_H, BOSS_HP, BOSS_W, Flyer, Walker } from './entities/enemy';
 import { beamHit } from './entities/beamHit';
-import { canPickup, DropItem, pushDrop } from './entities/drop';
+import { canAddSupply, canPickup, DropItem, pushDrop, pushSupply } from './entities/drop';
 import { dropFor } from './world/drop';
+import { chooseSupplyCaches, restStockSecondFor, supplyFor, type SupplyCache } from './world/supply';
 import { chooseFlyerSpawns, chooseSpawns, findAirPockets, findFloorRuns, flyerMulFor } from './world/spawn';
 import { bossSpawnFor, type BossSpawn } from './world/boss';
 import { grandHallAt } from './world/grandhall';
@@ -24,6 +25,14 @@ import { CHUNK_SIZE } from './world/tiles';
 import { findSpawn, isHardAt } from './world/worldgen';
 import { sampleOpenness, targetZoomForOpenness, nextZoomStep, advanceZoom } from './core/zoom';
 import { lookahead } from './core/stick';
+import {
+  initialSatiety,
+  MAX_RATIONS,
+  resetSatietyOnDeath,
+  satietyLevel,
+  stepSatiety,
+  type SatietyState,
+} from './core/satiety';
 import { displayAltitude, highestLayer } from './core/coordinate';
 import { autoViewStarted, initialView, viewState, type ViewState } from './core/view';
 import { Caption, captionText } from './render/caption';
@@ -117,6 +126,18 @@ let drops: DropItem[] = [];
 /** セッション通算の撃破カウンタ。ドロップ抽選(dropFor)の killIndex として使う */
 let killCount = 0;
 
+/** 満腹度(サバイバル段階 1)。状態は core/satiety の純関数で進める */
+let satiety: SatietyState = initialSatiety();
+/** 字幕は状態が落ちた瞬間だけ出すための前回レベル */
+let satietyPrevLevel = satietyLevel(satiety.value);
+
+/** 開封済み補給キャッシュの ID(セッション内のみ。死亡でも戻らない) */
+const claimedSupplyCaches = new Set<string>();
+/** 備蓄を開けた休憩点の ID(セッション内のみ) */
+const claimedRestStocks = new Set<string>();
+/** 現在有効な補給キャッシュ(敵スキャンに相乗りして更新する。近傍に最大 1 個) */
+let supplyCache: SupplyCache | null = null;
+
 /**
  * 敵 1 体の撃破処理: 記録保持への登録と、ドロップ抽選を 1 回だけ行う。
  * 地区は撃破位置のセルで決める。ドロップは敵の中心から落下する。
@@ -126,7 +147,10 @@ function onEnemyKilled(spawnId: string, centerX: number, centerY: number): void 
   const biomeId = biomeIdForCell(seed, biomeCellAt(seed, Math.floor(centerY)));
   const kind = dropFor(seed, spawnId, killCount, biomeId);
   killCount++;
-  if (kind) pushDrop(drops, new DropItem(kind, centerX, centerY));
+  if (!kind) return;
+  // 糧食は「後で戻って使う」判断が要るため、発生源によらず補給品として残す(サバイバル設計 §5)
+  if (kind === 'ration') pushSupply(drops, new DropItem('ration', centerX, centerY, true));
+  else pushDrop(drops, new DropItem(kind, centerX, centerY));
 }
 
 /**
@@ -164,17 +188,17 @@ function refreshEnemies(): void {
       enemies.push({ spawnId: d.id, walker: new Walker(d.x, d.y, d.dir) });
     }
   }
+  // スキャン範囲に重なるセルの大広間(飛行敵の除外とキャッシュの除外で共用)
+  const halls = [];
+  const cellMin = biomeCellAt(seed, cy - ENEMY_SCAN_Y);
+  const cellMax = biomeCellAt(seed, cy + ENEMY_SCAN_Y);
+  for (let c = cellMin; c <= cellMax; c++) {
+    const hall = grandHallAt(seed, c);
+    if (hall) halls.push(hall);
+  }
   // 飛行敵(第2弾 §1): 地区ゲートが閉じている間はポケット走査自体をしない(他地区では無コスト)
   if (flyerMulFor(biomeId) > 0) {
     const pockets = findAirPockets(tiles, cx - ENEMY_SCAN_X, cy - ENEMY_SCAN_Y, cx + ENEMY_SCAN_X, cy + ENEMY_SCAN_Y);
-    // スキャン範囲に重なるセルの大広間を集める(広間の中には出さない)
-    const halls = [];
-    const cellMin = biomeCellAt(seed, cy - ENEMY_SCAN_Y);
-    const cellMax = biomeCellAt(seed, cy + ENEMY_SCAN_Y);
-    for (let c = cellMin; c <= cellMax; c++) {
-      const hall = grandHallAt(seed, c);
-      if (hall) halls.push(hall);
-    }
     const desiredFlyers = chooseFlyerSpawns(seed, layer, pockets, protectedPoints, biomeId, halls, defeatedEnemies);
     const flyerIds = new Set(desiredFlyers.map((d) => d.id));
     flyers = flyers.filter((e) => flyerIds.has(e.spawnId));
@@ -196,6 +220,10 @@ function refreshEnemies(): void {
   } else {
     boss = null;
   }
+  // 補給キャッシュ(サバイバル §6): 同じ床ラン・保護点へ相乗りし、近傍に最大 1 個。
+  // 開封済みは選定後の減算で差し引く(開封した候補の代わりは繰り上がらない)
+  const caches = chooseSupplyCaches(seed, runs, protectedPoints, halls, claimedSupplyCaches);
+  supplyCache = caches[0] ?? null;
 }
 // デバッグ/スクリーンショット用: ?x=&y= でスポーン位置を上書き(埋まり座標は自己責任)
 const qx = params.get('x');
@@ -395,12 +423,43 @@ function update(dt: number): void {
     // 休憩点の箱の中に立ったら全回復し、復活点をここへ更新する
     const rp = nearestRestPoint(seed, player.centerX, player.centerY);
     const feet = player.body.y + player.body.h;
-    if (
+    const inRestBox =
       player.centerX > rp.left && player.centerX < rp.right &&
-      player.centerY < rp.floorY && Math.abs(feet - rp.floorY) < 0.6
-    ) {
+      player.centerY < rp.floorY && Math.abs(feet - rp.floorY) < 0.6;
+    if (inRestBox) {
       respawnPoint = { x: rp.x - player.body.w / 2, y: rp.floorY - player.body.h };
       if (player.hp < MAX_HP) player.hp = MAX_HP;
+      // 休憩点の初回補給(サバイバル §7): 初めて入った休憩点だけ備蓄を開ける(セッション内のみ)。
+      // 備蓄は糧食 1 個 + 地区別の 1 個を荷袋(packX)付近へ出す。再訪しても補充されない。
+      // 補給品の上限に達している間は開けず、消費して空きを作れば開けられる
+      const restId = `r:${rp.cell},${rp.k}`;
+      if (!claimedRestStocks.has(restId) && canAddSupply(drops, 2)) {
+        claimedRestStocks.add(restId);
+        const stockBiome = biomeIdForCell(seed, rp.cell);
+        pushSupply(drops, new DropItem('ration', rp.packX + 0.5, rp.floorY - 0.5, true));
+        pushSupply(drops, new DropItem(restStockSecondFor(seed, restId, stockBiome), rp.packX - 1, rp.floorY - 0.5, true));
+      }
+    }
+    // 満腹度(サバイバル段階 1): 開放度と同じ 6 フレーム間隔で進める(毎フレームの休憩点探索は足さない)。
+    // 安全圏は休憩点の箱の中とスポーン保護範囲(敵出現の保護点 r=10 と同じ範囲)
+    const inSpawnProtection =
+      Math.max(Math.abs(player.centerX - spawn.x), Math.abs(player.centerY - spawn.y)) <= 10;
+    const sat = stepSatiety(satiety, {
+      dt: OPENNESS_SAMPLE_INTERVAL_FRAMES * (STEP_MS / 1000),
+      inSafeZone: inRestBox || inSpawnProtection,
+      still: player.body.onGround && player.body.vx === 0,
+    });
+    satiety = sat.state;
+    if (sat.hpDamage > 0) {
+      // 飢餓ダメージは敵とは別経路: ノックバックも無敵時間も流用せず HP だけを減らす(設計 §4)
+      player.hp = Math.max(0, player.hp - sat.hpDamage);
+    }
+    // 状態が low / critical へ落ちた瞬間だけ字幕で知らせる(毎秒表示はしない)
+    const level = satietyLevel(satiety.value);
+    if (level !== satietyPrevLevel) {
+      if (level === 'low') caption.show('満腹度低下', simTime);
+      else if (level === 'critical') caption.show('糧食が必要', simTime);
+      satietyPrevLevel = level;
     }
   }
   // 眺望中は view.zoom が 0.35、それ以外は段キーパー由来の zoomTarget(1 フレーム前の値で十分)。
@@ -488,11 +547,29 @@ function update(dt: number): void {
       const b = d.body;
       const overlap = pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y;
       if (!overlap) return true;
-      if (!canPickup(d.kind, graviton.charges, MAX_CHARGES, player.hp, MAX_HP)) return true;
+      if (!canPickup(d.kind, graviton.charges, MAX_CHARGES, player.hp, MAX_HP, satiety.rations, MAX_RATIONS)) return true;
       if (d.kind === 'charge') graviton.charges++;
-      else player.hp++;
+      else if (d.kind === 'heal') player.hp++;
+      // 糧食は所持数だけが増える(満腹度は即時回復しない。自動摂取で消費される)
+      else satiety = { ...satiety, rations: satiety.rations + 1 };
       return false;
     });
+  }
+
+  // 補給キャッシュ: 接触で即開封し、中身 1 個をその場に補給品として出す(サバイバル §6)。
+  // 補給品の上限に達している間は開封済みにしない(消費して空きを作れば開けられる)
+  if (supplyCache && !player.dead && canAddSupply(drops, 1)) {
+    const c = supplyCache;
+    const pb = player.body;
+    const overlap =
+      pb.x < c.x + 0.45 && pb.x + pb.w > c.x - 0.45 &&
+      pb.y < c.floorY && pb.y + pb.h > c.floorY - 0.6;
+    if (overlap) {
+      claimedSupplyCaches.add(c.id);
+      const cacheBiome = biomeIdForCell(seed, biomeCellAt(seed, c.floorY));
+      pushSupply(drops, new DropItem(supplyFor(seed, c.id, cacheBiome), c.x, c.floorY - 0.5, true));
+      supplyCache = null;
+    }
   }
 
   // 敵との接触ダメージと、死亡時の復活(最後の休憩点、無ければスポーン地点)
@@ -525,6 +602,9 @@ function update(dt: number): void {
     player.body.x = respawnPoint.x;
     player.body.y = respawnPoint.y;
     player.revive();
+    // 満腹度は 35 に戻す(全回復はしない。糧食は段階 1 では保持する)
+    satiety = resetSatietyOnDeath(satiety);
+    satietyPrevLevel = satietyLevel(satiety.value);
     enemies = []; // 実体は捨てるが撃破記録(defeatedEnemies)は残す(§4: 死亡でリセットしない)
     flyers = [];
     boss = null; // ボスも実体は捨てる(撃破済みなら記録により再出現しない)
@@ -600,7 +680,12 @@ function updateHud(): void {
     const filled = Math.max(0, Math.ceil((boss.boss.hp / BOSS_HP) * 10));
     bossHud = ` — 広間番人 [${'#'.repeat(filled)}${'-'.repeat(10 - filled)}]`;
   }
-  hud.textContent = `第 ${maxLayer} 階層 / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${weapon} — HP ${hearts}${bossHud}`;
+  // 満腹度(サバイバル §4): 既存 HUD 文字列へ相乗り。状態は色でなく文字でも分かるようにする
+  const satLevel = satietyLevel(satiety.value);
+  const satLabel = satLevel === 'low' ? '満腹低下' : satLevel === 'ok' ? '満腹' : '満腹危険';
+  const satBars = Math.max(0, Math.min(10, Math.round(satiety.value / 10)));
+  const satietyHud = ` — ${satLabel} [${'#'.repeat(satBars)}${'-'.repeat(10 - satBars)}] ${Math.floor(satiety.value)} / 糧食 ${satiety.rations}`;
+  hud.textContent = `第 ${maxLayer} 階層 / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${weapon} — HP ${hearts}${bossHud}${satietyHud}`;
 }
 
 let last = performance.now();
@@ -674,6 +759,8 @@ function frame(now: number): void {
       kind: d.kind,
       hidden: d.blinking && Math.floor(simTime * 4) % 2 === 1,
     })),
+    // 補給キャッシュ: 未開封のものだけ。中心は袋の見た目の中心(床の少し上)
+    caches: supplyCache ? [{ x: supplyCache.x, y: supplyCache.floorY - 0.28 }] : [],
   });
   if (collectStats) {
     // present の getImageData が描画コマンドを同期ラスタ化させるので、ここの時間に描画全体が含まれる
