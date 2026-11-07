@@ -176,11 +176,11 @@ describe('飢餓ダメージ', () => {
 });
 
 describe('resetSatietyOnDeath(死亡時)', () => {
-  it('満腹度は 35 に戻り、糧食は保持、starveT は 0', () => {
+  it('満腹度は 35 に戻り、糧食は 0(遺留品へ移る: 段階 3、設計 §8)、starveT は 0', () => {
     const s = resetSatietyOnDeath({ value: 0, rations: 2, starveT: 55 });
     expect(s.value).toBe(SATIETY_ON_DEATH);
     expect(s.value).toBe(35);
-    expect(s.rations).toBe(2);
+    expect(s.rations).toBe(0);
     expect(s.starveT).toBe(0);
   });
 });

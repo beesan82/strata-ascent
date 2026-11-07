@@ -126,8 +126,10 @@ export function stepSatiety(state: SatietyState, input: SatietyStepInput): Satie
 
 /**
  * 死亡時のリセット: 満腹度は 35 に戻す(全回復はしない)。
- * 糧食は段階 1 では保持する(落とす仕組み=遺留品は段階 3 の範囲)。
+ * 糧食は保持せず 0 にする。所持糧食は遺留品として最後の安定接地点へ落ちる
+ * (段階 3、設計 §8。段階 1 の「死亡時は糧食を保持する」裁定はここで置き換えた)。
+ * 遺留品の出現そのものは main 側がこのリセットの前に行う。
  */
-export function resetSatietyOnDeath(state: SatietyState): SatietyState {
-  return { value: SATIETY_ON_DEATH, rations: state.rations, starveT: 0 };
+export function resetSatietyOnDeath(_state: SatietyState): SatietyState {
+  return { value: SATIETY_ON_DEATH, rations: 0, starveT: 0 };
 }
