@@ -3,7 +3,7 @@ import { megaFacilityAt } from './megafacility';
 import { networkTileAt, sectorTrunkTileAt } from './network';
 import { biomeCellAt, biomeIdForCell } from './biomeCells';
 import { ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceTileAt, passageX, terrainModsAt, type TerrainMods } from './interface';
-import { grandHallAt } from './grandhall';
+import { grandHallAt, type GrandHall } from './grandhall';
 import { landmarkTileAt } from './landmark';
 import { restPointTileAt } from './restpoint';
 import { terrainProfileFor } from './biomeTerrain';
@@ -26,8 +26,8 @@ export function noiseTileAt(seed: number, x: number, y: number): Tile {
   return noiseTileWith(seed, x, y, cell, terrainModsAt(seed, x, y, cell));
 }
 
-/** 地形変調(前室・圧縮帯)込みのノイズ躯体。 */
-function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: TerrainMods | null): Tile {
+/** 地形変調(前室・圧縮帯)込みのノイズ躯体。hall は呼び出し側で計算済みなら渡す(二重計算の回避) */
+function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: TerrainMods | null, hall?: GrandHall | null): Tile {
   const biomeId = biomeIdForCell(seed, cell);
   const profile = terrainProfileFor(biomeId);
 
@@ -47,9 +47,9 @@ function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: T
 
   // 2a. 大広間(§4.3)。内側は空気、底に 1 本だけ床の行を残す。梯子列は上の判定で
   // 既に返しているため、縦の到達可能性は広間の中でも保たれる
-  const hall = grandHallAt(seed, cell);
-  if (hall && x >= hall.x0 && x < hall.x1 && y >= hall.y0 && y < hall.y1) {
-    return y === hall.floorY ? TILE.SOLID : TILE.AIR;
+  const hallHere = hall === undefined ? grandHallAt(seed, cell) : hall;
+  if (hallHere && x >= hallHere.x0 && x < hallHere.x1 && y >= hallHere.y0 && y < hallHere.y1) {
+    return y === hallHere.floorY ? TILE.SOLID : TILE.AIR;
   }
 
   // 2. 巨大空洞(低頻度ノイズ)。空洞内は bridgeEvery 床帯ごとの橋だけ残る
@@ -85,7 +85,8 @@ export function tileAt(seed: number, x: number, y: number): Tile {
   if (iface !== null) return iface;
   const cell = biomeCellAt(seed, y);
   const mods = terrainModsAt(seed, x, y, cell);
-  const base = noiseTileWith(seed, x, y, cell, mods);
+  const hall = grandHallAt(seed, cell);
+  const base = noiseTileWith(seed, x, y, cell, mods, hall);
   // 前室の内側は施設・幹線のオーバーレイを適用しない(空洞を壁で埋めない)。
   // 前室の底(forceFloor)も同様: 施設の内部(AIR)で連続した床が欠けないようにする。
   if (mods?.suppressLadder || mods?.forceFloor) return base;
@@ -93,6 +94,10 @@ export function tileAt(seed: number, x: number, y: number): Tile {
   const rest = restPointTileAt(seed, x, y);
   if (rest !== null) return rest;
   if (base === TILE.LADDER) return base;
+  // 大広間(§4.3)の内側は躯体の彫り抜き(空気 + 底の床 1 行)をそのまま使う。
+  // 施設・幹線のオーバーレイが広間の床を空気で食べると、広間に置かれるもの
+  // (休憩点まわり・広間番人)が足場を失うため、広間内ではオーバーレイを適用しない
+  if (hall && x >= hall.x0 && x < hall.x1 && y >= hall.y0 && y < hall.y1) return base;
   const overlay = megaFacilityAt(seed, x, y)
     ?? facilityTileAt(seed, x, y)
     ?? sectorTrunkTileAt(seed, x, y)

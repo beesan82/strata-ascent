@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TILE, type Tile } from '../world/tiles';
-import { Walker, Flyer, nextFlyerMode } from './enemy';
+import { Walker, Flyer, nextFlyerMode, Boss, stepBossPhase, BOSS_HP, BOSS_BEAM_DAMAGE, type BossPhase } from './enemy';
 
 const noTiles = (): Tile => TILE.AIR;
 /** y=10 行が床(x は全面) */
@@ -139,5 +139,177 @@ describe('Flyer(飛行ドローン)', () => {
     expect(sawChase).toBe(true);
     // 諦めて巡回へ戻り、少なくとも 0.5 秒は巡回に留まる(その場で固着し続けない)
     expect(longestPatrolAfterChase).toBeGreaterThanOrEqual(30);
+  });
+});
+
+describe('stepBossPhase(ボスの状態遷移、第2弾 §2)', () => {
+  const inside = { playerInHall: true, hitWall: false };
+  const stepN = (
+    phase: BossPhase,
+    t: number,
+    ctx: { playerInHall: boolean; hitWall: boolean },
+    frames: number,
+  ): { phase: BossPhase; t: number } => {
+    let s = { phase, t };
+    for (let i = 0; i < frames; i++) s = stepBossPhase(s.phase, s.t, ctx, 1 / 60);
+    return s;
+  };
+
+  it('巡回中、プレイヤーが広間に入ると接近へ移る。入らなければ巡回のまま', () => {
+    expect(stepBossPhase('patrol', 0, inside, 1 / 60).phase).toBe('approach');
+    expect(stepBossPhase('patrol', 0, { ...inside, playerInHall: false }, 1 / 60).phase).toBe('patrol');
+  });
+
+  it('接近は 3 秒間隔で予備動作へ移る', () => {
+    expect(stepN('approach', 0, inside, 170).phase).toBe('approach');
+    expect(stepN('approach', 0, inside, 190).phase).toBe('windup');
+  });
+
+  it('接近中にプレイヤーが広間を出ると巡回へ戻る', () => {
+    expect(stepBossPhase('approach', 1, { ...inside, playerInHall: false }, 1 / 60).phase).toBe('patrol');
+  });
+
+  it('予備動作 0.7 秒で突進へ移る', () => {
+    expect(stepN('windup', 0, inside, 30).phase).toBe('windup');
+    expect(stepN('windup', 0, inside, 60).phase).toBe('charge');
+  });
+
+  it('突進は 0.45 秒で硬直へ移る', () => {
+    expect(stepN('charge', 0, inside, 20).phase).toBe('charge');
+    expect(stepN('charge', 0, inside, 40).phase).toBe('stunned');
+  });
+
+  it('突進が壁に当たると即座に硬直へ移る', () => {
+    expect(stepBossPhase('charge', 0.1, { ...inside, hitWall: true }, 1 / 60).phase).toBe('stunned');
+  });
+
+  it('硬直 1.2 秒で、プレイヤーが広間にいれば接近へ、いなければ巡回へ戻る', () => {
+    expect(stepN('stunned', 0, inside, 60).phase).toBe('stunned');
+    expect(stepN('stunned', 0, inside, 90).phase).toBe('approach');
+    expect(stepN('stunned', 0, { ...inside, playerInHall: false }, 90).phase).toBe('patrol');
+  });
+
+  it('予備動作〜硬直の突進シーケンスは、プレイヤーが広間を出ても中断しない', () => {
+    const outside = { ...inside, playerInHall: false };
+    expect(stepBossPhase('windup', 0.3, outside, 1 / 60).phase).toBe('windup');
+    expect(stepBossPhase('charge', 0.2, outside, 1 / 60).phase).toBe('charge');
+    expect(stepBossPhase('stunned', 0.5, outside, 1 / 60).phase).toBe('stunned');
+  });
+});
+
+describe('Boss(広間番人、第2弾 §2)', () => {
+  /** 出現: 広間の床の中央(中心 x=50、床行 y=10、広間は x 0..200) */
+  const makeBoss = () => new Boss(50, 10, 0, 200);
+
+  it('床の上に立ち、重力で着地する', () => {
+    const b = makeBoss();
+    for (let i = 0; i < 30; i++) b.update(1 / 60, floorTiles, 1000, 1000, false);
+    expect(b.body.onGround).toBe(true);
+    expect(b.body.y + b.body.h).toBeCloseTo(10, 5);
+  });
+
+  it('HP は 30 で、パルス 1 ダメージを 30 発受けて倒れる', () => {
+    const b = makeBoss();
+    for (let i = 0; i < BOSS_HP - 1; i++) expect(b.hit(1)).toBe(false);
+    expect(b.hit(1)).toBe(true);
+    expect(b.dead).toBe(true);
+  });
+
+  it('硬直中は被ダメージが 2 倍になる', () => {
+    const b = makeBoss();
+    b.phase = 'stunned';
+    b.hit(1);
+    expect(b.hp).toBe(BOSS_HP - 2);
+    b.hit(10);
+    expect(b.hp).toBe(BOSS_HP - 2 - 20);
+  });
+
+  it('硬直以外の相では被ダメージは等倍', () => {
+    const b = makeBoss();
+    b.phase = 'windup';
+    b.hit(10);
+    expect(b.hp).toBe(BOSS_HP - 10);
+  });
+
+  it('巡回は広間の矩形の外へ出ない(クランプ)', () => {
+    const b = new Boss(50, 10, 40, 60); // 狭い広間
+    for (let i = 0; i < 60 * 10; i++) {
+      b.update(1 / 60, floorTiles, 1000, 1000, false); // プレイヤーは広間の外
+      expect(b.body.x).toBeGreaterThanOrEqual(40);
+      expect(b.body.x + b.body.w).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it('戦闘の相が 巡回→接近→予備動作→突進→硬直→接近 と回る', () => {
+    const b = makeBoss();
+    const seen: BossPhase[] = [b.phase];
+    // プレイヤーは広間内の右方(中心から +30)に静止
+    for (let i = 0; i < 60 * 8; i++) {
+      b.update(1 / 60, floorTiles, b.centerX + 30, 9, true);
+      if (seen[seen.length - 1] !== b.phase) seen.push(b.phase);
+    }
+    expect(seen.slice(0, 6)).toEqual(['patrol', 'approach', 'windup', 'charge', 'stunned', 'approach']);
+  });
+
+  it('予備動作の間は停止する(テレグラフ)', () => {
+    const b = makeBoss();
+    // 接近が始まるまで進める
+    for (let i = 0; i < 60 * 4 && b.phase !== 'windup'; i++) {
+      b.update(1 / 60, floorTiles, b.centerX + 30, 9, true);
+    }
+    expect(b.phase).toBe('windup');
+    const x = b.body.x;
+    b.update(1 / 60, floorTiles, b.centerX + 30, 9, true);
+    expect(b.body.x).toBeCloseTo(x, 9);
+  });
+
+  it('突進の変位は歩行より速い(速度 9)', () => {
+    const b = makeBoss();
+    let maxStep = 0;
+    for (let i = 0; i < 60 * 8; i++) {
+      const prevX = b.body.x;
+      const wasCharge = b.phase === 'charge';
+      b.update(1 / 60, floorTiles, b.centerX + 30, 9, true);
+      if (wasCharge) maxStep = Math.max(maxStep, Math.abs(b.body.x - prevX));
+    }
+    // 1 フレームの変位 = 速度/60。突進 9 → 0.15、接近 2.6 → 約 0.043
+    expect(maxStep).toBeGreaterThan(0.1);
+    expect(maxStep).toBeLessThan(0.2);
+  });
+
+  it('突進が壁に当たると、時間切れを待たず硬直する', () => {
+    // 床 + x=56 列の壁。プレイヤーは壁の向こう(70, 9)
+    const wallAndFloor = (tx: number, ty: number): Tile => {
+      if (ty === 10) return TILE.SOLID;
+      if (tx === 56 && ty < 10) return TILE.SOLID;
+      return TILE.AIR;
+    };
+    const b = makeBoss();
+    let chargeFrames = 0;
+    let stunnedAfterCharge: number | null = null;
+    for (let i = 0; i < 60 * 8; i++) {
+      const before = b.phase;
+      b.update(1 / 60, wallAndFloor, 70, 9, true);
+      if (before === 'charge' && b.phase === 'stunned') {
+        stunnedAfterCharge = chargeFrames;
+        break;
+      }
+      chargeFrames = b.phase === 'charge' ? chargeFrames + 1 : 0;
+    }
+    expect(stunnedAfterCharge).not.toBeNull();
+    expect(stunnedAfterCharge!).toBeLessThan(0.45 * 60); // 0.45 秒ぶん待たずに硬直した
+  });
+
+  it('重粒子砲は 10 ダメージ(硬直中は 2 倍の 20)で、3 発(硬直を絡めれば 2 発)で落ちる', () => {
+    const b = makeBoss();
+    expect(b.hit(BOSS_BEAM_DAMAGE)).toBe(false);
+    expect(b.hp).toBe(BOSS_HP - 10);
+    expect(b.hit(BOSS_BEAM_DAMAGE)).toBe(false);
+    expect(b.hit(BOSS_BEAM_DAMAGE)).toBe(true); // 3 発で撃破
+    const s = makeBoss();
+    s.phase = 'stunned';
+    expect(s.hit(BOSS_BEAM_DAMAGE)).toBe(false);
+    expect(s.hp).toBe(BOSS_HP - 20); // 硬直中は hit() の一律 2 倍で 20
+    expect(s.hit(BOSS_BEAM_DAMAGE)).toBe(true);
   });
 });
