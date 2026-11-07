@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { TILE, type Tile } from '../world/tiles';
 import {
+  canAddSupply,
   canPickup,
   DropItem,
   DROP_LIFETIME,
   DROP_BLINK_TIME,
   MAX_DROPS,
+  MAX_GROUND_RATIONS,
+  MAX_SUPPLIES,
   pushDrop,
+  pushSupply,
+  supplyCount,
 } from './drop';
 
 /** y=10 行が床(x は全面) */
@@ -14,7 +19,8 @@ const floorTiles = (_tx: number, ty: number): Tile => (ty === 10 ? TILE.SOLID : 
 
 function step(d: DropItem, seconds: number): void {
   const dt = 1 / 60;
-  for (let t = 0; t < seconds; t += dt) d.update(dt, floorTiles);
+  const steps = Math.round(seconds / dt);
+  for (let i = 0; i < steps; i++) d.update(dt, floorTiles);
 }
 
 describe('DropItem(ドロップ実体)', () => {
@@ -46,6 +52,13 @@ describe('DropItem(ドロップ実体)', () => {
     expect(d.blinking).toBe(true);
   });
 
+  it('補給品(permanent)は 60 秒を超えても消えず点滅もしない', () => {
+    const d = new DropItem('ration', 5, 9, true);
+    step(d, DROP_LIFETIME + 120);
+    expect(d.expired).toBe(false);
+    expect(d.blinking).toBe(false);
+  });
+
   it('種別と中心座標を保持する', () => {
     const d = new DropItem('heal', 7.5, 3.25);
     expect(d.kind).toBe('heal');
@@ -54,7 +67,7 @@ describe('DropItem(ドロップ実体)', () => {
   });
 });
 
-describe('pushDrop(同時存在の上限)', () => {
+describe('pushDrop(通常ドロップの上限)', () => {
   it('上限 16 個を超えたら古いものから消す', () => {
     const drops: DropItem[] = [];
     const items: DropItem[] = [];
@@ -67,17 +80,71 @@ describe('pushDrop(同時存在の上限)', () => {
     expect(drops[0]).toBe(items[3]); // 最古の 3 個が落ちている
     expect(drops[drops.length - 1]).toBe(items[items.length - 1]);
   });
+
+  it('補給品は通常ドロップの上限に数えず、押し出されもしない', () => {
+    const drops: DropItem[] = [];
+    const supply = new DropItem('ration', 0, 0, true);
+    pushSupply(drops, supply);
+    for (let i = 0; i < MAX_DROPS + 2; i++) pushDrop(drops, new DropItem('charge', i, 0));
+    expect(drops).toContain(supply);
+    expect(drops.filter((d) => !d.permanent).length).toBe(MAX_DROPS);
+  });
+});
+
+describe('pushSupply(補給品と糧食の溢れ)', () => {
+  it('糧食が地面上限 16 を超えたら、最も古い糧食が点滅して消える状態になる', () => {
+    const drops: DropItem[] = [];
+    const items: DropItem[] = [];
+    for (let i = 0; i < MAX_GROUND_RATIONS; i++) {
+      const d = new DropItem('ration', i, 0, true);
+      items.push(d);
+      pushSupply(drops, d);
+    }
+    for (const d of items) expect(d.blinking).toBe(false);
+    pushSupply(drops, new DropItem('ration', 99, 0, true));
+    // 最古の 1 個だけが残り DROP_BLINK_TIME 秒の寿命に落ちる
+    expect(items[0].blinking).toBe(true);
+    expect(items[1].blinking).toBe(false);
+    step(items[0], DROP_BLINK_TIME + 0.1);
+    expect(items[0].expired).toBe(true);
+  });
+
+  it('砲弾・回復の補給品では糧食の溢れ処理は起きない', () => {
+    const drops: DropItem[] = [];
+    for (let i = 0; i < MAX_GROUND_RATIONS; i++) pushSupply(drops, new DropItem('ration', i, 0, true));
+    pushSupply(drops, new DropItem('charge', 50, 0, true));
+    expect(drops.every((d) => !d.blinking)).toBe(true);
+  });
+
+  it('supplyCount / canAddSupply: 補給品全体の上限 32', () => {
+    const drops: DropItem[] = [];
+    expect(supplyCount(drops)).toBe(0);
+    expect(canAddSupply(drops, MAX_SUPPLIES)).toBe(true);
+    expect(canAddSupply(drops, MAX_SUPPLIES + 1)).toBe(false);
+    for (let i = 0; i < MAX_SUPPLIES; i++) pushSupply(drops, new DropItem('heal', i, 0, true));
+    expect(supplyCount(drops)).toBe(MAX_SUPPLIES);
+    expect(canAddSupply(drops, 1)).toBe(false);
+    // 通常ドロップは補給品に数えない
+    pushDrop(drops, new DropItem('charge', 0, 0));
+    expect(supplyCount(drops)).toBe(MAX_SUPPLIES);
+  });
 });
 
 describe('canPickup(満タン時は拾えない)', () => {
   it('砲弾: 満タンなら false、空きがあれば true', () => {
-    expect(canPickup('charge', 3, 3, 5, 5)).toBe(false);
-    expect(canPickup('charge', 2, 3, 5, 5)).toBe(true);
-    expect(canPickup('charge', 0, 3, 1, 5)).toBe(true);
+    expect(canPickup('charge', 3, 3, 5, 5, 0, 2)).toBe(false);
+    expect(canPickup('charge', 2, 3, 5, 5, 0, 2)).toBe(true);
+    expect(canPickup('charge', 0, 3, 1, 5, 2, 2)).toBe(true);
   });
 
   it('回復: 全快なら false、減っていれば true', () => {
-    expect(canPickup('heal', 0, 3, 5, 5)).toBe(false);
-    expect(canPickup('heal', 3, 3, 4, 5)).toBe(true);
+    expect(canPickup('heal', 0, 3, 5, 5, 0, 2)).toBe(false);
+    expect(canPickup('heal', 3, 3, 4, 5, 0, 2)).toBe(true);
+  });
+
+  it('糧食: 所持上限 2 なら false、空きがあれば true(満腹度は見ない)', () => {
+    expect(canPickup('ration', 0, 3, 5, 5, 2, 2)).toBe(false);
+    expect(canPickup('ration', 3, 3, 1, 5, 1, 2)).toBe(true);
+    expect(canPickup('ration', 0, 3, 5, 5, 0, 2)).toBe(true);
   });
 });
