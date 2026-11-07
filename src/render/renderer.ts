@@ -56,6 +56,8 @@ export interface GravitonFx {
   pulses?: readonly { x: number; y: number; dx: number; dy: number }[];
   /** 敵(ワールド座標の中心と被弾フラッシュ)。平坦色の矩形で描く。flyer は飛行敵 */
   enemies?: readonly { x: number; y: number; flash: boolean; flyer?: boolean }[];
+  /** ドロップ(ワールド座標の中心)。hidden は点滅の消灯側フレーム */
+  drops?: readonly { x: number; y: number; kind: 'charge' | 'heal'; hidden: boolean }[];
 }
 
 /**
@@ -390,6 +392,33 @@ export class Renderer {
         ctx.fillStyle = e.flyer ? '#2e3d4a' : '#3a2b30';
         const bandY = e.flyer ? Math.round(sy - s / 2) : Math.round(sy + s / 2) - band;
         ctx.fillRect(Math.round(sx - s / 2), bandY, s, band);
+      }
+    }
+
+    // ドロップ: 同じ fx 相乗りで平坦色だけ(新規パスなし)。
+    // 砲弾セルは紫の角型+暗い芯、回復セルは緑の十字+淡い芯で、色と形の両方で判別する。
+    // 色は 32 色パレットの実在色を使う(任意色は量子化で別色相へ寄る: 例 #7fc46a→金 #caa64a)
+    if (fx.drops && fx.drops.length > 0) {
+      const s = Math.max(2, Math.round(0.5 * ppt));
+      for (const d of fx.drops) {
+        if (d.hidden) continue;
+        const sx = Math.round((d.x - renderCam.x) * ppt + w / 2);
+        const sy = Math.round((d.y - renderCam.y) * ppt + h / 2);
+        if (d.kind === 'charge') {
+          ctx.fillStyle = '#8d62cb';
+          ctx.fillRect(Math.round(sx - s / 2), Math.round(sy - s / 2), s, s);
+          const core = Math.max(1, Math.round(s * 0.45));
+          ctx.fillStyle = '#30254c';
+          ctx.fillRect(Math.round(sx - core / 2), Math.round(sy - core / 2), core, core);
+        } else {
+          ctx.fillStyle = '#3c755f';
+          const t = Math.max(1, Math.round(s * 0.38));
+          ctx.fillRect(Math.round(sx - t / 2), Math.round(sy - s / 2), t, s);
+          ctx.fillRect(Math.round(sx - s / 2), Math.round(sy - t / 2), s, t);
+          const core = Math.max(1, Math.round(s * 0.3));
+          ctx.fillStyle = '#c7d0ce';
+          ctx.fillRect(Math.round(sx - core / 2), Math.round(sy - core / 2), core, core);
+        }
       }
     }
     this.mark('fx');

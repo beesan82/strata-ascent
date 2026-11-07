@@ -3,9 +3,11 @@ import { hapticCannonFire, hapticDamage, hapticEnemyDown, initNativeShell } from
 import { Input, MOVE_KEYS } from './core/input';
 import { installTouchControls } from './core/touch';
 import { MAX_HP, Player } from './entities/player';
-import { Graviton } from './entities/graviton';
+import { Graviton, MAX_CHARGES } from './entities/graviton';
 import { pulseAimDir, PulseGun, PULSE_DAMAGE, PULSE_SIZE, type Pulse } from './entities/pulse';
 import { Flyer, Walker } from './entities/enemy';
+import { canPickup, DropItem, pushDrop } from './entities/drop';
+import { dropFor } from './world/drop';
 import { chooseFlyerSpawns, chooseSpawns, findAirPockets, findFloorRuns, flyerMulFor } from './world/spawn';
 import { grandHallAt } from './world/grandhall';
 import { nearestRestPoint } from './world/restpoint';
@@ -101,6 +103,23 @@ function recordDefeated(id: string): void {
     const oldest = defeatedEnemies.values().next().value;
     if (oldest !== undefined) defeatedEnemies.delete(oldest);
   }
+}
+
+/** 生存中のドロップ(第2弾 §3)。撃破位置から落ちて床に静止し、寿命で消える */
+let drops: DropItem[] = [];
+/** セッション通算の撃破カウンタ。ドロップ抽選(dropFor)の killIndex として使う */
+let killCount = 0;
+
+/**
+ * 敵 1 体の撃破処理: 記録保持への登録と、ドロップ抽選を 1 回だけ行う。
+ * 地区は撃破位置のセルで決める。ドロップは敵の中心から落下する。
+ */
+function onEnemyKilled(spawnId: string, centerX: number, centerY: number): void {
+  recordDefeated(spawnId);
+  const biomeId = biomeIdForCell(seed, biomeCellAt(seed, Math.floor(centerY)));
+  const kind = dropFor(seed, spawnId, killCount, biomeId);
+  killCount++;
+  if (kind) pushDrop(drops, new DropItem(kind, centerX, centerY));
 }
 
 /** プレイヤー近傍の地形を走査して敵の出現集合を更新する(倒していない敵は範囲を離れると再出現する) */
@@ -367,11 +386,28 @@ function update(dt: number): void {
       }
     }
     if (spent.size > 0) pulseGun.pulses = pulseGun.pulses.filter((p) => !spent.has(p));
-    // 撃破を記録してから実体を捨てる(記録保持 §4: 倒した敵は再出現しない)
-    for (const e of enemies) if (e.walker.dead) recordDefeated(e.spawnId);
+    // 撃破を記録してから実体を捨てる(記録保持 §4: 倒した敵は再出現しない)。
+    // 記録と同時にドロップ抽選も 1 回だけ行う(§3)
+    for (const e of enemies) if (e.walker.dead) onEnemyKilled(e.spawnId, e.walker.centerX, e.walker.centerY);
     enemies = enemies.filter((e) => !e.walker.dead);
-    for (const e of flyers) if (e.flyer.dead) recordDefeated(e.spawnId);
+    for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY);
     flyers = flyers.filter((e) => !e.flyer.dead);
+  }
+
+  // ドロップ: 落下・寿命の更新と、プレイヤー接触での取得(満タン時は拾えず残る)
+  for (const d of drops) d.update(dt, tiles);
+  if (drops.length > 0) drops = drops.filter((d) => !d.expired);
+  if (!player.dead && drops.length > 0) {
+    const pb = player.body;
+    drops = drops.filter((d) => {
+      const b = d.body;
+      const overlap = pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y;
+      if (!overlap) return true;
+      if (!canPickup(d.kind, graviton.charges, MAX_CHARGES, player.hp, MAX_HP)) return true;
+      if (d.kind === 'charge') graviton.charges++;
+      else player.hp++;
+      return false;
+    });
   }
 
   // 敵との接触ダメージと、死亡時の復活(最後の休憩点、無ければスポーン地点)
@@ -522,6 +558,13 @@ function frame(now: number): void {
         flyer: true,
       })),
     ],
+    // ドロップ: 寿命の残り 5 秒は点滅(約 4 Hz で消灯側のフレームを hidden にする)
+    drops: drops.map((d) => ({
+      x: d.centerX,
+      y: d.centerY,
+      kind: d.kind,
+      hidden: d.blinking && Math.floor(simTime * 4) % 2 === 1,
+    })),
   });
   if (collectStats) {
     // present の getImageData が描画コマンドを同期ラスタ化させるので、ここの時間に描画全体が含まれる
