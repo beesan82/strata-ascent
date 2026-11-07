@@ -63,6 +63,11 @@ export class Player {
     return this.hp <= 0;
   }
 
+  /** ノックバック中(被弾直後の横入力を受け付けない間)。安定接地点の記録などで使う */
+  get knocked(): boolean {
+    return this.knockT > 0;
+  }
+
   /**
    * 敵接触などのダメージ。無敵中は受けない(その場合は false)。
    * fromX はダメージ源の中心 X で、ノックバックはそこから離れる向き。

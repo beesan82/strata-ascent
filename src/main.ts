@@ -34,6 +34,13 @@ import {
   stepSatiety,
   type SatietyState,
 } from './core/satiety';
+import {
+  addRemainsSite,
+  initialGroundAnchor,
+  pruneRemainsSites,
+  stepGroundAnchor,
+  type GroundAnchor,
+} from './core/remains';
 import { displayAltitude, highestLayer } from './core/coordinate';
 import { autoViewStarted, initialView, viewState, type ViewState } from './core/view';
 import { Caption, captionText } from './render/caption';
@@ -171,6 +178,33 @@ function onBossKilled(spawnId: string, b: Boss): void {
   });
 }
 
+/**
+ * 死亡時の遺留品(サバイバル段階 3、設計 §8): 所持糧食を最後の安定接地点へ落とす。
+ * 対象は糧食だけ(砲弾は自動回復するため回収価値が薄く、回復セルは所持品として存在しない)。
+ * 遺留品は補給品(寿命なし)として出し、箇所は最大 2 つまで(3 つ目で最も古い箇所が消える)。
+ * 復活処理(テレポートと糧食リセット)より前に呼ぶこと。
+ */
+function dropRemainsOnDeath(): void {
+  if (satiety.rations <= 0) return;
+  // 回収・消滅済みの箇所は数えない(空いた枠は新しい遺留品に使える)
+  remainsSites = pruneRemainsSites(remainsSites, drops);
+  const cx = groundAnchor.x + player.body.w / 2;
+  const cy = groundAnchor.y + player.body.h / 2;
+  const offsets = satiety.rations === 1 ? [0] : [-0.75, 0.75];
+  const items: DropItem[] = [];
+  for (let i = 0; i < satiety.rations; i++) {
+    const item = new DropItem('ration', cx + offsets[i], cy, true);
+    pushSupply(drops, item);
+    items.push(item);
+  }
+  const added = addRemainsSite(remainsSites, items);
+  remainsSites = added.sites;
+  if (added.evicted.length > 0) {
+    const evicted = new Set(added.evicted);
+    drops = drops.filter((d) => !evicted.has(d));
+  }
+}
+
 /** プレイヤー近傍の地形を走査して敵の出現集合を更新する(倒していない敵は範囲を離れると再出現する) */
 function refreshEnemies(): void {
   const cell = biomeCellAt(seed, Math.floor(player.body.y));
@@ -238,6 +272,10 @@ const spawn = qx !== null && qy !== null ? { x: Number(qx), y: Number(qy) } : fi
 const player = new Player(spawn.x, spawn.y);
 /** 復活点(ボディ左上)。休憩点に触れるたびに更新される */
 let respawnPoint = { x: spawn.x, y: spawn.y };
+/** 最後に安定して接地していた場所(遺留品の落下先、サバイバル段階 3)。初期値はスポーン地点 */
+let groundAnchor: GroundAnchor = initialGroundAnchor(spawn.x, spawn.y);
+/** 遺留品の箇所(セッション内のみ、最大 2 箇所)。実体は drops 内の DropItem への参照で持つ */
+let remainsSites: DropItem[][] = [];
 const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
 installTouchControls(input); // タッチ端末でのみ画面ボタンが出る(それ以外は何もしない)
@@ -364,6 +402,15 @@ function update(dt: number): void {
   const s = input.state;
   const pressed = input.takePressed();
   player.update(s, dt, tiles);
+  // 安定接地点(遺留品の落下先、サバイバル段階 3): 接地が 1 秒続いた場所を記録する。
+  // 空中・ノックバック中は更新しない(死亡座標そのものは回収不能な場所になり得るため使わない)
+  groundAnchor = stepGroundAnchor(groundAnchor, {
+    grounded: player.body.onGround,
+    knocked: player.knocked,
+    x: player.body.x,
+    y: player.body.y,
+    dt,
+  });
   // 右スティックで狙っている間は、向きも照準の左右へ追従させる(移動方向と独立に狙うため。
   // ほぼ真上の狙いで向きが暴れないよう、横成分が弱いときは変えない)
   if (input.touchAimActive && Math.abs(input.touchAimX) >= 0.3) {
@@ -609,12 +656,16 @@ function update(dt: number): void {
     }
   }
   if (player.dead) {
+    // 遺留品(サバイバル段階 3): テレポートの前に、所持糧食を最後の安定接地点へ落とす
+    dropRemainsOnDeath();
     player.body.x = respawnPoint.x;
     player.body.y = respawnPoint.y;
     player.revive();
-    // 満腹度は 35 に戻す(全回復はしない。糧食は段階 1 では保持する)
+    // 満腹度は 35 に戻し、糧食は 0(遺留品へ移ったぶん。保持はしない)
     satiety = resetSatietyOnDeath(satiety);
     satietyPrevLevel = satietyLevel(satiety.value);
+    // 復活点が新しい基準になる(次の遺留品の落下先は、ここから先の安定接地で決まる)
+    groundAnchor = initialGroundAnchor(respawnPoint.x, respawnPoint.y);
     enemies = []; // 実体は捨てるが撃破記録(defeatedEnemies)は残す(§4: 死亡でリセットしない)
     flyers = [];
     boss = null; // ボスも実体は捨てる(撃破済みなら記録により再出現しない)
