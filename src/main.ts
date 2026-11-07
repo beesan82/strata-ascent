@@ -3,12 +3,14 @@ import { hapticCannonFire, hapticDamage, hapticEnemyDown, initNativeShell } from
 import { Input, MOVE_KEYS } from './core/input';
 import { installTouchControls } from './core/touch';
 import { MAX_HP, Player } from './entities/player';
-import { Graviton, MAX_CHARGES } from './entities/graviton';
+import { Graviton, MAX_CHARGES, BORE_LENGTH, BORE_RADIUS } from './entities/graviton';
 import { pulseAimDir, PulseGun, PULSE_DAMAGE, PULSE_SIZE, type Pulse } from './entities/pulse';
-import { Flyer, Walker } from './entities/enemy';
+import { Boss, BOSS_BEAM_DAMAGE, BOSS_H, BOSS_HP, BOSS_W, Flyer, Walker } from './entities/enemy';
+import { beamHit } from './entities/beamHit';
 import { canPickup, DropItem, pushDrop } from './entities/drop';
 import { dropFor } from './world/drop';
 import { chooseFlyerSpawns, chooseSpawns, findAirPockets, findFloorRuns, flyerMulFor } from './world/spawn';
+import { bossSpawnFor, type BossSpawn } from './world/boss';
 import { grandHallAt } from './world/grandhall';
 import { nearestRestPoint } from './world/restpoint';
 import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
@@ -85,6 +87,11 @@ const pulseGun = new PulseGun();
 let enemies: { spawnId: string; walker: Walker }[] = [];
 /** 生存中の飛行敵(スポーン識別子つき)。出現の決定は walker と同じスキャンに相乗りする */
 let flyers: { spawnId: string; flyer: Flyer }[] = [];
+/**
+ * 有効化中のボス「広間番人」(第2弾 §2)。大広間のあるセルにプレイヤーがいる間だけ
+ * 1 体を有効化する。実体は範囲を離れると捨てられるが、撃破は記録保持に残る。
+ */
+let boss: { spawnId: string; boss: Boss; spawn: BossSpawn } | null = null;
 const ENEMY_SCAN_INTERVAL_FRAMES = 30;
 const ENEMY_SCAN_X = 40;
 const ENEMY_SCAN_Y = 24;
@@ -120,6 +127,18 @@ function onEnemyKilled(spawnId: string, centerX: number, centerY: number): void 
   const kind = dropFor(seed, spawnId, killCount, biomeId);
   killCount++;
   if (kind) pushDrop(drops, new DropItem(kind, centerX, centerY));
+}
+
+/**
+ * ボスの撃破処理: 記録保持への登録と、確定ドロップ(回復 1 + 砲弾 2)。
+ * 抽選(dropFor)は経由せず、撃破位置から落として広間の床へ散らす(第2弾 §2)。
+ */
+function onBossKilled(spawnId: string, b: Boss): void {
+  recordDefeated(spawnId);
+  killCount++;
+  pushDrop(drops, new DropItem('heal', b.centerX, b.centerY));
+  pushDrop(drops, new DropItem('charge', b.centerX - 1.5, b.centerY));
+  pushDrop(drops, new DropItem('charge', b.centerX + 1.5, b.centerY));
 }
 
 /** プレイヤー近傍の地形を走査して敵の出現集合を更新する(倒していない敵は範囲を離れると再出現する) */
@@ -166,6 +185,16 @@ function refreshEnemies(): void {
     }
   } else if (flyers.length > 0) {
     flyers = [];
+  }
+  // ボス(第2弾 §2): プレイヤーがいるセルの大広間にだけ有効化する。
+  // 撃破済みなら bossSpawnFor が null を返し、二度と出ない(再戦不可)
+  const bs = bossSpawnFor(seed, cell, defeatedEnemies);
+  if (bs) {
+    if (!boss || boss.spawnId !== bs.id) {
+      boss = { spawnId: bs.id, boss: new Boss(bs.x, bs.floorY, bs.hall.x0, bs.hall.x1), spawn: bs };
+    }
+  } else {
+    boss = null;
   }
 }
 // デバッグ/スクリーンショット用: ?x=&y= でスポーン位置を上書き(埋まり座標は自己責任)
@@ -214,9 +243,7 @@ resize();
 
 const tiles = (tx: number, ty: number) => store.tileAt(tx, ty);
 
-// 重力子砲: 発射パラメータとビーム残光(演出)
-const BORE_LENGTH = 300; // タイル
-const BORE_RADIUS = 3;   // タイル(半径)
+// 重力子砲: ビーム残光(演出)。発射パラメータ(BORE_*)は entities/graviton で定義し beamHit と共有する
 const BEAM_TTL = 0.18;   // 秒: ビーム残光の寿命(切り札の一撃として一瞬だが読める長さ)
 let lastBeam: { angle: number; ttl: number } | null = null;
 
@@ -240,6 +267,44 @@ function fire(): void {
   }
   renderer.invalidateBored(affected, store); // 焼き込みを再焼き込み待ちに(境界際の隣チャンクも)
   lastBeam = { angle: aim, ttl: BEAM_TTL };
+  applyBeamToEnemies(aim);
+}
+
+/**
+ * 重粒子砲と敵の相互作用(第2弾 §3)。ビーム軸の capsule(beamHit)内の通常敵は
+ * 即死し、撃破処理は通常経路(onEnemyKilled: 記録保持 + ドロップ抽選)を通す。
+ * ボスには固定ダメージ BOSS_BEAM_DAMAGE(hit() の硬直 2 倍がそのまま効く)。
+ * 掘削はこの時点ですでに適用済みで、地形が消えた直線上の敵を薙ぐ形になる。
+ */
+function applyBeamToEnemies(angle: number): void {
+  const ox = player.centerX;
+  const oy = player.centerY;
+  const halfDiag = (w: number, h: number) => Math.hypot(w, h) / 2;
+  let anyKill = false;
+  for (const e of enemies) {
+    if (!e.walker.dead && beamHit(ox, oy, angle, e.walker.centerX, e.walker.centerY, halfDiag(e.walker.body.w, e.walker.body.h))) {
+      e.walker.hit(e.walker.hp); // 現在 HP ぶんを与えて即死させる(通常の被弾経路を通す)
+      anyKill = true;
+    }
+  }
+  for (const e of flyers) {
+    if (!e.flyer.dead && beamHit(ox, oy, angle, e.flyer.centerX, e.flyer.centerY, halfDiag(e.flyer.body.w, e.flyer.body.h))) {
+      e.flyer.hit(e.flyer.hp);
+      anyKill = true;
+    }
+  }
+  if (anyKill) hapticEnemyDown();
+  for (const e of enemies) if (e.walker.dead) onEnemyKilled(e.spawnId, e.walker.centerX, e.walker.centerY);
+  enemies = enemies.filter((e) => !e.walker.dead);
+  for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY);
+  flyers = flyers.filter((e) => !e.flyer.dead);
+  if (boss && beamHit(ox, oy, angle, boss.boss.centerX, boss.boss.centerY, halfDiag(BOSS_W, BOSS_H))) {
+    if (boss.boss.hit(BOSS_BEAM_DAMAGE)) {
+      hapticEnemyDown();
+      onBossKilled(boss.spawnId, boss.boss);
+      boss = null;
+    }
+  }
 }
 
 let frames = 0;
@@ -358,7 +423,14 @@ function update(dt: number): void {
   if (frames % ENEMY_SCAN_INTERVAL_FRAMES === 0) refreshEnemies();
   for (const e of enemies) e.walker.update(dt, tiles);
   for (const e of flyers) e.flyer.update(dt, tiles, player.centerX, player.centerY);
-  if ((enemies.length > 0 || flyers.length > 0) && pulseGun.pulses.length > 0) {
+  if (boss) {
+    const hall = boss.spawn.hall;
+    const playerInHall =
+      player.centerX >= hall.x0 && player.centerX < hall.x1 &&
+      player.centerY >= hall.y0 && player.centerY < hall.y1;
+    boss.boss.update(dt, tiles, player.centerX, player.centerY, playerInHall);
+  }
+  if ((enemies.length > 0 || flyers.length > 0 || boss) && pulseGun.pulses.length > 0) {
     const spent = new Set<Pulse>();
     for (const p of pulseGun.pulses) {
       for (const e of enemies) {
@@ -384,6 +456,15 @@ function update(dt: number): void {
           break;
         }
       }
+      if (spent.has(p) || !boss) continue;
+      const b = boss.boss.body;
+      if (
+        p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
+        p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
+      ) {
+        if (boss.boss.hit(PULSE_DAMAGE)) hapticEnemyDown();
+        spent.add(p);
+      }
     }
     if (spent.size > 0) pulseGun.pulses = pulseGun.pulses.filter((p) => !spent.has(p));
     // 撃破を記録してから実体を捨てる(記録保持 §4: 倒した敵は再出現しない)。
@@ -392,6 +473,10 @@ function update(dt: number): void {
     enemies = enemies.filter((e) => !e.walker.dead);
     for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY);
     flyers = flyers.filter((e) => !e.flyer.dead);
+    if (boss && boss.boss.dead) {
+      onBossKilled(boss.spawnId, boss.boss);
+      boss = null;
+    }
   }
 
   // ドロップ: 落下・寿命の更新と、プレイヤー接触での取得(満タン時は拾えず残る)
@@ -429,6 +514,12 @@ function update(dt: number): void {
         }
       }
     }
+    if (!player.dead && boss) {
+      const b = boss.boss.body;
+      if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
+        if (player.damage(boss.boss.centerX)) hapticDamage();
+      }
+    }
   }
   if (player.dead) {
     player.body.x = respawnPoint.x;
@@ -436,6 +527,7 @@ function update(dt: number): void {
     player.revive();
     enemies = []; // 実体は捨てるが撃破記録(defeatedEnemies)は残す(§4: 死亡でリセットしない)
     flyers = [];
+    boss = null; // ボスも実体は捨てる(撃破済みなら記録により再出現しない)
     pulseGun.pulses = [];
   }
   updateAudio();
@@ -502,7 +594,13 @@ function updateHud(): void {
   // 武器表示(設計 2026-11-05-weapon-switch §2-3): 現在の武器を角括弧で囲む
   const weapon = input.weaponMode === 'pulse' ? `武器 [パルス] / ${cannon}` : `武器 パルス / [${cannon}]`;
   const hearts = '♥'.repeat(player.hp) + '♡'.repeat(Math.max(0, MAX_HP - player.hp));
-  hud.textContent = `第 ${maxLayer} 階層 / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${weapon} — HP ${hearts}`;
+  // ボス HP バー(第2弾 §2): 番人が有効な間だけ、プレイヤー HP と同じ HUD 経路に相乗りする
+  let bossHud = '';
+  if (boss) {
+    const filled = Math.max(0, Math.ceil((boss.boss.hp / BOSS_HP) * 10));
+    bossHud = ` — 広間番人 [${'#'.repeat(filled)}${'-'.repeat(10 - filled)}]`;
+  }
+  hud.textContent = `第 ${maxLayer} 階層 / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${weapon} — HP ${hearts}${bossHud}`;
 }
 
 let last = performance.now();
@@ -557,6 +655,17 @@ function frame(now: number): void {
         flash: e.flyer.flashT > 0,
         flyer: true,
       })),
+      // ボス: 体格(w/h)と相を渡し、renderer 側で相の違い(予備動作の点滅・硬直の晒し)を読む
+      ...(boss
+        ? [{
+            x: boss.boss.centerX,
+            y: boss.boss.centerY,
+            flash: boss.boss.flashT > 0,
+            w: BOSS_W,
+            h: BOSS_H,
+            bossPhase: boss.boss.phase,
+          }]
+        : []),
     ],
     // ドロップ: 寿命の残り 5 秒は点滅(約 4 Hz で消灯側のフレームを hidden にする)
     drops: drops.map((d) => ({

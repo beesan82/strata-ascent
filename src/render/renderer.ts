@@ -1,5 +1,6 @@
 import { Camera } from '../core/camera';
 import type { Player } from '../entities/player';
+import type { BossPhase } from '../entities/enemy';
 import type { ChunkStore } from '../world/chunks';
 import { CHUNK_SIZE } from '../world/tiles';
 import { Background } from './background';
@@ -54,8 +55,9 @@ export interface GravitonFx {
   beam: { angle: number; alpha: number } | null;
   /** パルスの弾(ワールド座標の中心と方向)。平坦色の短矩形で描く */
   pulses?: readonly { x: number; y: number; dx: number; dy: number }[];
-  /** 敵(ワールド座標の中心と被弾フラッシュ)。平坦色の矩形で描く。flyer は飛行敵 */
-  enemies?: readonly { x: number; y: number; flash: boolean; flyer?: boolean }[];
+  /** 敵(ワールド座標の中心と被弾フラッシュ)。平坦色の矩形で描く。flyer は飛行敵、
+   *  w/h と bossPhase がある要素はボス(体格と相で描き分ける) */
+  enemies?: readonly { x: number; y: number; flash: boolean; flyer?: boolean; w?: number; h?: number; bossPhase?: BossPhase }[];
   /** ドロップ(ワールド座標の中心)。hidden は点滅の消灯側フレーム */
   drops?: readonly { x: number; y: number; kind: 'charge' | 'heal'; hidden: boolean }[];
 }
@@ -384,9 +386,31 @@ export class Renderer {
     if (fx.enemies && fx.enemies.length > 0) {
       const band = Math.max(1, Math.round(0.18 * ppt));
       for (const e of fx.enemies) {
-        const s = Math.max(2, Math.round((e.flyer ? 0.8 : 0.9) * ppt));
         const sx = Math.round((e.x - renderCam.x) * ppt + w / 2);
         const sy = Math.round((e.y - renderCam.y) * ppt + h / 2);
+        if (e.w !== undefined && e.h !== undefined) {
+          // ボス「広間番人」: 体格ぶんの矩形 + 足元の帯。相の違いを色で読ませる:
+          // 予備動作は点滅(テレグラフ)、突進は熱色、硬直は淡色に芯を晒す(撃ち時の合図)
+          const bw = Math.max(2, Math.round(e.w * ppt));
+          const bh = Math.max(2, Math.round(e.h * ppt));
+          let color = '#5d343c';
+          if (e.bossPhase === 'windup') color = Math.floor(timeSec * 10) % 2 === 0 ? '#e8b4b8' : '#5d343c';
+          else if (e.bossPhase === 'charge') color = '#a8564f';
+          else if (e.bossPhase === 'stunned') color = '#c9b8a6';
+          ctx.fillStyle = e.flash ? '#f2d7d7' : color;
+          ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy - bh / 2), bw, bh);
+          ctx.fillStyle = '#2c1e22';
+          ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy + bh / 2) - band, bw, band);
+          if (e.bossPhase === 'stunned' && !e.flash) {
+            // 芯は金(パレット実在色)。淡色の本体と量子化後も分離して「撃ち時」を読ませる
+            const coreW = Math.max(2, Math.round(bw * 0.3));
+            const coreH = Math.max(2, Math.round(bh * 0.3));
+            ctx.fillStyle = '#caa64a';
+            ctx.fillRect(Math.round(sx - coreW / 2), Math.round(sy - coreH / 2), coreW, coreH);
+          }
+          continue;
+        }
+        const s = Math.max(2, Math.round((e.flyer ? 0.8 : 0.9) * ppt));
         ctx.fillStyle = e.flash ? '#f2d7d7' : e.flyer ? '#7fa3c0' : '#8a4b52';
         ctx.fillRect(Math.round(sx - s / 2), Math.round(sy - s / 2), s, s);
         ctx.fillStyle = e.flyer ? '#2e3d4a' : '#3a2b30';

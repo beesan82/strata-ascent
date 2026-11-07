@@ -1,4 +1,8 @@
 export const MAX_CHARGES = 3;
+/** 掘削ビームの長さ(タイル)。敵判定(beamHit)も同じ幾何を使うため main と共有する */
+export const BORE_LENGTH = 300;
+/** 掘削ビームの半径(タイル) */
+export const BORE_RADIUS = 3;
 const CHARGE_TIME = 0.6;   // 秒: 発射に必要な溜め
 const RECHARGE_TIME = 6;   // 秒: 弾1発の自動回復
 
