@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bossSpawnFor } from './boss';
+import { bossRewardFor, bossSpawnFor } from './boss';
 import { grandHallAt } from './grandhall';
 
 const SEED = 20260711;
@@ -60,5 +60,20 @@ describe('bossSpawnFor(ボスの配置、第2弾 §2)', () => {
     // 別のセルの撃破記録では抑止されない
     const other = new Set(['b:999999']);
     expect(bossSpawnFor(SEED, cell!, other)).not.toBeNull();
+  });
+});
+
+describe('bossRewardFor(ボスの確定ドロップ、サバイバル段階 2)', () => {
+  it('構成は回復 1 + 砲弾 1 + 糧食 1 で総数 3(設計 §5・§10)', () => {
+    const reward = bossRewardFor();
+    expect(reward).toHaveLength(3);
+    expect(reward.filter((k) => k === 'heal')).toHaveLength(1);
+    expect(reward.filter((k) => k === 'charge')).toHaveLength(1);
+    expect(reward.filter((k) => k === 'ration')).toHaveLength(1);
+  });
+
+  it('並びは出現位置の割り当て順(中心=回復、左=砲弾、右=糧食)で決定的', () => {
+    expect(bossRewardFor()).toEqual(['heal', 'charge', 'ration']);
+    expect(bossRewardFor()).toEqual(bossRewardFor());
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Graviton } from './graviton';
+import { Graviton, RECHARGE_TIME, rechargeTimeFor } from './graviton';
 
 describe('Graviton', () => {
   it('初期弾数は3', () => {
@@ -77,5 +77,32 @@ describe('Graviton', () => {
     g.update(0.3, true, fire);
     expect(g.chargeRatio).toBeGreaterThan(0);
     expect(g.chargeRatio).toBeLessThanOrEqual(1);
+  });
+  it('危険域(critical)では自動回復が半分の速さ=回復時間 2 倍(サバイバル段階 2、設計 §4)', () => {
+    expect(RECHARGE_TIME).toBe(6);
+    expect(rechargeTimeFor(false)).toBe(6);
+    expect(rechargeTimeFor(true)).toBe(12);
+  });
+  it('回復時間 12 秒を指定すると、7 秒では回復せず 12 秒で回復する', () => {
+    const g = new Graviton();
+    const fire = vi.fn();
+    for (let i = 0; i < 60; i++) g.update(1 / 60, true, fire);
+    g.update(1 / 60, false, fire); // 1発消費 → 2
+    expect(g.charges).toBe(2);
+    for (let i = 0; i < 14; i++) g.update(0.5, false, fire, rechargeTimeFor(true)); // 7秒(0.5 刻みで正確に数える)
+    expect(g.charges).toBe(2); // 通常(6秒)なら回復しているが、半減中はまだ
+    for (let i = 0; i < 10; i++) g.update(0.5, false, fire, rechargeTimeFor(true)); // +5秒=12秒
+    expect(g.charges).toBe(3);
+  });
+  it('回復時間が途中で通常→危険域に変わっても、蓄積が負になって暴走しない', () => {
+    const g = new Graviton();
+    const fire = vi.fn();
+    for (let i = 0; i < 60; i++) g.update(1 / 60, true, fire);
+    g.update(1 / 60, false, fire); // 1発消費 → 2
+    for (let i = 0; i < 10; i++) g.update(0.5, false, fire); // 通常で 5 秒蓄積
+    for (let i = 0; i < 14; i++) g.update(0.5, false, fire, rechargeTimeFor(true)); // 危険域で +7 秒
+    expect(g.charges).toBe(3); // 蓄積 5 秒 + 7 秒で 12 秒の閾値を越えて 1 回だけ回復
+    for (let i = 0; i < 60; i++) g.update(0.5, false, fire, rechargeTimeFor(true));
+    expect(g.charges).toBe(3); // 上限で頭打ちのまま
   });
 });

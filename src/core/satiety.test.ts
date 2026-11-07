@@ -5,6 +5,8 @@ import {
   MAX_RATIONS,
   RATION_RESTORE,
   resetSatietyOnDeath,
+  SATIETY_BIOME_MUL,
+  satietyBiomeMulFor,
   SATIETY_MAX,
   SATIETY_ON_DEATH,
   satietyLevel,
@@ -15,11 +17,11 @@ import {
 const DT = 0.1;
 
 /** moving(安全圏外・活動倍率 1.0)で seconds 秒ぶん進める(ステップ数で数え、浮動小数の誤差を避ける) */
-function advance(state: SatietyState, seconds: number, opts: { safe?: boolean; still?: boolean } = {}): SatietyState {
+function advance(state: SatietyState, seconds: number, opts: { safe?: boolean; still?: boolean; mul?: number } = {}): SatietyState {
   let s = state;
   const steps = Math.round(seconds / DT);
   for (let i = 0; i < steps; i++) {
-    s = stepSatiety(s, { dt: DT, inSafeZone: opts.safe ?? false, still: opts.still ?? false }).state;
+    s = stepSatiety(s, { dt: DT, inSafeZone: opts.safe ?? false, still: opts.still ?? false, biomeMul: opts.mul }).state;
   }
   return s;
 }
@@ -180,5 +182,37 @@ describe('resetSatietyOnDeath(死亡時)', () => {
     expect(s.value).toBe(35);
     expect(s.rations).toBe(2);
     expect(s.starveT).toBe(0);
+  });
+});
+
+describe('地区消耗倍率(段階 2、設計 §4 の地区表)', () => {
+  it('7 地区ぶんの倍率が設計表どおり', () => {
+    expect(SATIETY_BIOME_MUL).toEqual({
+      coldSteel: 1.0,
+      habitation: 0.85,
+      disposal: 1.05,
+      waterVoid: 1.15,
+      power: 1.0,
+      foundry: 1.1,
+      biomech: 1.25,
+    });
+    expect(satietyBiomeMulFor('biomech')).toBe(1.25);
+    expect(satietyBiomeMulFor('habitation')).toBe(0.85);
+  });
+
+  it('生体異物区(×1.25)では 576 秒で 0 になる', () => {
+    const s0: SatietyState = { value: 100, rations: 0, starveT: 0 };
+    expect(advance(s0, 288, { mul: satietyBiomeMulFor('biomech') }).value).toBeCloseTo(50, 1);
+    expect(advance(s0, 576, { mul: satietyBiomeMulFor('biomech') }).value).toBeCloseTo(0, 1);
+  });
+
+  it('居住区画(×0.85)では 720 秒でも 15 残る', () => {
+    const s0: SatietyState = { value: 100, rations: 0, starveT: 0 };
+    expect(advance(s0, 720, { mul: satietyBiomeMulFor('habitation') }).value).toBeCloseTo(15, 1);
+  });
+
+  it('倍率を掛けても安全圏では減らない', () => {
+    const s0: SatietyState = { value: 100, rations: 0, starveT: 0 };
+    expect(advance(s0, 720, { safe: true, mul: satietyBiomeMulFor('biomech') }).value).toBe(100);
   });
 });

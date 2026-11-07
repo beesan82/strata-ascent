@@ -5,6 +5,26 @@
  * dt の刻み方で結果が変わらない。
  */
 
+import type { BiomeId } from '../world/biomeCells';
+
+/**
+ * 地区ごとの満腹度消耗倍率(段階 2 で有効化、設計 §4 の地区表)。
+ * 地区の読み(守られた生活空間では少なく、生体異物区が最も身体に悪い)を数値にしたもの。
+ */
+export const SATIETY_BIOME_MUL: Record<BiomeId, number> = {
+  coldSteel: 1.0,
+  habitation: 0.85,
+  disposal: 1.05,
+  waterVoid: 1.15,
+  power: 1.0,
+  foundry: 1.1,
+  biomech: 1.25,
+};
+
+export function satietyBiomeMulFor(biomeId: BiomeId): number {
+  return SATIETY_BIOME_MUL[biomeId];
+}
+
 export const SATIETY_MAX = 100;
 /** 基礎消耗(満腹度/秒)。標準地区で約 12 分で 0 になる速度。調整はこの 1 定数で */
 export const SATIETY_DRAIN_PER_SEC = 100 / 720;
@@ -53,7 +73,7 @@ export interface SatietyStepInput {
   inSafeZone: boolean;
   /** 静止中は活動倍率 0.7 */
   still: boolean;
-  /** 地区倍率(段階 1 では常に 1.0。段階 2 で設計 §4 の地区表を接続する) */
+  /** 地区倍率(段階 2 で有効化。satietyBiomeMulFor で引いた値を渡す) */
   biomeMul?: number;
 }
 

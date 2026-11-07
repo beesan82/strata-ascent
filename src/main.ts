@@ -3,7 +3,7 @@ import { hapticCannonFire, hapticDamage, hapticEnemyDown, initNativeShell } from
 import { Input, MOVE_KEYS } from './core/input';
 import { installTouchControls } from './core/touch';
 import { MAX_HP, Player } from './entities/player';
-import { Graviton, MAX_CHARGES, BORE_LENGTH, BORE_RADIUS } from './entities/graviton';
+import { Graviton, MAX_CHARGES, BORE_LENGTH, BORE_RADIUS, rechargeTimeFor } from './entities/graviton';
 import { pulseAimDir, PulseGun, PULSE_DAMAGE, PULSE_SIZE, type Pulse } from './entities/pulse';
 import { Boss, BOSS_BEAM_DAMAGE, BOSS_H, BOSS_HP, BOSS_W, Flyer, Walker } from './entities/enemy';
 import { beamHit } from './entities/beamHit';
@@ -11,7 +11,7 @@ import { canAddSupply, canPickup, DropItem, pushDrop, pushSupply } from './entit
 import { dropFor } from './world/drop';
 import { chooseSupplyCaches, restStockSecondFor, supplyFor, type SupplyCache } from './world/supply';
 import { chooseFlyerSpawns, chooseSpawns, findAirPockets, findFloorRuns, flyerMulFor } from './world/spawn';
-import { bossSpawnFor, type BossSpawn } from './world/boss';
+import { bossRewardFor, bossSpawnFor, type BossSpawn } from './world/boss';
 import { grandHallAt } from './world/grandhall';
 import { nearestRestPoint } from './world/restpoint';
 import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
@@ -29,6 +29,7 @@ import {
   initialSatiety,
   MAX_RATIONS,
   resetSatietyOnDeath,
+  satietyBiomeMulFor,
   satietyLevel,
   stepSatiety,
   type SatietyState,
@@ -154,15 +155,20 @@ function onEnemyKilled(spawnId: string, centerX: number, centerY: number): void 
 }
 
 /**
- * ボスの撃破処理: 記録保持への登録と、確定ドロップ(回復 1 + 砲弾 2)。
- * 抽選(dropFor)は経由せず、撃破位置から落として広間の床へ散らす(第2弾 §2)。
+ * ボスの撃破処理: 記録保持への登録と、確定ドロップ(回復 1 + 砲弾 1 + 糧食 1、総数 3)。
+ * 構成は bossRewardFor(サバイバル段階 2、設計 §5・§10)。抽選(dropFor)は経由せず、
+ * 撃破位置から落として広間の床へ散らす(第2弾 §2)。
+ * 糧食は敵ドロップと同じく補給品として残す(段階 1 の裁定)。
  */
 function onBossKilled(spawnId: string, b: Boss): void {
   recordDefeated(spawnId);
   killCount++;
-  pushDrop(drops, new DropItem('heal', b.centerX, b.centerY));
-  pushDrop(drops, new DropItem('charge', b.centerX - 1.5, b.centerY));
-  pushDrop(drops, new DropItem('charge', b.centerX + 1.5, b.centerY));
+  const offsets = [0, -1.5, 1.5]; // 構成の並び順に対応(中心=回復、左=砲弾、右=糧食)
+  bossRewardFor().forEach((kind, i) => {
+    const item = new DropItem(kind, b.centerX + offsets[i], b.centerY, kind === 'ration');
+    if (kind === 'ration') pushSupply(drops, item);
+    else pushDrop(drops, item);
+  });
 }
 
 /** プレイヤー近傍の地形を走査して敵の出現集合を更新する(倒していない敵は範囲を離れると再出現する) */
@@ -420,7 +426,8 @@ function update(dt: number): void {
     opennessEma = opennessEma === null ? raw : opennessEma + (raw - opennessEma) * OPENNESS_EMA_ALPHA;
     zoomStep = nextZoomStep(zoomStep, targetZoomForOpenness(opennessEma));
     zoomTarget = zoomStep;
-    // 休憩点の箱の中に立ったら全回復し、復活点をここへ更新する
+    // 休憩点の箱の中に立ったら復活点をここへ更新する(HP は回復しない: サバイバル段階 2、設計 §7。
+    // 回復は回復セルと死亡時の復活だけ。安全圏としての満腹度不消耗は下の inRestBox で維持する)
     const rp = nearestRestPoint(seed, player.centerX, player.centerY);
     const feet = player.body.y + player.body.h;
     const inRestBox =
@@ -428,7 +435,6 @@ function update(dt: number): void {
       player.centerY < rp.floorY && Math.abs(feet - rp.floorY) < 0.6;
     if (inRestBox) {
       respawnPoint = { x: rp.x - player.body.w / 2, y: rp.floorY - player.body.h };
-      if (player.hp < MAX_HP) player.hp = MAX_HP;
       // 休憩点の初回補給(サバイバル §7): 初めて入った休憩点だけ備蓄を開ける(セッション内のみ)。
       // 備蓄は糧食 1 個 + 地区別の 1 個を荷袋(packX)付近へ出す。再訪しても補充されない。
       // 補給品の上限に達している間は開けず、消費して空きを作れば開けられる
@@ -448,6 +454,8 @@ function update(dt: number): void {
       dt: OPENNESS_SAMPLE_INTERVAL_FRAMES * (STEP_MS / 1000),
       inSafeZone: inRestBox || inSpawnProtection,
       still: player.body.onGround && player.body.vx === 0,
+      // 地区消耗倍率(サバイバル段階 2、設計 §4): プレイヤーのいるセルの地区で引く
+      biomeMul: satietyBiomeMulFor(biomeIdForCell(seed, biomeCellAt(seed, Math.floor(player.centerY)))),
     });
     satiety = sat.state;
     if (sat.hpDamage > 0) {
@@ -467,7 +475,9 @@ function update(dt: number): void {
   // (眺望の出入りも開放度の段移動も同じ経路。ジャンプは起きない)
   camera.zoom = advanceZoom(camera.zoom, view.zoom, dt);
   if (input.takeFireCancel()) graviton.cancelCharge(); // タッチ照準のキャンセル(解放より先に破棄)
-  graviton.update(dt, input.fireHeld, fire);
+  // 満腹度が危険域(critical / starving)では砲の自動回復が半分の速さになる(サバイバル段階 2、設計 §4)
+  const satLevelNow = satietyLevel(satiety.value);
+  graviton.update(dt, input.fireHeld, fire, rechargeTimeFor(satLevelNow === 'critical' || satLevelNow === 'starving'));
   input.expireCannonRelease(); // スティック砲の発射候補は、この update で発射しなければ失効する
   // パルス(連射武器): 照準は右スティックのアナログ方向 > 保持照準 > 移動入力の 8 方向。
   // タッチチャンネルは PC では常に無効なので、キーボード/マウス時は従来どおり 8 方向になる
