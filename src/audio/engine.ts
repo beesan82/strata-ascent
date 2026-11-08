@@ -26,17 +26,23 @@ import {
   BOSS_CRASH_GAIN, BOSS_CRASH_HZ, BOSS_CRASH_SECONDS, BOSS_CRASH_SUB_FREQ, BOSS_CRASH_SUB_GAIN, BOSS_CRASH_SUB_SECONDS,
   BOSS_DOWN_FREQ_END, BOSS_DOWN_FREQ_START, BOSS_DOWN_GAIN, BOSS_DOWN_NOISE_GAIN, BOSS_DOWN_NOISE_HZ, BOSS_DOWN_NOISE_SECONDS, BOSS_DOWN_SECONDS,
   FLYER_FREQ_END, FLYER_FREQ_START, FLYER_GAIN, FLYER_SECONDS,
-  TURRET_FREQ_END, TURRET_FREQ_START, TURRET_GAIN, TURRET_SECONDS,
+  TURRET_SECONDS,
+  COMP_ATTACK, COMP_KNEE_DB, COMP_RATIO, COMP_RELEASE, COMP_THRESHOLD_DB, SAMPLE_WET,
+  HIT_FM_GAIN, HIT_FM_INDEX, HIT_FM_RATIO, pickVariant, sampleRate, engineLayerGain,
+  CRUSH_BIG_TILES, crushSampleGain, PULSE_SAMPLE_GAIN, PULSE_SAMPLE_RATE, PULSE_SAMPLE_SPREAD, PULSE_SYNTH_GAIN,
   reverbBucket, reverbSecondsForBucket,
   STARVE_FREQ_END, STARVE_FREQ_START, STARVE_GAIN, STARVE_SECONDS,
   WARN_FREQ_END, WARN_FREQ_START, WARN_GAIN, WARN_SECONDS,
 } from './params';
 
+import { EAT_SAMPLES, FOOTSTEP_SAMPLES, HIT_SAMPLES, LADDER_SAMPLES, MINING_SAMPLES, PULSE_SAMPLES, SAMPLE_URLS, pickupSampleName, type SampleName } from './samples';
+
 /**
  * WebAudio の薄い層(設計書 §6.7)。パラメータは params.ts の純粋関数で決め、ここはノードの生成と
  * ゲインの追従だけ。テスト対象外。
  *
- * グラフ: master → destination。dry → master、convolver → wet(0.35) → master。
+ * グラフ: master → compressor → destination。dry → master、convolver → wet(0.35) → master。
+ * コンプレッサは音質改善(2026-11-08)で追加し、全音のピークを揃える。
  * - ドローン: 層のバイオームごとに倍音の OscillatorNode の組 1 つ。層が変わればクロスフェード(0.4 秒)。
  *   界面に近づくと基音 + 0.7 Hz の正弦波が足されてうなる(interfaceBeat)。
  * - 足音: 60 ms のノイズバースト(バンドパス 900 Hz)を dry と convolver の両方へ。残響長は開放度(6 段)。
@@ -73,7 +79,8 @@ const WET_GAIN = 0.35;
 const FOOTSTEP_SECONDS = 0.06;
 const FOOTSTEP_GAIN = 0.5;
 const HUM_GAIN = 0.06;
-const HUM_LFO_HZ = 7;
+/** ハムのうねり LFO(Hz)。音質改善で 7 → 4.5 に落とし、深度も浅くした */
+const HUM_LFO_HZ = 4.5;
 const BEAT_GAIN = 0.5;
 const PASSAGE_GAIN = 0.6;
 /** 発射音・破砕音用の長いノイズバッファ(秒)。足音用(0.06 秒)とは別に 1 本だけ作って使い回す */
@@ -88,6 +95,12 @@ const PULSE_MIN_INTERVAL = 0.03;
 interface Charge {
   main: OscillatorNode;
   detuned: OscillatorNode;
+  /** サブ正弦波(基音の 1/2)。重み付け用に歪ませず直接ゲインへ */
+  sub: OscillatorNode;
+  /** 帯電ノイズ: バンドパスで基音に追従させ、比率で量を上げる */
+  noise: AudioBufferSourceNode;
+  noiseFilter: BiquadFilterNode;
+  noiseGain: GainNode;
   filter: BiquadFilterNode;
   gain: GainNode;
 }
@@ -96,7 +109,13 @@ interface Drone {
   biome: BiomeId;
   gain: GainNode;
   beatGain: GainNode;
+  /** 倍音・うなり・LFO の全オシレータ(切替時に一括 stop する) */
   oscs: OscillatorNode[];
+  /** 音色のうねり用ローパス。update で界面への近さにも連動させる */
+  filter: BiquadFilterNode;
+  cutoff: number;
+  /** エンジン音ループのサンプル層(無いバイオーム・未ロード時は null) */
+  layer: AudioBufferSourceNode | null;
 }
 
 export class AudioEngine {
@@ -105,6 +124,8 @@ export class AudioEngine {
   private dry!: GainNode;
   private convolver!: ConvolverNode;
   private wet!: GainNode;
+  /** CC0 サンプルのデコード済みバッファ(assets/audio、台帳は CREDITS.md)。ロードは非同期で、無い音は合成で鳴らす */
+  private samples = new Map<SampleName, AudioBuffer>();
   private noise!: AudioBuffer;
   private noiseLong!: AudioBuffer;
   private charge: Charge | null = null;
@@ -115,6 +136,9 @@ export class AudioEngine {
   private isMuted = false;
   private prevWalkPhase = 0;
   private lastPulseAt = -Infinity;
+  /** 足音・命中の素材ローテーション用カウンタ(決定論のバリエーション選択) */
+  private stepCount = 0;
+  private hitCount = 0;
 
   get started(): boolean {
     return this.ctx !== null;
@@ -138,7 +162,15 @@ export class AudioEngine {
     this.ctx = ctx;
     this.master = ctx.createGain();
     this.master.gain.value = this.isMuted ? 0 : dbToGain(MASTER_DB);
-    this.master.connect(ctx.destination);
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = COMP_THRESHOLD_DB;
+    comp.knee.value = COMP_KNEE_DB;
+    comp.ratio.value = COMP_RATIO;
+    comp.attack.value = COMP_ATTACK;
+    comp.release.value = COMP_RELEASE;
+    this.master.connect(comp);
+    comp.connect(ctx.destination);
+    this.loadSamples();
     this.dry = ctx.createGain();
     this.dry.connect(this.master);
     this.convolver = ctx.createConvolver();
@@ -148,24 +180,36 @@ export class AudioEngine {
     this.wet.connect(this.master);
     this.noise = this.makeNoise(FOOTSTEP_SECONDS);
     this.noiseLong = this.makeNoise(LONG_NOISE_SECONDS);
-    // 光柱のハム: 正弦波 × (1 + 0.3 × LFO)。ゲインは update で距離に追従
+    // 光柱のハム: 基音 + 半オクターブ下をローパスで丸め、遅い LFO でうねらせる(音質改善で耳障りさを除去)
     this.humGain = ctx.createGain();
     this.humGain.gain.value = 0;
     this.humGain.connect(this.dry);
+    const humLp = ctx.createBiquadFilter();
+    humLp.type = 'lowpass';
+    humLp.frequency.value = 3200;
     const hum = ctx.createOscillator();
     hum.type = 'sine';
     hum.frequency.value = HUM_FREQ;
+    const humSub = ctx.createOscillator();
+    humSub.type = 'sine';
+    humSub.frequency.value = HUM_FREQ / 2;
+    const humSubGain = ctx.createGain();
+    humSubGain.gain.value = 0.4;
     const trem = ctx.createGain();
-    trem.gain.value = 0.7;
+    trem.gain.value = 0.82;
     const lfo = ctx.createOscillator();
     lfo.frequency.value = HUM_LFO_HZ;
     const lfoDepth = ctx.createGain();
-    lfoDepth.gain.value = 0.3;
+    lfoDepth.gain.value = 0.18;
     lfo.connect(lfoDepth);
     lfoDepth.connect(trem.gain);
-    hum.connect(trem);
+    hum.connect(humLp);
+    humSub.connect(humSubGain);
+    humSubGain.connect(humLp);
+    humLp.connect(trem);
     trem.connect(this.humGain);
     hum.start();
+    humSub.start();
     lfo.start();
     void ctx.resume();
   }
@@ -189,6 +233,185 @@ export class AudioEngine {
     this.master.gain.setTargetAtTime(muted ? 0 : dbToGain(MASTER_DB), this.ctx.currentTime, 0.05);
   }
 
+  /**
+   * CC0 サンプルを全部 fetch + decode して保持する(合計 261 KB)。失敗した素材は
+   * 無いものとして扱い、その音は合成フォールバックで鳴らす。開始直後はまだ
+   * ロードが済んでいない音があるが、無音期間を作らないための割り切り。
+   */
+  private loadSamples(): void {
+    const ctx = this.ctx!;
+    for (const [name, url] of Object.entries(SAMPLE_URLS)) {
+      fetch(url)
+        .then((r) => r.arrayBuffer())
+        .then((ab) => ctx.decodeAudioData(ab))
+        .then((buf) => { this.samples.set(name as SampleName, buf); })
+        .catch(() => { /* 素材が読めない音は合成で鳴らす */ });
+    }
+  }
+
+  /**
+   * サンプルのワンショット再生。ロード済みなら true、未ロード/失敗なら false を
+   * 返し、呼び出し側が合成フォールバックに倒す。dry は常に送り、wet は残響への
+   * 送り量(0 で送らない)。パンは dry 側にだけ付ける(残響は位置を洗うため)。
+   * バッファは鳴らし切りだが、他の音と揃えて明示的に stop を掛ける。
+   */
+  private playSample(name: SampleName, opts: {
+    gain?: number; rate?: number; pan?: number; wet?: number; at?: number;
+  } = {}): boolean {
+    const ctx = this.ctx;
+    if (!ctx) return false;
+    const buf = this.samples.get(name);
+    if (!buf) return false;
+    const t = opts.at ?? ctx.currentTime;
+    const rate = opts.rate ?? 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = rate;
+    const g = ctx.createGain();
+    g.gain.value = opts.gain ?? 1;
+    src.connect(g);
+    if (opts.pan) {
+      const p = ctx.createStereoPanner();
+      p.pan.value = opts.pan;
+      g.connect(p);
+      p.connect(this.dry);
+    } else {
+      g.connect(this.dry);
+    }
+    if (opts.wet) {
+      const wg = ctx.createGain();
+      wg.gain.value = opts.wet;
+      g.connect(wg);
+      wg.connect(this.convolver);
+    }
+    src.start(t);
+    src.stop(t + buf.duration / rate + 0.1);
+    return true;
+  }
+
+  /** WaveShaper の歪みカーブ(量 k ごとに 1 回だけ作って使い回す) */
+  private driveCurves = new Map<number, Float32Array>();
+  private driveCurve(k: number): Float32Array {
+    let curve = this.driveCurves.get(k);
+    if (curve) return curve;
+    curve = new Float32Array(256);
+    for (let i = 0; i < 256; i++) {
+      const x = i / 128 - 1;
+      curve[i] = ((1 + k) * x) / (1 + k * Math.abs(x));
+    }
+    this.driveCurves.set(k, curve);
+    return curve;
+  }
+
+  /**
+   * 多層合成のワンショット(音質改善で新設)。1 つの音を「トランジェントのノイズ +
+   * 倍音つき胴体(複数オシレータ、FM 可)+ フィルタ掃引 + ADSR + 任意の歪み」で組む。
+   * 単一オシレータ + 指数減衰だけの基本形(チープさの原因)を置き換えるための部品で、
+   * 数値は呼び出し側が params の定数から渡す。全ソースに stop を掛ける。
+   */
+  private voice(spec: {
+    layers: readonly {
+      type: OscillatorType; from: number; to?: number; detune?: number; gain: number;
+      fm?: { ratio: number; index: number };
+    }[];
+    seconds: number;
+    gain: number;
+    attack?: number;
+    filter?: { type: BiquadFilterType; from: number; to?: number; q?: number };
+    noise?: { gain: number; type: BiquadFilterType; from: number; to?: number; q?: number; seconds?: number };
+    drive?: number;
+    pan?: number;
+    wet?: number;
+    at?: number;
+  }): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = spec.at ?? ctx.currentTime;
+    const attack = spec.attack ?? 0.004;
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0, t);
+    out.gain.linearRampToValueAtTime(spec.gain, t + attack);
+    out.gain.exponentialRampToValueAtTime(0.001, t + spec.seconds);
+    // 出口: out → (パン) → dry、wet があれば残響へも送る
+    if (spec.pan) {
+      const p = ctx.createStereoPanner();
+      p.pan.value = spec.pan;
+      out.connect(p);
+      p.connect(this.dry);
+    } else {
+      out.connect(this.dry);
+    }
+    if (spec.wet) {
+      const wg = ctx.createGain();
+      wg.gain.value = spec.wet;
+      out.connect(wg);
+      wg.connect(this.convolver);
+    }
+    // 入口: レイヤー → (歪み) → (フィルタ) → out
+    let bus: AudioNode = out;
+    if (spec.filter) {
+      const f = ctx.createBiquadFilter();
+      f.type = spec.filter.type;
+      f.Q.value = spec.filter.q ?? 0.8;
+      f.frequency.setValueAtTime(spec.filter.from, t);
+      if (spec.filter.to) f.frequency.exponentialRampToValueAtTime(spec.filter.to, t + spec.seconds);
+      f.connect(out);
+      bus = f;
+    }
+    if (spec.drive) {
+      const shaper = ctx.createWaveShaper();
+      shaper.curve = this.driveCurve(spec.drive);
+      shaper.connect(bus);
+      bus = shaper;
+    }
+    for (const layer of spec.layers) {
+      const osc = ctx.createOscillator();
+      osc.type = layer.type;
+      osc.frequency.setValueAtTime(layer.from, t);
+      if (layer.to) osc.frequency.exponentialRampToValueAtTime(layer.to, t + spec.seconds);
+      if (layer.detune) osc.detune.value = layer.detune;
+      const lg = ctx.createGain();
+      lg.gain.value = layer.gain;
+      if (layer.fm) {
+        const mod = ctx.createOscillator();
+        mod.type = 'sine';
+        mod.frequency.value = layer.from * layer.fm.ratio;
+        const mg = ctx.createGain();
+        mg.gain.setValueAtTime(layer.fm.index, t);
+        mg.gain.exponentialRampToValueAtTime(1, t + spec.seconds);
+        mod.connect(mg);
+        mg.connect(osc.frequency);
+        mod.start(t);
+        mod.stop(t + spec.seconds + 0.1);
+      }
+      osc.connect(lg);
+      lg.connect(bus);
+      osc.start(t);
+      osc.stop(t + spec.seconds + 0.1);
+    }
+    if (spec.noise) {
+      const n = spec.noise;
+      const nSeconds = n.seconds ?? spec.seconds;
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseLong;
+      src.loop = true;
+      const nf = ctx.createBiquadFilter();
+      nf.type = n.type;
+      nf.Q.value = n.q ?? 0.8;
+      nf.frequency.setValueAtTime(n.from, t);
+      if (n.to) nf.frequency.exponentialRampToValueAtTime(n.to, t + nSeconds);
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0, t);
+      ng.gain.linearRampToValueAtTime(n.gain, t + attack);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + nSeconds);
+      src.connect(nf);
+      nf.connect(ng);
+      ng.connect(bus);
+      src.start(t, Math.random());
+      src.stop(t + nSeconds + 0.1);
+    }
+  }
+
   /** 毎フレーム(update ループ) */
   update(frame: AudioFrame): void {
     const ctx = this.ctx;
@@ -199,6 +422,10 @@ export class AudioEngine {
     const now = ctx.currentTime;
     if (!this.drone || this.drone.biome !== frame.biome) this.switchDrone(frame.biome);
     this.drone!.beatGain.gain.setTargetAtTime(BEAT_GAIN * interfaceBeat(frame.plateDistance), now, 0.2);
+    // 界面に近いほどドローンのフィルタを開け、うなりと音色の変化を連動させる
+    this.drone!.filter.frequency.setTargetAtTime(
+      this.drone!.cutoff * (1 + 0.5 * interfaceBeat(frame.plateDistance)), now, 0.3);
+    this.startEngineLayer(this.drone!);
     this.humGain.gain.setTargetAtTime(HUM_GAIN * frame.hum, now, 0.2);
     const bucket = reverbBucket(frame.openness);
     if (bucket !== this.reverbBucketNow) {
@@ -211,8 +438,9 @@ export class AudioEngine {
   }
 
   /**
-   * パルスの発射音: 短い三角波の pitch 落下。連射(6 発/秒)でも煩くならないよう
-   * 残響には送らず dry だけで締め、pitch は発射インデックスで決定論にばらす。
+   * パルスの発射音: CC0 レーザーのサンプルを主体に、鋸波+ローパスの細い合成芯を
+   * 重ねる(混合)。バリエーションとレートは発射インデックスで決定論にばらす。
+   * サンプルが未ロードなら合成芯だけを厚くして鳴らす。残響には送らず締める。
    * 発射間隔(1/6 秒)より詰まった呼び出しは PULSE_MIN_INTERVAL で間引く(保険)。
    */
   pulseFire(shotIndex: number): void {
@@ -222,24 +450,33 @@ export class AudioEngine {
     if (now - this.lastPulseAt < PULSE_MIN_INTERVAL) return;
     this.lastPulseAt = now;
     const mul = pulseDetune(shotIndex);
-    const osc = ctx.createOscillator();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(PULSE_FREQ_START * mul, now);
-    osc.frequency.exponentialRampToValueAtTime(PULSE_FREQ_END * mul, now + PULSE_SECONDS);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(PULSE_GAIN, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + PULSE_SECONDS);
-    osc.connect(g);
-    g.connect(this.dry);
-    osc.start(now);
-    osc.stop(now + PULSE_SECONDS + 0.05);
+    const sampled = this.playSample(PULSE_SAMPLES[pickVariant(shotIndex, PULSE_SAMPLES.length)], {
+      gain: PULSE_SAMPLE_GAIN,
+      rate: sampleRate(PULSE_SAMPLE_RATE, shotIndex, PULSE_SAMPLE_SPREAD),
+    });
+    this.voice({
+      layers: [{ type: 'sawtooth', from: PULSE_FREQ_START * 1.4 * mul, to: PULSE_FREQ_END * 1.1 * mul, gain: 1 }],
+      filter: { type: 'lowpass', from: 3800, to: 900, q: 0.7 },
+      seconds: PULSE_SECONDS + 0.02,
+      gain: sampled ? PULSE_SYNTH_GAIN : PULSE_GAIN,
+    });
   }
 
-  /** 敵への命中(非撃破): 矩形波の低いブリップ + ノイズのティック */
+  /**
+   * 敵への命中(非撃破): 金属打撃のサンプル(バリエーションを決定論に回す)を主体に、
+   * FM 合成の金属ティックを薄く重ねる。サンプルが無いときは従来の矩形波+ノイズ。
+   */
   enemyHit(): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const now = ctx.currentTime;
+    const idx = this.hitCount++;
+    if (this.playSample(HIT_SAMPLES[pickVariant(idx, HIT_SAMPLES.length)], {
+      gain: 0.6, rate: sampleRate(1, idx, 0.04), wet: 0.3,
+    })) {
+      this.fmTick(now);
+      return;
+    }
     const osc = ctx.createOscillator();
     osc.type = 'square';
     osc.frequency.value = HIT_FREQ;
@@ -266,10 +503,36 @@ export class AudioEngine {
     src.stop(now + HIT_SECONDS + 0.05);
   }
 
-  /** 敵の撃破: 正弦波の pitch 落下(芯)+ ローパスのノイズ(崩れ)。パルスでもビームでも同じ音 */
+  /** FM 金属ティック: 非整数倍のモジュレータで金属の「キン」を作る短い層 */
+  private fmTick(at: number): void {
+    const ctx = this.ctx!;
+    const carrier = ctx.createOscillator();
+    carrier.type = 'sine';
+    carrier.frequency.value = HIT_FREQ;
+    const mod = ctx.createOscillator();
+    mod.type = 'sine';
+    mod.frequency.value = HIT_FREQ * HIT_FM_RATIO;
+    const modGain = ctx.createGain();
+    modGain.gain.setValueAtTime(HIT_FM_INDEX, at);
+    modGain.gain.exponentialRampToValueAtTime(1, at + HIT_SECONDS);
+    mod.connect(modGain);
+    modGain.connect(carrier.frequency);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(HIT_FM_GAIN, at);
+    g.gain.exponentialRampToValueAtTime(0.001, at + HIT_SECONDS);
+    carrier.connect(g);
+    g.connect(this.dry);
+    carrier.start(at);
+    carrier.stop(at + HIT_SECONDS + 0.05);
+    mod.start(at);
+    mod.stop(at + HIT_SECONDS + 0.05);
+  }
+
+  /** 敵の撃破: 打撃サンプル + 正弦波の pitch 落下(芯)+ ローパスのノイズ(崩れ)。パルスでもビームでも同じ音 */
   enemyDown(): void {
     const ctx = this.ctx;
     if (!ctx) return;
+    this.playSample('downImpact', { gain: 0.65, wet: 0.4 });
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     osc.type = 'sine';
@@ -299,108 +562,103 @@ export class AudioEngine {
     src.stop(now + DOWN_NOISE_SECONDS + 0.05);
   }
 
-  /** プレイヤーの被弾: 鋸波の pitch 落下。ハプティクス(中)と対になる */
+  /** プレイヤーの被弾: 打撃サンプル(肉感)+ フィルタで閉じる鋸波の落下。ハプティクス(中)と対になる */
   hurt(): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(HURT_FREQ_START, now);
-    osc.frequency.exponentialRampToValueAtTime(HURT_FREQ_END, now + HURT_SECONDS);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(HURT_GAIN, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + HURT_SECONDS);
-    osc.connect(g);
-    g.connect(this.dry);
-    g.connect(this.convolver);
-    osc.start(now);
-    osc.stop(now + HURT_SECONDS + 0.05);
+    const sampled = this.playSample('hurtImpact', { gain: 0.55, wet: 0.3 });
+    this.voice({
+      layers: [{ type: 'sawtooth', from: HURT_FREQ_START, to: HURT_FREQ_END, gain: 1 }],
+      filter: { type: 'lowpass', from: 1600, to: 300, q: 0.8 },
+      drive: 6,
+      seconds: HURT_SECONDS + 0.04,
+      gain: sampled ? 0.26 : HURT_GAIN,
+      wet: 0.3,
+    });
   }
 
-  /** 飢餓ダメージ: 被弾とは別の、三角波の空虚な下降 */
+  /** 飢餓ダメージ: 被弾とは別の、三角波+サブをローパスで閉じた空虚な下降 + 微かな息のノイズ */
   starveHurt(): void {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(STARVE_FREQ_START, now);
-    osc.frequency.exponentialRampToValueAtTime(STARVE_FREQ_END, now + STARVE_SECONDS);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(STARVE_GAIN, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + STARVE_SECONDS);
-    osc.connect(g);
-    g.connect(this.dry);
-    osc.start(now);
-    osc.stop(now + STARVE_SECONDS + 0.05);
+    if (!this.ctx) return;
+    this.voice({
+      layers: [
+        { type: 'triangle', from: STARVE_FREQ_START, to: STARVE_FREQ_END, gain: 1 },
+        { type: 'sine', from: STARVE_FREQ_START / 2, to: STARVE_FREQ_END / 2, gain: 0.5 },
+      ],
+      filter: { type: 'lowpass', from: 700, to: 220, q: 0.7 },
+      noise: { gain: 0.06, type: 'lowpass', from: 300, seconds: 0.25 },
+      seconds: STARVE_SECONDS + 0.08,
+      gain: STARVE_GAIN + 0.02,
+      attack: 0.02,
+    });
   }
 
-  /** プレイヤーの死亡: 長い pitch 落下 */
+  /** プレイヤーの死亡: 多層の pitch 落下(基音+倍音+サブ)+ ノイズの尾 + 落下後の鈍い衝撃 */
   death(): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(DEATH_FREQ_START, now);
-    osc.frequency.exponentialRampToValueAtTime(DEATH_FREQ_END, now + DEATH_SECONDS);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(DEATH_GAIN, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + DEATH_SECONDS);
-    osc.connect(g);
-    g.connect(this.dry);
-    g.connect(this.convolver);
-    osc.start(now);
-    osc.stop(now + DEATH_SECONDS + 0.05);
+    this.voice({
+      layers: [
+        { type: 'sine', from: DEATH_FREQ_START, to: DEATH_FREQ_END, gain: 1 },
+        { type: 'triangle', from: DEATH_FREQ_START, to: DEATH_FREQ_END, gain: 0.4 },
+        { type: 'sine', from: DEATH_FREQ_START / 2, to: DEATH_FREQ_END / 2, gain: 0.5 },
+      ],
+      filter: { type: 'lowpass', from: 1200, to: 150, q: 0.7 },
+      noise: { gain: 0.12, type: 'lowpass', from: 400, seconds: DEATH_SECONDS + 0.1 },
+      seconds: DEATH_SECONDS + 0.15,
+      gain: DEATH_GAIN,
+      wet: 0.5,
+    });
+    this.playSample('land0', { gain: 0.2, rate: 0.65, at: now + 0.35, wet: 0.4 });
   }
 
-  /** 復活: 死亡と同一フレームに呼ばれるため、少し遅らせて 2 音の正弦波を出す */
+  /** 復活: 死亡と同一フレームに呼ばれるため、少し遅らせて。素材の上昇音 + 倍音つきパッド 2 音 */
   revive(): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const t0 = ctx.currentTime + REVIVE_DELAY;
+    this.playSample('pickupHeal', { gain: 0.3, rate: 1.25, at: t0, wet: SAMPLE_WET });
     REVIVE_NOTES.forEach((freq, i) => {
-      const t = t0 + i * REVIVE_NOTE_GAP;
-      const osc = ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(REVIVE_GAIN, t + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
-      osc.connect(g);
-      g.connect(this.dry);
-      g.connect(this.convolver);
-      osc.start(t);
-      osc.stop(t + 0.3);
+      this.voice({
+        layers: [
+          { type: 'sine', from: freq, gain: 1 },
+          { type: 'sine', from: freq * 2, gain: 0.35 },
+          { type: 'triangle', from: freq, gain: 0.3 },
+        ],
+        filter: { type: 'lowpass', from: 1800, q: 0.7 },
+        seconds: 0.3,
+        gain: REVIVE_GAIN,
+        attack: 0.02,
+        wet: 0.5,
+        at: t0 + i * REVIVE_NOTE_GAP,
+      });
     });
   }
 
-  /** ジャンプ: 軽い pitch 上昇 */
+  /** ジャンプ: フィルタが開く上昇スイープ + 倍音 + 風切りのノイズ */
   jump(): void {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(JUMP_FREQ_START, now);
-    osc.frequency.exponentialRampToValueAtTime(JUMP_FREQ_END, now + JUMP_SECONDS);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(JUMP_GAIN, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + JUMP_SECONDS);
-    osc.connect(g);
-    g.connect(this.dry);
-    osc.start(now);
-    osc.stop(now + JUMP_SECONDS + 0.05);
+    if (!this.ctx) return;
+    this.voice({
+      layers: [
+        { type: 'sine', from: JUMP_FREQ_START, to: JUMP_FREQ_END, gain: 0.8 },
+        { type: 'triangle', from: JUMP_FREQ_START * 2, to: JUMP_FREQ_END * 2, gain: 0.3 },
+      ],
+      filter: { type: 'lowpass', from: 500, to: 2400, q: 0.7 },
+      noise: { gain: 0.05, type: 'highpass', from: 1800, seconds: 0.1 },
+      seconds: JUMP_SECONDS + 0.03,
+      gain: JUMP_GAIN + 0.02,
+      wet: 0.15,
+    });
   }
 
-  /** 着地: 低いノイズのドスン。ゲインは landGain(落下速度)が決め、0 なら鳴らさない */
+  /** 着地: 柔らかい重打のサンプルを主体に。ゲインは landGain(落下速度)が決め、0 なら鳴らさない */
   land(fallSpeed: number): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const gain = landGain(fallSpeed);
     if (gain <= 0) return;
+    if (this.playSample('land0', { gain: gain * 1.8, wet: 0.4 })) return;
     const now = ctx.currentTime;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
@@ -418,10 +676,11 @@ export class AudioEngine {
     src.stop(now + LAND_SECONDS + 0.05);
   }
 
-  /** 梯子の段: 短いノイズのティック。段の偶奇で周波数を交互に変える */
+  /** 梯子の段: 金属クリックのサンプル 2 種を段の偶奇で交互に。無いときは従来のノイズティック */
   ladderRung(rungIndex: number): void {
     const ctx = this.ctx;
     if (!ctx) return;
+    if (this.playSample(LADDER_SAMPLES[pickVariant(rungIndex, LADDER_SAMPLES.length)], { gain: 0.5 })) return;
     const now = ctx.currentTime;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
@@ -463,16 +722,19 @@ export class AudioEngine {
     });
   }
 
-  /** ドロップ取得: 種別ごとの上行 2 音(pickupNotes) */
+  /** ドロップ取得: 種別の素材(pickupSampleName)。無いときは従来の上行 2 音 */
   pickup(kind: string): void {
     if (!this.ctx) return;
+    const rate = kind === 'charge' ? 1.1 : kind === 'ration' ? 0.85 : 1;
+    if (this.playSample(pickupSampleName(kind), { gain: 0.5, rate, wet: SAMPLE_WET })) return;
     this.noteRun(pickupNotes(kind), PICKUP_GAIN, PICKUP_NOTE_GAP, 0.16);
   }
 
-  /** 補給キャッシュ開封: バンドパスを掃引するノイズの擦れ */
+  /** 補給キャッシュ開封: 開封のサンプル + バンドパスを掃引するノイズの擦れ(従来層は弱める) */
   cacheOpen(): void {
     const ctx = this.ctx;
     if (!ctx) return;
+    const sampled = this.playSample('cache', { gain: 0.55, wet: SAMPLE_WET });
     const now = ctx.currentTime;
     const src = ctx.createBufferSource();
     src.buffer = this.noiseLong;
@@ -483,7 +745,7 @@ export class AudioEngine {
     bp.frequency.setValueAtTime(CACHE_HZ_START, now);
     bp.frequency.exponentialRampToValueAtTime(CACHE_HZ_END, now + CACHE_SECONDS);
     const g = ctx.createGain();
-    g.gain.setValueAtTime(CACHE_GAIN, now);
+    g.gain.setValueAtTime(sampled ? CACHE_GAIN * 0.45 : CACHE_GAIN, now);
     g.gain.exponentialRampToValueAtTime(0.001, now + CACHE_SECONDS);
     src.connect(bp);
     bp.connect(g);
@@ -493,22 +755,25 @@ export class AudioEngine {
     src.stop(now + CACHE_SECONDS + 0.05);
   }
 
-  /** 休憩点の初回補給: 温かい上行 2 音 */
+  /** 休憩点の初回補給: ピチカートのジングル素材。無いときは従来の温かい上行 2 音 */
   restStock(): void {
     if (!this.ctx) return;
+    if (this.playSample('rest', { gain: 0.55, wet: SAMPLE_WET })) return;
     this.noteRun(REST_STOCK_NOTES, REST_STOCK_GAIN, 0.08, 0.25);
   }
 
-  /** 復活点の更新: 控えめな単音(箱に入るたびでなく、移ったときだけ呼ばれる前提) */
+  /** 復活点の更新: 確認音のサンプル。無いときは従来の控えめな単音(移ったときだけ呼ばれる前提) */
   respawnSet(): void {
     if (!this.ctx) return;
+    if (this.playSample('confirm', { gain: 0.5, wet: SAMPLE_WET })) return;
     this.noteRun([RESPAWN_FREQ], RESPAWN_GAIN, 0, RESPAWN_SECONDS + 0.05);
   }
 
-  /** 武器切替: 短い矩形波のクリック */
+  /** 武器切替: 掛け金(ラッチ)のサンプル。無いときは従来の矩形波クリック */
   weaponSwitch(): void {
     const ctx = this.ctx;
     if (!ctx) return;
+    if (this.playSample('switch', { gain: 0.55, wet: 0.25 })) return;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     osc.type = 'square';
@@ -522,37 +787,37 @@ export class AudioEngine {
     osc.stop(now + SWITCH_SECONDS + 0.05);
   }
 
-  /** 砲の弾回復の完了: ごく小さな単音の合図 */
+  /** 砲の弾回復の完了: サンプル(tick)が読めていればそれ、無ければ従来の小さな単音 */
   rechargeTick(): void {
     if (!this.ctx) return;
+    if (this.playSample('tick', { gain: 0.5, wet: SAMPLE_WET })) return;
     this.noteRun([RECHARGE_FREQ], RECHARGE_GAIN, 0, RECHARGE_SECONDS + 0.03);
   }
 
-  /** 満腹度の警告(レベルが low / critical へ落ちた遷移): 低い矩形波の 2 連 */
+  /** 満腹度の警告(レベルが low / critical へ落ちた遷移): 警告素材 + 低い三角波の 2 連 */
   satietyWarn(): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const t0 = ctx.currentTime;
+    this.playSample('warnError', { gain: 0.45, rate: 0.8, wet: 0.2 });
     for (let i = 0; i < 2; i++) {
-      const t = t0 + i * SATIETY_WARN_GAP;
-      const osc = ctx.createOscillator();
-      osc.type = 'square';
-      osc.frequency.value = SATIETY_WARN_FREQ;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(SATIETY_WARN_GAIN, t);
-      g.gain.exponentialRampToValueAtTime(0.001, t + SATIETY_WARN_SECONDS);
-      osc.connect(g);
-      g.connect(this.dry);
-      osc.start(t);
-      osc.stop(t + SATIETY_WARN_SECONDS + 0.05);
+      this.voice({
+        layers: [{ type: 'triangle', from: SATIETY_WARN_FREQ, to: SATIETY_WARN_FREQ * 0.9, gain: 1 }],
+        filter: { type: 'lowpass', from: 600, q: 0.7 },
+        seconds: SATIETY_WARN_SECONDS + 0.09,
+        gain: SATIETY_WARN_GAIN + 0.03,
+        at: t0 + i * SATIETY_WARN_GAP,
+      });
     }
   }
 
-  /** 糧食の自動摂取: ローパスのノイズを 2 回噛む */
+  /** 糧食の自動摂取: 衣擦れのサンプルを 2 回噛む。無いときは従来のローパスノイズ 2 連 */
   eat(): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const t0 = ctx.currentTime;
+    if (this.playSample(EAT_SAMPLES[0], { gain: 0.6, at: t0 })
+      && this.playSample(EAT_SAMPLES[1], { gain: 0.6, at: t0 + EAT_GAP })) return;
     for (let i = 0; i < 2; i++) {
       const t = t0 + i * EAT_GAP;
       const src = ctx.createBufferSource();
@@ -571,58 +836,56 @@ export class AudioEngine {
     }
   }
 
-  /** 階層の節目到達: 3 音の上行ジングル */
+  /** 階層の節目到達: 金属ジングルの素材。無いときは従来の 3 音ジングル */
   milestone(): void {
     if (!this.ctx) return;
+    if (this.playSample('jingleMilestone', { gain: 0.6, wet: SAMPLE_WET })) return;
     this.noteRun(MILESTONE_NOTES, JINGLE_GAIN, JINGLE_NOTE_GAP, JINGLE_NOTE_SECONDS);
   }
 
-  /** 最深の新記録: 4 音の上行ジングル */
+  /** 最深の新記録: 節目より明るい金属ジングルの素材。無いときは従来の 4 音ジングル */
   newRecord(): void {
     if (!this.ctx) return;
+    if (this.playSample('jingleRecord', { gain: 0.6, wet: SAMPLE_WET })) return;
     this.noteRun(NEW_RECORD_NOTES, JINGLE_GAIN, JINGLE_NOTE_GAP, JINGLE_NOTE_SECONDS);
   }
 
-  /** 砲台の発射: 矩形波の硬い下降。パルス(三角波・低め)と音色で分ける */
+  /** 砲台の発射: 大型レーザーのサンプル + 鋸波とサブの合成胴体(混合)。矩形波は廃止 */
   turretFire(): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    osc.type = 'square';
-    osc.frequency.setValueAtTime(TURRET_FREQ_START, now);
-    osc.frequency.exponentialRampToValueAtTime(TURRET_FREQ_END, now + TURRET_SECONDS);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(TURRET_GAIN, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + TURRET_SECONDS);
-    osc.connect(g);
-    g.connect(this.dry);
-    osc.start(now);
-    osc.stop(now + TURRET_SECONDS + 0.05);
+    const sampled = this.playSample('laserLarge', { gain: 0.4, rate: 0.95, wet: 0.3 });
+    this.voice({
+      layers: [
+        { type: 'sawtooth', from: 320, to: 80, gain: 0.8 },
+        { type: 'sine', from: 90, to: 45, gain: 0.6 },
+      ],
+      filter: { type: 'lowpass', from: 2400, to: 300, q: 0.8 },
+      noise: { gain: 0.15, type: 'highpass', from: 1200, seconds: 0.12 },
+      drive: 8,
+      seconds: TURRET_SECONDS + 0.14,
+      gain: sampled ? 0.3 : 0.38,
+      wet: 0.3,
+    });
   }
 
-  /** 飛行敵の追尾開始: 小さな上昇チャープ。頻発しても煩くならない音量に抑える */
+  /** 飛行敵の追尾開始: 三角波のチャープをローパスの開閉で柔らかく(矩形波は廃止) */
   flyerAlert(): void {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    osc.type = 'square';
-    osc.frequency.setValueAtTime(FLYER_FREQ_START, now);
-    osc.frequency.exponentialRampToValueAtTime(FLYER_FREQ_END, now + FLYER_SECONDS);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(FLYER_GAIN, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + FLYER_SECONDS);
-    osc.connect(g);
-    g.connect(this.dry);
-    osc.start(now);
-    osc.stop(now + FLYER_SECONDS + 0.05);
+    if (!this.ctx) return;
+    this.voice({
+      layers: [{ type: 'triangle', from: FLYER_FREQ_START, to: FLYER_FREQ_END, gain: 1 }],
+      filter: { type: 'lowpass', from: 900, to: 2600, q: 1 },
+      seconds: FLYER_SECONDS + 0.03,
+      gain: FLYER_GAIN + 0.02,
+      attack: 0.01,
+    });
   }
 
-  /** ボスの出現: 低い正弦波が膨らんで消える + ノイズの地鳴り */
+  /** ボスの出現: 低い正弦波が膨らんで消える + ノイズの地鳴り + 低音爆発の素材を薄く */
   bossAppear(): void {
     const ctx = this.ctx;
     if (!ctx) return;
+    this.playSample('explosionLow', { gain: 0.3, rate: 0.7, wet: 0.6 });
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     osc.type = 'sine';
@@ -652,10 +915,11 @@ export class AudioEngine {
     src.stop(now + BOSS_APPEAR_SECONDS + 0.05);
   }
 
-  /** ボスの突進開始: バンドパスを掃引するノイズの疾走 */
+  /** ボスの突進開始: 噴射サンプル(rate を上げて加速感) + バンドパスを掃引するノイズの疾走 */
   bossCharge(): void {
     const ctx = this.ctx;
     if (!ctx) return;
+    const sampled = this.playSample('thruster', { gain: 0.5, rate: 1.3, wet: 0.3 });
     const now = ctx.currentTime;
     const src = ctx.createBufferSource();
     src.buffer = this.noiseLong;
@@ -666,7 +930,7 @@ export class AudioEngine {
     bp.frequency.setValueAtTime(BOSS_CHARGE_HZ_START, now);
     bp.frequency.exponentialRampToValueAtTime(BOSS_CHARGE_HZ_END, now + BOSS_CHARGE_SECONDS);
     const g = ctx.createGain();
-    g.gain.setValueAtTime(BOSS_CHARGE_GAIN, now);
+    g.gain.setValueAtTime(sampled ? BOSS_CHARGE_GAIN * 0.6 : BOSS_CHARGE_GAIN, now);
     g.gain.exponentialRampToValueAtTime(0.001, now + BOSS_CHARGE_SECONDS);
     src.connect(bp);
     bp.connect(g);
@@ -676,10 +940,11 @@ export class AudioEngine {
     src.stop(now + BOSS_CHARGE_SECONDS + 0.05);
   }
 
-  /** ボスの激突(硬直入り): 低いノイズの衝突 + サブのドスン */
+  /** ボスの激突(硬直入り): 金属衝突のサンプル + 低いノイズの衝突 + サブのドスン */
   bossCrash(): void {
     const ctx = this.ctx;
     if (!ctx) return;
+    const sampled = this.playSample('crashMetal', { gain: 0.7, wet: 0.5 });
     const now = ctx.currentTime;
     const src = ctx.createBufferSource();
     src.buffer = this.noiseLong;
@@ -688,7 +953,7 @@ export class AudioEngine {
     lp.type = 'lowpass';
     lp.frequency.value = BOSS_CRASH_HZ;
     const g = ctx.createGain();
-    g.gain.setValueAtTime(BOSS_CRASH_GAIN, now);
+    g.gain.setValueAtTime(sampled ? BOSS_CRASH_GAIN * 0.55 : BOSS_CRASH_GAIN, now);
     g.gain.exponentialRampToValueAtTime(0.001, now + BOSS_CRASH_SECONDS);
     src.connect(lp);
     lp.connect(g);
@@ -708,10 +973,11 @@ export class AudioEngine {
     sub.stop(now + BOSS_CRASH_SUB_SECONDS + 0.05);
   }
 
-  /** ボスの撃破: 通常撃破より長く重い pitch 落下 + ノイズの崩壊 */
+  /** ボスの撃破: 崩壊音のサンプル + 通常撃破より長く重い pitch 落下 + ノイズの崩壊 */
   bossDown(): void {
     const ctx = this.ctx;
     if (!ctx) return;
+    this.playSample('explosionCrunch', { gain: 0.55, rate: 0.9, wet: 0.6 });
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     osc.type = 'sine';
@@ -742,22 +1008,22 @@ export class AudioEngine {
     src.stop(now + BOSS_DOWN_NOISE_SECONDS + 0.05);
   }
 
-  /** 通過音(見晴らし台に出た瞬間) */
+  /** 通過音(見晴らし台に出た瞬間): 倍音パッドがフィルタを開きながら膨らむ「抜けた」音 */
   passage(): void {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.value = PASSAGE_FREQ;
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(PASSAGE_GAIN, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + PASSAGE_DECAY);
-    osc.connect(g);
-    g.connect(this.dry);
-    g.connect(this.convolver);
-    osc.start(now);
-    osc.stop(now + PASSAGE_DECAY + 0.1);
+    if (!this.ctx) return;
+    this.voice({
+      layers: [
+        { type: 'sine', from: PASSAGE_FREQ, gain: 0.8 },
+        { type: 'sine', from: PASSAGE_FREQ * 1.5, gain: 0.4 },
+        { type: 'sine', from: PASSAGE_FREQ * 2, gain: 0.3 },
+      ],
+      filter: { type: 'lowpass', from: 250, to: 1500, q: 0.6 },
+      noise: { gain: 0.03, type: 'bandpass', from: 600, to: 1400, q: 0.8, seconds: PASSAGE_DECAY },
+      seconds: PASSAGE_DECAY,
+      gain: PASSAGE_GAIN * 0.8,
+      attack: 0.35,
+      wet: 0.7,
+    });
   }
 
   /**
@@ -775,6 +1041,8 @@ export class AudioEngine {
       c.gain.gain.setTargetAtTime(0, now, CHARGE_RELEASE);
       c.main.stop(now + 0.3);
       c.detuned.stop(now + 0.3);
+      c.sub.stop(now + 0.3);
+      c.noise.stop(now + 0.3);
       return;
     }
     if (!this.charge) {
@@ -786,52 +1054,89 @@ export class AudioEngine {
       filter.connect(gain);
       gain.connect(this.dry);
       gain.connect(this.convolver);
+      // 鋸波のバズは軽い歪みでグリットを付けてからフィルタへ(音質改善)
+      const shaper = ctx.createWaveShaper();
+      shaper.curve = this.driveCurve(6);
+      shaper.connect(filter);
       const mk = (detune: number): OscillatorNode => {
         const o = ctx.createOscillator();
         o.type = 'sawtooth';
         o.detune.value = detune;
-        o.connect(filter);
+        o.connect(shaper);
         o.start(now);
         return o;
       };
+      const sub = ctx.createOscillator();
+      sub.type = 'sine';
+      sub.connect(gain);
+      sub.start(now);
+      const noise = ctx.createBufferSource();
+      noise.buffer = this.noiseLong;
+      noise.loop = true;
+      const noiseFilter = ctx.createBiquadFilter();
+      noiseFilter.type = 'bandpass';
+      noiseFilter.Q.value = 1.2;
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.value = 0;
+      noise.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      noiseGain.connect(filter);
+      noise.start(now, Math.random());
       // +9 セントの微デチューンでもう 1 本重ね、うなりで「唸り」にする
-      this.charge = { main: mk(0), detuned: mk(9), filter, gain };
+      this.charge = { main: mk(0), detuned: mk(9), sub, noise, noiseFilter, noiseGain, filter, gain };
     }
     const c = this.charge;
     const f = chargeFreq(ratio);
     c.main.frequency.setTargetAtTime(f, now, CHARGE_FOLLOW);
     c.detuned.frequency.setTargetAtTime(f, now, CHARGE_FOLLOW);
+    c.sub.frequency.setTargetAtTime(f / 2, now, CHARGE_FOLLOW);
+    c.noiseFilter.frequency.setTargetAtTime(f * 10, now, CHARGE_FOLLOW);
+    c.noiseGain.gain.setTargetAtTime(0.05 * ratio, now, CHARGE_FOLLOW);
     c.filter.frequency.setTargetAtTime(f * 6, now, CHARGE_FOLLOW);
     c.gain.gain.setTargetAtTime(chargeGain(ratio), now, CHARGE_FOLLOW);
   }
 
   /**
-   * ボス予備動作の警告音: 矩形波の短い下降チャープを 1 回だけ鳴らす(passage と同じ
-   * ワンショットの流儀)。予備動作の開始(approach→windup の遷移)で main から呼ばれる。
-   * 音量は WARN_GAIN で控えめにし、残響は dry のみにして合図として立たせる。
+   * ボス予備動作の警告音: デチューンした鋸波 2 本をバンドパス掃引 + 軽い歪みで
+   * 鳴らす下降チャープを 2 連(矩形波は廃止)。予備動作の開始(approach→windup の
+   * 遷移)で main から呼ばれる。音量は控えめにし、残響は dry のみにして合図として立たせる。
    */
   bossWarn(): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    osc.type = 'square';
-    osc.frequency.setValueAtTime(WARN_FREQ_START, now);
-    osc.frequency.exponentialRampToValueAtTime(WARN_FREQ_END, now + WARN_SECONDS);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(WARN_GAIN, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + WARN_SECONDS);
-    osc.connect(g);
-    g.connect(this.dry);
-    osc.start(now);
-    osc.stop(now + WARN_SECONDS + 0.1);
+    for (let i = 0; i < 2; i++) {
+      this.voice({
+        layers: [
+          { type: 'sawtooth', from: WARN_FREQ_START * 0.84, to: WARN_FREQ_END * 0.84, gain: 0.7 },
+          { type: 'sawtooth', from: WARN_FREQ_START * 0.84, to: WARN_FREQ_END * 0.84, detune: 7, gain: 0.5 },
+        ],
+        filter: { type: 'bandpass', from: 1800, to: 700, q: 1.6 },
+        drive: 10,
+        seconds: WARN_SECONDS,
+        gain: WARN_GAIN + 0.02,
+        at: now + i * (WARN_SECONDS + 0.04),
+      });
+    }
   }
 
-  /** 発射音(重粒子砲): サブ正弦波の pitch 落下(重低音の芯)+ ローパスを落とすノイズ(破裂感) */
+  /**
+   * 発射音(重粒子砲): サブ正弦波の pitch 落下(重低音の芯)+ ローパスを落とすノイズ
+   * (破裂感)に、低音爆発のサンプル層と歪ませた中域の鋸波を重ねて格上げ(混合)。
+   */
   cannonFire(): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const now = ctx.currentTime;
+    this.playSample('explosionLow', { gain: 0.35, rate: 0.9, wet: 0.6 });
+    this.voice({
+      layers: [{ type: 'sawtooth', from: 300, to: 60, gain: 1 }],
+      filter: { type: 'lowpass', from: 2000, to: 200, q: 0.8 },
+      drive: 12,
+      seconds: 0.28,
+      gain: 0.22,
+      wet: 0.3,
+    });
     const sub = ctx.createOscillator();
     sub.type = 'sine';
     sub.frequency.setValueAtTime(FIRE_SUB_START_HZ, now);
@@ -867,10 +1172,20 @@ export class AudioEngine {
    * 破砕音: 掘削で壊れたタイル数(brokenTiles)に応じたノイズの崩落。1 発で 1 音に集約し、
    * パラメータは crushParams(対数圧縮・上限あり)。壊れていない(0 以下)ときは鳴らさない。
    * ローパスを開始帯域から 180 Hz へ落とし、岩が崩れてくぐもる動きにする。
+   * 音質改善で、採掘打撃のサンプル(mining)を主体層に足し、大破壊時のみ崩壊音
+   * (explosionCrunch)も薄く重ねる(混合)。
    */
   cannonCrush(brokenTiles: number): void {
     const ctx = this.ctx;
     if (!ctx || brokenTiles <= 0) return;
+    this.playSample(MINING_SAMPLES[pickVariant(brokenTiles, MINING_SAMPLES.length)], {
+      gain: crushSampleGain(brokenTiles),
+      rate: sampleRate(0.9, brokenTiles, 0.06),
+      wet: 0.5,
+    });
+    if (brokenTiles >= CRUSH_BIG_TILES) {
+      this.playSample('explosionCrunch', { gain: 0.3, rate: 0.8, wet: 0.6 });
+    }
     const p = crushParams(brokenTiles);
     const now = ctx.currentTime;
     const src = ctx.createBufferSource();
@@ -893,8 +1208,16 @@ export class AudioEngine {
     src.stop(now + p.seconds + 0.1);
   }
 
+  /**
+   * 足音: コンクリートの足音サンプルを歩数で決定論に回す(5 種)。残響への送りは
+   * サンプルの wet でまかなう。無いときは従来のバンドパスノイズ。
+   */
   private footstep(): void {
     const ctx = this.ctx!;
+    const idx = this.stepCount++;
+    if (this.playSample(FOOTSTEP_SAMPLES[pickVariant(idx, FOOTSTEP_SAMPLES.length)], {
+      gain: FOOTSTEP_GAIN, rate: sampleRate(1, idx, 0.03), wet: 0.35,
+    })) return;
     const now = ctx.currentTime;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
@@ -913,7 +1236,12 @@ export class AudioEngine {
     src.stop(now + FOOTSTEP_SECONDS + 0.05);
   }
 
-  /** 層のドローンを切り替える。旧組はゲインを 0 へ追従させて 2 秒後に止める */
+  /**
+   * 層のドローンを切り替える。旧組はゲインを 0 へ追従させて 2 秒後に止める。
+   * 音質改善で、倍音はローパス(遅い LFO でカットオフがうねる)+ ゲインの微かな
+   * うねり + 左右への振り分けを通し、静的なオルガン音から「奥行きのある持続音」に
+   * 作り替えた。機械系の層にはエンジン音ループのサンプルも薄く敷く。
+   */
   private switchDrone(biome: BiomeId): void {
     const ctx = this.ctx!;
     const now = ctx.currentTime;
@@ -921,21 +1249,46 @@ export class AudioEngine {
     if (old) {
       old.gain.gain.setTargetAtTime(0, now, DRONE_FADE);
       for (const o of old.oscs) o.stop(now + 2);
+      if (old.layer) old.layer.stop(now + 2);
     }
     const p = droneParams(biome);
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
     gain.gain.setTargetAtTime(dbToGain(p.gainDb), now, DRONE_FADE);
     gain.connect(this.dry);
+    const cutoff = p.freq * 6;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.Q.value = 0.5;
+    filter.frequency.value = cutoff;
+    const trim = ctx.createGain();
+    trim.gain.value = 0.88;
+    filter.connect(trim);
+    trim.connect(gain);
     const oscs: OscillatorNode[] = [];
+    const mkLfo = (hz: number, depth: number, target: AudioParam): void => {
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = hz;
+      const lg = ctx.createGain();
+      lg.gain.value = depth;
+      lfo.connect(lg);
+      lg.connect(target);
+      lfo.start(now);
+      oscs.push(lfo);
+    };
+    mkLfo(0.07, cutoff * 0.35, filter.frequency);
+    mkLfo(0.053, 0.12, trim.gain);
     p.harmonics.forEach((h, i) => {
       const o = ctx.createOscillator();
       o.type = p.type;
       o.frequency.value = p.freq * h;
       const g = ctx.createGain();
       g.gain.value = 1 / (i + 1) / p.harmonics.length; // 高い倍音ほど弱く
+      const pan = ctx.createStereoPanner();
+      pan.pan.value = i % 2 === 0 ? -0.25 : 0.25; // 倍音を左右へ薄く広げる
       o.connect(g);
-      g.connect(gain);
+      g.connect(pan);
+      pan.connect(filter);
       o.start(now);
       oscs.push(o);
     });
@@ -949,7 +1302,30 @@ export class AudioEngine {
     beat.connect(beatGain);
     beat.start(now);
     oscs.push(beat);
-    this.drone = { biome, gain, beatGain, oscs };
+    this.drone = { biome, gain, beatGain, oscs, filter, cutoff, layer: null };
+    this.startEngineLayer(this.drone);
+  }
+
+  /**
+   * ドローンへのエンジン音ループの重ね(機械系の層のみ、engineLayerGain)。
+   * サンプルのロードが済んでから呼ばれる場合があるため update からも呼ばれ、
+   * 既に敷いてあれば何もしない。層のゲインはドローン側のゲインに相乗りするので
+   * 層の切替クロスフェードにも追従する。
+   */
+  private startEngineLayer(d: Drone): void {
+    if (d.layer || engineLayerGain(d.biome) <= 0) return;
+    const buf = this.samples.get('engineLoop');
+    if (!buf) return;
+    const ctx = this.ctx!;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    const g = ctx.createGain();
+    g.gain.value = engineLayerGain(d.biome);
+    src.connect(g);
+    g.connect(d.gain);
+    src.start();
+    d.layer = src;
   }
 
   private makeNoise(seconds: number): AudioBuffer {
