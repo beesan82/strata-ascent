@@ -38,8 +38,12 @@ export interface Biome {
   bgLayers: BgLayer[];
 }
 
-/** 背景レイヤーの基準色(STEELランプのみから導出)。奥(添字小)ほど暗い。bgLayersは最大3層前提。 */
-const BG_BASES = [mixHex(STEEL.black, STEEL.far, 0.5), STEEL.far, mixHex(STEEL.far, STEEL.base, 0.5)];
+/**
+ * 背景レイヤーの基準色(STEELランプのみから導出)。奥(添字小)ほど暗い。bgLayersは最大3層前提。
+ * 段階 1 で全体を鋼ランプ 1 段分沈めた(旧: [黒と far の中間, far, far と base の中間])。
+ * 前景の地形面を相対的に浮かせるための明度分離(設計 §3.3)。
+ */
+const BG_BASES = [STEEL.black, mixHex(STEEL.black, STEEL.far, 0.5), STEEL.far];
 
 /** 背景レイヤー色: 奥(添字小)ほど暗い鋼ランプ+微量ティント */
 const bgColor = (tint: string, i: number, amount: number): string =>
