@@ -23,6 +23,7 @@ import { biomeCellAt } from './world/biomeCells';
 import { towerTopFloorAt } from './world/landmark';
 import { CHUNK_SIZE, TILE } from './world/tiles';
 import { DEBRIS_TTL } from './render/beamShape';
+import { poseMuzzleWorld } from './render/playerPose';
 import { findSpawn, isHardAt } from './world/worldgen';
 import { sampleOpenness, targetZoomForOpenness, nextZoomStep, advanceZoom } from './core/zoom';
 import { lookahead } from './core/stick';
@@ -576,7 +577,22 @@ function update(dt: number): void {
     : input.heldAimActive
       ? { x: input.heldAimX, y: input.heldAimY }
       : pulseAimDir(input.state, player.facing);
-  pulseGun.update(dt, input.pulseHeld, player.centerX, player.centerY, pulseDir.x, pulseDir.y, tiles);
+  // 発射原点は描画ポーズの銃口(肩−手−銃先)に合わせる。体の中心固定だと
+  // 弾が腰の高さから出て見えるため、ポーズと照準から銃口の座標を取る。
+  // isWalking の定義は renderer の描画判定と同一にする
+  const muzzle = poseMuzzleWorld(
+    player.centerX,
+    player.centerY,
+    player.facing,
+    player.walkPhase,
+    player.body.onGround && player.body.vx !== 0,
+    Math.atan2(pulseDir.y, pulseDir.x),
+    simTime,
+  );
+  pulseGun.update(
+    dt, input.pulseHeld, muzzle.x, muzzle.y, pulseDir.x, pulseDir.y, tiles,
+    player.centerX, player.centerY,
+  );
 
   // 歩行敵・飛行敵: 出現集合の更新、巡回/追尾、パルスとの命中判定(接触ダメージは第4段)
   if (frames % ENEMY_SCAN_INTERVAL_FRAMES === 0) refreshEnemies();

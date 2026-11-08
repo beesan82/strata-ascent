@@ -37,6 +37,17 @@ function collides(tiles: TileLookup, x: number, y: number, w: number, h: number)
   );
 }
 
+/** AABB (x, y, w, h) がSOLIDと重なるか(スポーン位置の埋没判定など、移動を伴わない確認用) */
+export function bodyOverlapsSolid(
+  tiles: TileLookup,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): boolean {
+  return collides(tiles, x, y, w, h);
+}
+
 /** X方向にxOld→xNewへ掃引したAABBがSOLIDと重なるか(高速移動時のすり抜け防止) */
 function collidesSweptX(
   tiles: TileLookup,

@@ -7,6 +7,34 @@ import {
 
 export const PLAYER_DRAW_HEIGHT_TILES = 2.25;
 
+/**
+ * 体の中心から足元(ポーズ原点)までの縦オフセット(タイル)。
+ * 物理ボディの高さ 1.75 の半分で、描画(playerSprite の feetY)と
+ * 発射原点の計算で同じ値を共有する(二重管理で銃口がずれるのを防ぐ)。
+ */
+export const PLAYER_FEET_OFFSET_TILES = 0.875;
+
+/**
+ * ポーズから銃口のワールド座標を求める。描画(playerSprite.drawPlayer)が
+ * スクリーン座標で行うアンカー計算と同じ変換をタイル座標で行うもので、
+ * パルスの発射原点はこれと一致させる(中心固定だと弾が腰から出る)。
+ */
+export function poseMuzzleWorld(
+  centerX: number,
+  centerY: number,
+  facing: 1 | -1,
+  walkPhase: number,
+  isWalking: boolean,
+  aimAngle: number,
+  timeSec: number,
+): Vec2 {
+  const pose = calculatePlayerPose(facing, walkPhase, isWalking, aimAngle, timeSec);
+  return {
+    x: centerX + pose.muzzle.x,
+    y: centerY + PLAYER_FEET_OFFSET_TILES + pose.muzzle.y,
+  };
+}
+
 export interface Vec2 {
   x: number;
   y: number;
