@@ -21,7 +21,8 @@ import { regionAt, type System } from './world/hierarchy';
 import { isGreatInterface, layerNumber, overlookCellAt } from './world/interface';
 import { biomeCellAt } from './world/biomeCells';
 import { towerTopFloorAt } from './world/landmark';
-import { CHUNK_SIZE } from './world/tiles';
+import { CHUNK_SIZE, TILE } from './world/tiles';
+import { DEBRIS_TTL } from './render/beamShape';
 import { findSpawn, isHardAt } from './world/worldgen';
 import { sampleOpenness, targetZoomForOpenness, nextZoomStep, advanceZoom } from './core/zoom';
 import { lookahead } from './core/stick';
@@ -316,8 +317,42 @@ resize();
 const tiles = (tx: number, ty: number) => store.tileAt(tx, ty);
 
 // 重力子砲: ビーム残光(演出)。発射パラメータ(BORE_*)は entities/graviton で定義し beamHit と共有する
-const BEAM_TTL = 0.18;   // 秒: ビーム残光の寿命(切り札の一撃として一瞬だが読める長さ)
+const BEAM_TTL = 0.3;   // 秒: ビーム残光の寿命(段階 3: 太さと明度が痩せていく減衰を読める長さ)
 let lastBeam: { angle: number; ttl: number } | null = null;
+
+// 発射直後の単発の「押し」(演出)。発射方向と逆向きへ画面を押し、0.1 秒で減衰する
+const PUSH_TTL = 0.1;
+let beamPush: { angle: number; ttl: number } | null = null;
+
+// 破片の発生点(演出)。掘削点と命中点に置き、形と配置は render/beamShape が決める
+interface DebrisBurst { x: number; y: number; angle: number; key: number; ttl: number }
+let debrisBursts: DebrisBurst[] = [];
+let shotCounter = 0;
+const MAX_DEBRIS_BURSTS = 24;
+
+function pushDebris(x: number, y: number, angle: number): void {
+  debrisBursts.push({ x, y, angle, key: shotCounter, ttl: DEBRIS_TTL });
+  if (debrisBursts.length > MAX_DEBRIS_BURSTS) {
+    debrisBursts.splice(0, debrisBursts.length - MAX_DEBRIS_BURSTS);
+  }
+}
+
+/**
+ * 発射方向で最初に地形へ触れる点(掘削点)。破壊の適用前に呼ぶこと。
+ * 未生成チャンクは生成せず、そこまで届かなければ null(破片は出さない)。
+ */
+function firstContact(ox: number, oy: number, angle: number): { x: number; y: number } | null {
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  for (let d = 0.5; d <= BORE_LENGTH; d += 0.25) {
+    const x = ox + dx * d;
+    const y = oy + dy * d;
+    const t = store.peekTileAt(Math.floor(x), Math.floor(y));
+    if (t === undefined) return null;
+    if (t !== TILE.AIR) return { x, y };
+  }
+  return null;
+}
 
 /** チャージ完了→離した瞬間: エイム方向へ地形を貫通破壊し、タイルへ反映して焼き込みを無効化する */
 function fire(): void {
@@ -326,6 +361,9 @@ function fire(): void {
   // PC の KeyF 発射では発射候補が無いのでモードには触れない
   if (input.takeCannonRelease()) input.notifyCannonFired();
   const aim = renderer.aimAngle; // ライトコーンと同一の角度(=ビーム=破壊方向を保証)
+  shotCounter++;
+  // 掘削点は破壊の適用前に取る(適用後はタイルが空気になっている)
+  const contact = firstContact(player.centerX, player.centerY, aim);
   // 未生成チャンクは生成せず破壊マスクだけ記録する(発射フレームでの同期生成を避ける)
   const affected = destruction.bore(
     player.centerX, player.centerY, aim, BORE_LENGTH, BORE_RADIUS,
@@ -339,6 +377,8 @@ function fire(): void {
   }
   renderer.invalidateBored(affected, store); // 焼き込みを再焼き込み待ちに(境界際の隣チャンクも)
   lastBeam = { angle: aim, ttl: BEAM_TTL };
+  beamPush = { angle: aim, ttl: PUSH_TTL };
+  if (contact) pushDebris(contact.x, contact.y, aim);
   applyBeamToEnemies(aim);
 }
 
@@ -356,12 +396,14 @@ function applyBeamToEnemies(angle: number): void {
   for (const e of enemies) {
     if (!e.walker.dead && beamHit(ox, oy, angle, e.walker.centerX, e.walker.centerY, halfDiag(e.walker.body.w, e.walker.body.h))) {
       e.walker.hit(e.walker.hp); // 現在 HP ぶんを与えて即死させる(通常の被弾経路を通す)
+      pushDebris(e.walker.centerX, e.walker.centerY, angle); // 命中点の破片
       anyKill = true;
     }
   }
   for (const e of flyers) {
     if (!e.flyer.dead && beamHit(ox, oy, angle, e.flyer.centerX, e.flyer.centerY, halfDiag(e.flyer.body.w, e.flyer.body.h))) {
       e.flyer.hit(e.flyer.hp);
+      pushDebris(e.flyer.centerX, e.flyer.centerY, angle); // 命中点の破片
       anyKill = true;
     }
   }
@@ -371,6 +413,7 @@ function applyBeamToEnemies(angle: number): void {
   for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY);
   flyers = flyers.filter((e) => !e.flyer.dead);
   if (boss && beamHit(ox, oy, angle, boss.boss.centerX, boss.boss.centerY, halfDiag(BOSS_W, BOSS_H))) {
+    pushDebris(boss.boss.centerX, boss.boss.centerY, angle); // 命中点の破片(撃破でなくても出す)
     if (boss.boss.hit(BOSS_BEAM_DAMAGE)) {
       hapticEnemyDown();
       onBossKilled(boss.spawnId, boss.boss);
@@ -676,6 +719,14 @@ function update(dt: number): void {
     lastBeam.ttl -= dt;
     if (lastBeam.ttl <= 0) lastBeam = null;
   }
+  if (beamPush) {
+    beamPush.ttl -= dt;
+    if (beamPush.ttl <= 0) beamPush = null;
+  }
+  if (debrisBursts.length > 0) {
+    for (const b of debrisBursts) b.ttl -= dt;
+    debrisBursts = debrisBursts.filter((b) => b.ttl > 0);
+  }
 
   frames++;
   if (frames % EVICT_INTERVAL_FRAMES === 0) {
@@ -764,6 +815,7 @@ function frame(now: number): void {
     }
   }
   const beam = lastBeam ? { angle: lastBeam.angle, alpha: lastBeam.ttl / BEAM_TTL } : null;
+  const push = beamPush ? { angle: beamPush.angle, t: beamPush.ttl / PUSH_TTL } : null;
   const t0 = collectStats ? performance.now() : 0;
   // マウスが一度も動いていない(タッチ等)間は、照準用のマウス位置を合成する:
   // スティック照準/保持照準の方向の点、無ければ「プレイヤーの向きの水平」
@@ -783,6 +835,10 @@ function frame(now: number): void {
   renderer.render(store, camera, player, aimMouseX, aimMouseY, simTime, {
     chargeRatio: graviton.chargeRatio,
     beam,
+    push,
+    debris: debrisBursts.map((b) => ({
+      x: b.x, y: b.y, angle: b.angle, key: b.key, age: DEBRIS_TTL - b.ttl,
+    })),
     pulses: pulseGun.pulses.map((p) => ({
       x: p.body.x + PULSE_SIZE / 2,
       y: p.body.y + PULSE_SIZE / 2,

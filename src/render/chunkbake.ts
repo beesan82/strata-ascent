@@ -19,6 +19,7 @@ import { plateAt } from './tileset/plate';
 import { stainSegmentAt } from './stains';
 import { DECOR_MARGIN, DecorCache, decorOpBounds, type DecorOp } from './decor';
 import { craterCells, dirtyBoundsAround, expandRect, type CellRect } from './dirtyBounds';
+import { hotEdges, type HotEdgeGrids } from './hotedge';
 import { restLampCellAt, restTallyCellAt, REST_TALLY_STROKES, traceAt, type Trace } from './traces';
 import { restLampColor } from './landmarkLight';
 import { STEEL } from './steel';
@@ -79,6 +80,10 @@ export class ChunkBaker {
   private layer: HTMLCanvasElement | null = null;
   /** 帯ごとに焼いている途中の先読みチャンク(次に焼く帯の先頭行)。完成するまで cache には入れない */
   private pending = new Map<string, { canvas: HTMLCanvasElement; nextRow: number }>();
+  /** 掘削縁の熱色が残る期限(キー → 期限秒)。期限内は bake が熱色の縁を描く(段階 3) */
+  private hotUntil = new Map<string, number>();
+  /** 焼き込み側の現在時刻(秒)。renderer が毎フレーム render の timeSec を入れる */
+  nowSec = 0;
 
   constructor(private seed: number) {
     this.decor = new DecorCache(seed);
@@ -209,6 +214,30 @@ export class ChunkBaker {
     return v;
   }
 
+  /** 掘削縁の熱色の期限を刻む(再焼き込み対象のチャンクに renderer から呼ばれる) */
+  markHot(cx: number, cy: number, untilSec: number): void {
+    const key = `${cx},${cy}`;
+    this.hotUntil.set(key, Math.max(this.hotUntil.get(key) ?? 0, untilSec));
+  }
+
+  /** そのチャンクの掘削縁がいま熱いか(bake の熱色パス用) */
+  private isHot(cx: number, cy: number): boolean {
+    return (this.hotUntil.get(`${cx},${cy}`) ?? -Infinity) > this.nowSec;
+  }
+
+  /**
+   * 熱色の期限切れ処理: 期限を過ぎたチャンクを 1 回だけ無効化し、通常の縁へ戻す
+   * (設計 §5.1 の「1 回の切り替え」。毎フレーム呼ばれるが、期限内は何もしない)。
+   */
+  expireHot(nowSec: number): void {
+    for (const [key, until] of this.hotUntil) {
+      if (until > nowSec) continue;
+      this.hotUntil.delete(key);
+      const [cx, cy] = key.split(',').map(Number);
+      this.invalidate(cx, cy);
+    }
+  }
+
   /**
    * 指定チャンクの焼き込み画像を無効化する。ChunkStore.applyDestructionと対で呼ぶ。
    * 画像は再焼き込みまで古いものを表示し続け、発射フレームに焼き込みが集中するのを避ける。
@@ -234,6 +263,10 @@ export class ChunkBaker {
     for (const key of this.pending.keys()) {
       const [kx, ky] = key.split(',').map(Number);
       if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > radius) this.pending.delete(key);
+    }
+    for (const key of this.hotUntil.keys()) {
+      const [kx, ky] = key.split(',').map(Number);
+      if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > radius) this.hotUntil.delete(key);
     }
     this.decor.evictFarFrom(cx, cy, radius);
   }
@@ -396,6 +429,51 @@ export class ChunkBaker {
     ctx.globalAlpha = 1;
 
     this.bakeHardPlates(ctx, chunk, around, bx, by, span);
+
+    // 掘削縁の熱色残光(段階 3、設計 §5.1): 期限内だけ、クレーターに面した固体の面へ
+    // 錆の帯と金の際線を焼く。期限は markHot/expireHot が管理し、冷えるときは expireHot の
+    // 無効化で 1 回だけ通常の縁に焼き直される(毎フレームの再焼き込みはしない)。
+    // 割り付けはワールド座標と破壊マスクだけから決まるので、部分再焼き込みでも全面と一致する。
+    if (this.isHot(cx, cy)) {
+      const size = CHUNK_SIZE;
+      const gn = size + 2;
+      const grids: HotEdgeGrids = {
+        current: new Uint8Array(gn * gn),
+        pristine: store.pristineAround(cx, cy, 1),
+        destroyed: new Uint8Array(gn * gn),
+      };
+      for (let ly = -1; ly <= size; ly++) {
+        for (let lx = -1; lx <= size; lx++) {
+          const gi = (ly + 1) * gn + (lx + 1);
+          grids.current[gi] = around(lx, ly);
+          const wx = bx + lx;
+          const wy = by + ly;
+          const ccx = Math.floor(wx / size);
+          const ccy = Math.floor(wy / size);
+          const mask = store.destroyedMask(ccx, ccy);
+          if (mask) grids.destroyed[gi] = mask[(wy - ccy * size) * size + (wx - ccx * size)];
+        }
+      }
+      const band = Math.max(1, Math.round(0.22 * P));
+      for (const e of hotEdges(grids, size)) {
+        if (e.x < span.x || e.x >= span.x + span.w || e.y < span.y || e.y >= span.y + span.h) continue;
+        const x0 = e.x * P;
+        const y0 = e.y * P;
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = '#9a6d32';
+        if (e.side === 'n') ctx.fillRect(x0, y0, P, band);
+        else if (e.side === 's') ctx.fillRect(x0, y0 + P - band, P, band);
+        else if (e.side === 'w') ctx.fillRect(x0, y0, band, P);
+        else ctx.fillRect(x0 + P - band, y0, band, P);
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = '#caa64a';
+        if (e.side === 'n') ctx.fillRect(x0, y0, P, 1);
+        else if (e.side === 's') ctx.fillRect(x0, y0 + P - 1, P, 1);
+        else if (e.side === 'w') ctx.fillRect(x0, y0, 1, P);
+        else ctx.fillRect(x0 + P - 1, y0, 1, P);
+      }
+      ctx.globalAlpha = 1;
+    }
 
     // 装飾(アトラスが描く表面線画=surfaceタグ付きはスキップ、物理装飾は残す)。
     // モックの色構成に合わせ、物理装飾は鋼ランプ由来のPALETTE色のまま焼く

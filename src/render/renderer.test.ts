@@ -36,32 +36,26 @@ class FakeCanvas {
 
 class EffectRecordingContext {
   fillStyle: string | CanvasGradient = '';
-  strokeStyle: string | CanvasGradient = '';
   globalAlpha = 1;
   globalCompositeOperation: GlobalCompositeOperation = 'source-over';
-  lineCap: CanvasLineCap = 'butt';
-  lineWidth = 1;
-  radialGradients: number[][] = [];
-  moveOrigins: number[][] = [];
-  arcs: number[][] = [];
+  radialGradients = 0;
+  translates: number[][] = [];
+  fillRects: number[][] = [];
 
   save(): void {}
   restore(): void {}
-  beginPath(): void {}
-  lineTo(): void {}
-  stroke(): void {}
-  fill(): void {}
+  rotate(): void {}
 
-  moveTo(x: number, y: number): void {
-    this.moveOrigins.push([x, y]);
+  translate(x: number, y: number): void {
+    this.translates.push([x, y]);
   }
 
-  arc(x: number, y: number, radius: number): void {
-    this.arcs.push([x, y, radius]);
+  fillRect(x: number, y: number, w: number, h: number): void {
+    this.fillRects.push([x, y, w, h]);
   }
 
-  createRadialGradient(...args: number[]): CanvasGradient {
-    this.radialGradients.push(args);
+  createRadialGradient(): CanvasGradient {
+    this.radialGradients++;
     return { addColorStop: () => {} } as unknown as CanvasGradient;
   }
 }
@@ -90,7 +84,7 @@ describe('Renderer pixel pipeline', () => {
     ).toContainEqual({ width: 427, height: 240 });
   });
 
-  it('starts charge, beam, and muzzle flash at one supplied visual muzzle', () => {
+  it('starts charge and beam at one supplied visual muzzle, with flat bands only', () => {
     const context = new EffectRecordingContext();
     const muzzle = { x: 41, y: 29 };
 
@@ -103,21 +97,15 @@ describe('Renderer pixel pipeline', () => {
       },
       320,
       180,
+      12,
     );
 
-    expect(context.moveOrigins).toEqual([
-      [muzzle.x, muzzle.y],
-      [muzzle.x, muzzle.y],
-      [muzzle.x, muzzle.y],
-    ]);
-    expect(context.arcs).toHaveLength(2);
-    for (const [x, y] of context.arcs) {
-      expect({ x, y }).toEqual(muzzle);
-    }
-    expect(context.radialGradients).toHaveLength(2);
-    for (const [x0, y0, , x1, y1] of context.radialGradients) {
-      expect({ x: x0, y: y0 }).toEqual(muzzle);
-      expect({ x: x1, y: y1 }).toEqual(muzzle);
-    }
+    // 溜めもビームも銃口を原点に描く(translate の最初は必ず銃口)
+    expect(context.translates[0]).toEqual([muzzle.x, muzzle.y]);
+    expect(context.translates).toContainEqual([muzzle.x, muzzle.y]);
+    expect(context.fillRects.length).toBeGreaterThan(0);
+    // 段階 3: 放射グラデーションと加算合成は使わない
+    expect(context.radialGradients).toBe(0);
+    expect(context.globalCompositeOperation).toBe('source-over');
   });
 });
