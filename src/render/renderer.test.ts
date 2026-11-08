@@ -65,7 +65,7 @@ describe('Renderer pixel pipeline', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders 34 horizontal tiles at 12 internal pixels per tile', () => {
+  it('renders 34 horizontal tiles at 15 internal pixels per tile', () => {
     const offscreenCanvases: FakeCanvas[] = [];
     vi.stubGlobal('document', {
       createElement: () => {

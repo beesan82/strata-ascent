@@ -179,8 +179,17 @@ export function quantizeRgba(
   }
 }
 
-/** Internal pixel density per world tile for the high-fidelity renderer. */
-export const HIGH_FIDELITY_TILE_PX = 12;
+/**
+ * 1 タイルあたりの内部ピクセル密度（高精細レンダラ用）。
+ * 12 → 15（2026-11-09 のスパイク裁定、計画 docs/superpowers/plans/2026-11-09-resolution.md）:
+ * 計測基準の 1280×720 では整数 scale が 3 のままバッファ寸法不変（427×240）でフレーム
+ * コストが増えず、広い画面でのみ一段上がる（1920×1080: 384×216 → 480×270、iPhone 横持ち
+ * 物理 2556×1179: 426×197 → 511×236）。18（= 1280 で 640×360、画素 2.25 倍）は量子化が
+ * 画素数に比例して伸び、present の p50 が +2.5〜+6.5ms 増えて採用基準（render p50 の増加
+ * +1.0ms 以内）を超えたため不採用。ズーム 1 での ppt は全画面で BAKE_PPT(16) 以下に収まり、
+ * チャンク焼き込みの実解像度も損なわない。
+ */
+export const HIGH_FIDELITY_TILE_PX = 15;
 
 /**
  * Dither strength in pixel-value units; visually tune only within the approved weak 8–16 range.
