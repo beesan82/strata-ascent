@@ -161,3 +161,194 @@ export function crushParams(brokenTiles: number): CrushParams {
     startHz: CRUSH_HZ_MIN + (CRUSH_HZ_MAX - CRUSH_HZ_MIN) * k,
   };
 }
+
+/**
+ * パルスの音(音系の全面見直し、2026-11-08)。連射(6 発/秒)に耐えるよう短く軽くし、
+ * 発射インデックスで pitch を決定論にばらして単調さを消す。ばらしは黄金角の sin で
+ * 周期が発射間隔と共鳴しないようにする。
+ */
+export const PULSE_FREQ_START = 840;
+export const PULSE_FREQ_END = 460;
+export const PULSE_SECONDS = 0.06;
+export const PULSE_GAIN = 0.16;
+/** pitch ばらしの最大振れ幅(倍率 ±) */
+export const PULSE_DETUNE = 0.04;
+
+export function pulseDetune(shotIndex: number): number {
+  return 1 + PULSE_DETUNE * Math.sin(shotIndex * 2.399963229728653);
+}
+
+/** 敵への命中(非撃破): 短いティック */
+export const HIT_FREQ = 190;
+export const HIT_SECONDS = 0.04;
+export const HIT_GAIN = 0.18;
+export const HIT_NOISE_HZ = 2600;
+export const HIT_NOISE_GAIN = 0.1;
+
+/** 敵の撃破: 低い正弦波の pitch 落下 + ノイズの崩れ */
+export const DOWN_FREQ_START = 320;
+export const DOWN_FREQ_END = 64;
+export const DOWN_SECONDS = 0.18;
+export const DOWN_GAIN = 0.3;
+export const DOWN_NOISE_SECONDS = 0.15;
+export const DOWN_NOISE_GAIN = 0.2;
+export const DOWN_NOISE_HZ = 900;
+
+/** プレイヤーの被弾: 鋸波の pitch 落下 */
+export const HURT_FREQ_START = 170;
+export const HURT_FREQ_END = 65;
+export const HURT_SECONDS = 0.16;
+export const HURT_GAIN = 0.35;
+
+/** 飢餓ダメージ: 被弾とは別経路の、空虚で控えめな音 */
+export const STARVE_FREQ_START = 130;
+export const STARVE_FREQ_END = 80;
+export const STARVE_SECONDS = 0.2;
+export const STARVE_GAIN = 0.18;
+
+/** プレイヤーの死亡: 長い pitch 落下 */
+export const DEATH_FREQ_START = 220;
+export const DEATH_FREQ_END = 38;
+export const DEATH_SECONDS = 0.7;
+export const DEATH_GAIN = 0.4;
+
+/** 復活: 死亡音と重ならないよう少し遅らせて 2 音 */
+export const REVIVE_DELAY = 0.2;
+export const REVIVE_NOTES: readonly number[] = [392, 587.33];
+export const REVIVE_NOTE_GAP = 0.09;
+export const REVIVE_GAIN = 0.14;
+
+/** ジャンプ: 軽い pitch 上昇 */
+export const JUMP_FREQ_START = 230;
+export const JUMP_FREQ_END = 430;
+export const JUMP_SECONDS = 0.09;
+export const JUMP_GAIN = 0.1;
+
+/** 着地: 落下速度(着地直前の vy)からゲインを決める。小さな段差降りでは鳴らさない */
+export const LAND_MIN_VY = 5;
+export const LAND_GAIN_MIN = 0.12;
+export const LAND_GAIN_MAX = 0.4;
+export const LAND_SECONDS = 0.07;
+export const LAND_NOISE_HZ = 320;
+/** ゲインが最大に達する落下速度(entities/player の MAX_FALL) */
+export const LAND_FULL_VY = 25;
+
+export function landGain(fallSpeed: number): number {
+  const v = Math.max(0, fallSpeed);
+  if (v < LAND_MIN_VY) return 0;
+  const k = clamp01((v - LAND_MIN_VY) / (LAND_FULL_VY - LAND_MIN_VY));
+  return LAND_GAIN_MIN + (LAND_GAIN_MAX - LAND_GAIN_MIN) * k;
+}
+
+/** 梯子の段: 縦移動距離 LADDER_RUNG_STEP(タイル)ごとの跨ぎで 1 回鳴らす(足音の π 跨ぎと同形) */
+export const LADDER_RUNG_STEP = 0.5;
+export const LADDER_FREQ_A = 1450;
+export const LADDER_FREQ_B = 1650;
+export const LADDER_SECONDS = 0.03;
+export const LADDER_GAIN = 0.07;
+
+export function rungCrossed(prevDist: number, dist: number): boolean {
+  return Math.floor(prevDist / LADDER_RUNG_STEP) !== Math.floor(dist / LADDER_RUNG_STEP);
+}
+
+/**
+ * ドロップ取得音: 種別ごとに異なる上行 2 音(Hz)。砲弾は鋭く、回復は丸く、糧食は低めに。
+ * 未知の種別は糧食の音に落とす(新しい種別が増えても無音にならないための既定)。
+ */
+export const PICKUP_NOTES: Record<string, readonly number[]> = {
+  charge: [659.25, 987.77],
+  heal: [523.25, 783.99],
+  ration: [392, 523.25],
+};
+export const PICKUP_NOTE_GAP = 0.06;
+export const PICKUP_GAIN = 0.18;
+
+export function pickupNotes(kind: string): readonly number[] {
+  return PICKUP_NOTES[kind] ?? PICKUP_NOTES.ration;
+}
+
+/** 補給キャッシュ開封: ノイズの擦れ(バンドパス掃引) */
+export const CACHE_SECONDS = 0.14;
+export const CACHE_GAIN = 0.22;
+export const CACHE_HZ_START = 500;
+export const CACHE_HZ_END = 1800;
+
+/** 休憩点の初回補給: 温かい上行 2 音 */
+export const REST_STOCK_NOTES: readonly number[] = [261.63, 392];
+export const REST_STOCK_GAIN = 0.18;
+
+/** 復活点の更新: 控えめな単音 */
+export const RESPAWN_FREQ = 440;
+export const RESPAWN_SECONDS = 0.09;
+export const RESPAWN_GAIN = 0.09;
+
+/** 武器切替: 短いクリック */
+export const SWITCH_FREQ = 1250;
+export const SWITCH_SECONDS = 0.03;
+export const SWITCH_GAIN = 0.13;
+
+/** 砲の弾回復(自動回復の完了): ごく小さな合図 */
+export const RECHARGE_FREQ = 1180;
+export const RECHARGE_SECONDS = 0.04;
+export const RECHARGE_GAIN = 0.06;
+
+/** 満腹度の警告: 低い矩形波の 2 連 */
+export const SATIETY_WARN_FREQ = 196;
+export const SATIETY_WARN_SECONDS = 0.07;
+export const SATIETY_WARN_GAP = 0.12;
+export const SATIETY_WARN_GAIN = 0.13;
+
+/** 糧食の自動摂取: ローパスのノイズを 2 回噛む */
+export const EAT_SECONDS = 0.05;
+export const EAT_GAP = 0.1;
+export const EAT_GAIN = 0.2;
+export const EAT_HZ = 500;
+
+/** 字幕ジングル: 節目は 3 音の上行、新記録は 4 音でより高く終わる */
+export const MILESTONE_NOTES: readonly number[] = [261.63, 329.63, 392];
+export const NEW_RECORD_NOTES: readonly number[] = [392, 523.25, 659.25, 783.99];
+export const JINGLE_GAIN = 0.2;
+export const JINGLE_NOTE_GAP = 0.09;
+export const JINGLE_NOTE_SECONDS = 0.3;
+
+/** 砲台の発射: パルスより硬く高い矩形波の下降 */
+export const TURRET_FREQ_START = 1350;
+export const TURRET_FREQ_END = 280;
+export const TURRET_SECONDS = 0.08;
+export const TURRET_GAIN = 0.2;
+
+/** 飛行敵の追尾開始: 小さな矩形波の上昇チャープ(気配の合図) */
+export const FLYER_FREQ_START = 1150;
+export const FLYER_FREQ_END = 1650;
+export const FLYER_SECONDS = 0.06;
+export const FLYER_GAIN = 0.07;
+
+/** ボスの出現: 低い正弦波の膨らみ + ノイズの地鳴り */
+export const BOSS_APPEAR_FREQ = 55;
+export const BOSS_APPEAR_SECONDS = 0.5;
+export const BOSS_APPEAR_GAIN = 0.3;
+export const BOSS_APPEAR_NOISE_GAIN = 0.12;
+export const BOSS_APPEAR_NOISE_HZ = 160;
+
+/** ボスの突進開始: バンドパスを上げるノイズの疾走 */
+export const BOSS_CHARGE_SECONDS = 0.3;
+export const BOSS_CHARGE_GAIN = 0.22;
+export const BOSS_CHARGE_HZ_START = 400;
+export const BOSS_CHARGE_HZ_END = 2400;
+
+/** ボスの激突(硬直入り): 低いノイズ + サブのドスン */
+export const BOSS_CRASH_SECONDS = 0.22;
+export const BOSS_CRASH_GAIN = 0.4;
+export const BOSS_CRASH_HZ = 500;
+export const BOSS_CRASH_SUB_FREQ = 58;
+export const BOSS_CRASH_SUB_SECONDS = 0.18;
+export const BOSS_CRASH_SUB_GAIN = 0.35;
+
+/** ボスの撃破: 通常撃破より長く重い pitch 落下 + ノイズの崩壊 */
+export const BOSS_DOWN_FREQ_START = 200;
+export const BOSS_DOWN_FREQ_END = 30;
+export const BOSS_DOWN_SECONDS = 0.7;
+export const BOSS_DOWN_GAIN = 0.5;
+export const BOSS_DOWN_NOISE_SECONDS = 0.5;
+export const BOSS_DOWN_NOISE_GAIN = 0.35;
+export const BOSS_DOWN_NOISE_HZ = 700;

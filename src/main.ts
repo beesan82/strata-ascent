@@ -56,7 +56,7 @@ import {
 import { autoViewStarted, initialView, viewState, type ViewState } from './core/view';
 import { Caption, captionText } from './render/caption';
 import { AudioEngine } from './audio/engine';
-import { beaconHum, HUM_RANGE, nearestPlateDistance } from './audio/params';
+import { beaconHum, HUM_RANGE, LADDER_RUNG_STEP, nearestPlateDistance, rungCrossed } from './audio/params';
 import { beaconsInView } from './render/beacon';
 import { biomeIdForCell, districtNameForCell } from './world/biomeCells';
 import { terrainProfileFor } from './world/biomeTerrain';
@@ -124,6 +124,8 @@ let turretShots: TurretShot[] = [];
  * 1 体を有効化する。実体は範囲を離れると捨てられるが、撃破は記録保持に残る。
  */
 let boss: { spawnId: string; boss: Boss; spawn: BossSpawn } | null = null;
+/** 音用: 前フレームに有効だったボスのスポーン ID(出現の検出) */
+let prevBossSpawnId: string | null = null;
 const ENEMY_SCAN_INTERVAL_FRAMES = 30;
 const ENEMY_SCAN_X = 40;
 const ENEMY_SCAN_Y = 24;
@@ -154,6 +156,11 @@ let satiety: SatietyState = initialSatiety();
 /** 字幕は状態が落ちた瞬間だけ出すための前回レベル */
 let satietyPrevLevel = satietyLevel(satiety.value);
 
+/** 音の遷移検出用(§6.7): 接地と落下速度の前フレーム値、梯子の累積移動距離 */
+let prevGrounded = true;
+let prevFallVy = 0;
+let ladderTravel = 0;
+
 /** 開封済み補給キャッシュの ID(セッション内のみ。死亡でも戻らない) */
 const claimedSupplyCaches = new Set<string>();
 /** 備蓄を開けた休憩点の ID(セッション内のみ) */
@@ -166,6 +173,7 @@ let supplyCache: SupplyCache | null = null;
  * 地区は撃破位置のセルで決める。ドロップは敵の中心から落下する。
  */
 function onEnemyKilled(spawnId: string, centerX: number, centerY: number): void {
+  audio.enemyDown(); // 撃破音(§6.7): パルスでもビームでも撃破処理はここに集約される
   recordDefeated(spawnId);
   const biomeId = biomeIdForCell(seed, biomeCellAt(seed, Math.floor(centerY)));
   const kind = dropFor(seed, spawnId, killCount, biomeId);
@@ -183,6 +191,7 @@ function onEnemyKilled(spawnId: string, centerX: number, centerY: number): void 
  * 糧食は敵ドロップと同じく補給品として残す(段階 1 の裁定)。
  */
 function onBossKilled(spawnId: string, b: Boss): void {
+  audio.bossDown(); // ボス撃破音(§6.7): 通常の撃破音より長く重い
   recordDefeated(spawnId);
   killCount++;
   const offsets = [0, -1.5, 1.5]; // 構成の並び順に対応(中心=回復、左=砲弾、右=糧食)
@@ -319,6 +328,7 @@ input.onInput(() => {
   audio.setMuted(input.muted);
   audio.start();
 });
+input.onWeaponChange(() => audio.weaponSwitch()); // 切替音(§6.7)。砲の自動復帰でも鳴る
 // タブを隠すと rAF が止まり updateAudio が来ないが、AudioContext は進み続けるので context ごと止める
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) audio.suspend();
@@ -485,6 +495,8 @@ function applyBeamToEnemies(angle: number): void {
       hapticEnemyDown();
       onBossKilled(boss.spawnId, boss.boss);
       boss = null;
+    } else {
+      audio.enemyHit(); // 命中音(§6.7): 倒れていない命中だけ
     }
   }
 }
@@ -512,6 +524,29 @@ function update(dt: number): void {
   const s = input.state;
   const pressed = input.takePressed();
   player.update(s, dt, tiles);
+  // ジャンプ・着地・梯子の音(§6.7): 物理の遷移から拾う(ゲームの数値・判定には触らない)。
+  // ノックバックの跳ね上がりはジャンプと誤認しないよう knocked 中は除く
+  const groundedNow = player.body.onGround;
+  if (prevGrounded && !groundedNow && player.body.vy < -5 && !player.knocked) audio.jump();
+  if (!prevGrounded && groundedNow) audio.land(prevFallVy);
+  prevGrounded = groundedNow;
+  prevFallVy = player.body.vy;
+  // 梯子: 中心か足元が梯子タイルにあり縦に動いている間、段の刻み(rungCrossed)で鳴らす
+  {
+    const cxT = Math.floor(player.centerX);
+    const feetRow = Math.floor(player.body.y + player.body.h - 1e-6);
+    const onLadder =
+      tiles(cxT, Math.floor(player.centerY)) === TILE.LADDER || tiles(cxT, feetRow) === TILE.LADDER;
+    if (onLadder && player.body.vy !== 0) {
+      const prevTravel = ladderTravel;
+      ladderTravel += Math.abs(player.body.vy) * dt;
+      if (rungCrossed(prevTravel, ladderTravel)) {
+        audio.ladderRung(Math.floor(ladderTravel / LADDER_RUNG_STEP));
+      }
+    } else {
+      ladderTravel = 0;
+    }
+  }
   // 安定接地点(遺留品の落下先、サバイバル段階 3): 接地が 1 秒続いた場所を記録する。
   // 空中・ノックバック中は更新しない(死亡座標そのものは回収不能な場所になり得るため使わない)
   groundAnchor = stepGroundAnchor(groundAnchor, {
@@ -591,7 +626,11 @@ function update(dt: number): void {
       player.centerX > rp.left && player.centerX < rp.right &&
       player.centerY < rp.floorY && Math.abs(feet - rp.floorY) < 0.6;
     if (inRestBox) {
-      respawnPoint = { x: rp.x - player.body.w / 2, y: rp.floorY - player.body.h };
+      const nextRespawn = { x: rp.x - player.body.w / 2, y: rp.floorY - player.body.h };
+      if (nextRespawn.x !== respawnPoint.x || nextRespawn.y !== respawnPoint.y) {
+        respawnPoint = nextRespawn;
+        audio.respawnSet(); // 復活点が移ったときだけ鳴らす(§6.7)
+      }
       // 休憩点の初回補給(サバイバル §7): 初めて入った休憩点だけ備蓄を開ける(セッション内のみ)。
       // 備蓄は糧食 1 個 + 地区別の 1 個を荷袋(packX)付近へ出す。再訪しても補充されない。
       // 補給品の上限に達している間は開けず、消費して空きを作れば開けられる
@@ -601,6 +640,7 @@ function update(dt: number): void {
         const stockBiome = biomeIdForCell(seed, rp.cell);
         pushSupply(drops, new DropItem('ration', rp.packX + 0.5, rp.floorY - 0.5, true));
         pushSupply(drops, new DropItem(restStockSecondFor(seed, restId, stockBiome), rp.packX - 1, rp.floorY - 0.5, true));
+        audio.restStock(); // 初回補給の音(§6.7)
       }
     }
     // 満腹度(サバイバル段階 1): 開放度と同じ 6 フレーム間隔で進める(毎フレームの休憩点探索は足さない)。
@@ -615,15 +655,19 @@ function update(dt: number): void {
       biomeMul: satietyBiomeMulFor(biomeIdForCell(seed, biomeCellAt(seed, Math.floor(player.centerY)))),
     });
     satiety = sat.state;
+    if (sat.ateRation) audio.eat(); // 自動摂取の音(§6.7)。結果はこれまで拾われていなかった
     if (sat.hpDamage > 0) {
       // 飢餓ダメージは敵とは別経路: ノックバックも無敵時間も流用せず HP だけを減らす(設計 §4)
       player.hp = Math.max(0, player.hp - sat.hpDamage);
+      audio.starveHurt(); // 飢餓の音(§6.7): 被弾とは別の音で経路の違いを表す
     }
     // 状態が low / critical へ落ちた瞬間だけ字幕で知らせる(毎秒表示はしない)
     const level = satietyLevel(satiety.value);
     if (level !== satietyPrevLevel) {
       if (level === 'low') caption.show('満腹度低下', simTime);
       else if (level === 'critical') caption.show('糧食が必要', simTime);
+      // 字幕と同じ遷移で警告音も鳴らす(§6.7)。危険側へ落ちたときだけ
+      if (level === 'low' || level === 'critical' || level === 'starving') audio.satietyWarn();
       satietyPrevLevel = level;
     }
   }
@@ -634,7 +678,10 @@ function update(dt: number): void {
   if (input.takeFireCancel()) graviton.cancelCharge(); // タッチ照準のキャンセル(解放より先に破棄)
   // 満腹度が危険域(critical / starving)では砲の自動回復が半分の速さになる(サバイバル段階 2、設計 §4)
   const satLevelNow = satietyLevel(satiety.value);
+  const chargesBefore = graviton.charges;
   graviton.update(dt, input.fireHeld, fire, rechargeTimeFor(satLevelNow === 'critical' || satLevelNow === 'starving'));
+  // 自動回復で弾が増えたときだけ小さく知らせる(§6.7)。発射で減った分は差し引きで消える
+  if (graviton.charges > chargesBefore) audio.rechargeTick();
   input.expireCannonRelease(); // スティック砲の発射候補は、この update で発射しなければ失効する
   // パルス(連射武器): 照準は右スティックのアナログ方向 > 保持照準 > 移動入力の 8 方向。
   // タッチチャンネルは PC では常に無効なので、キーボード/マウス時は従来どおり 8 方向になる
@@ -655,18 +702,28 @@ function update(dt: number): void {
     Math.atan2(pulseDir.y, pulseDir.x),
     simTime,
   );
+  // 発射音(§6.7): 発射総数の差分で鳴らす。PulseGun 側は音を持たない(検証用カウンタのみ)
+  const shotsBefore = pulseGun.shotsFired;
   pulseGun.update(
     dt, input.pulseHeld, muzzle.x, muzzle.y, pulseDir.x, pulseDir.y, tiles,
     player.centerX, player.centerY,
   );
+  for (let i = shotsBefore; i < pulseGun.shotsFired; i++) audio.pulseFire(i);
 
   // 歩行敵・飛行敵: 出現集合の更新、巡回/追尾、パルスとの命中判定(接触ダメージは第4段)
   if (frames % ENEMY_SCAN_INTERVAL_FRAMES === 0) refreshEnemies();
   for (const e of enemies) e.walker.update(dt, tiles);
-  for (const e of flyers) e.flyer.update(dt, tiles, player.centerX, player.centerY);
+  for (const e of flyers) {
+    const prevMode = e.flyer.mode;
+    e.flyer.update(dt, tiles, player.centerX, player.centerY);
+    // 追尾開始の合図(§6.7): 巡回→追尾の遷移でだけ鳴らす
+    if (prevMode === 'patrol' && e.flyer.mode === 'chase') audio.flyerAlert();
+  }
   // 固定砲台: 発射された弾を保持リストへ移し、弾の更新と消滅、地形との衝突を行う
   for (const e of turrets) {
-    for (const s of e.turret.update(dt, tiles, player.centerX, player.centerY)) turretShots.push(s);
+    const fired = e.turret.update(dt, tiles, player.centerX, player.centerY);
+    if (fired.length > 0) audio.turretFire(); // 砲台の発射音(§6.7)
+    for (const s of fired) turretShots.push(s);
   }
   if (turretShots.length > 0) {
     for (const s of turretShots) s.update(dt, tiles);
@@ -678,11 +735,15 @@ function update(dt: number): void {
         const b = s.body;
         const overlap = pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y;
         if (!overlap) return true;
-        if (player.damage(s.centerX)) hapticDamage();
+        if (player.damage(s.centerX)) { hapticDamage(); audio.hurt(); }
         return false;
       });
     }
   }
+  // ボスの出現音(§6.7): 有効化された最初のフレームに 1 回
+  const bossIdNow = boss ? boss.spawnId : null;
+  if (bossIdNow !== null && bossIdNow !== prevBossSpawnId) audio.bossAppear();
+  prevBossSpawnId = bossIdNow;
   if (boss) {
     const hall = boss.spawn.hall;
     const playerInHall =
@@ -692,6 +753,9 @@ function update(dt: number): void {
     boss.boss.update(dt, tiles, player.centerX, player.centerY, playerInHall);
     // 予備動作の開始に短い警告音を 1 回だけ重ねる(Task 2、音響エンジン相乗り)
     if (prevPhase !== 'windup' && boss.boss.phase === 'windup') audio.bossWarn();
+    // 突進開始と激突(硬直入り)の音(§6.7)
+    if (prevPhase === 'windup' && boss.boss.phase === 'charge') audio.bossCharge();
+    if (prevPhase === 'charge' && boss.boss.phase === 'stunned') audio.bossCrash();
   }
   if ((enemies.length > 0 || flyers.length > 0 || turrets.length > 0 || boss) && pulseGun.pulses.length > 0) {
     const spent = new Set<Pulse>();
@@ -702,7 +766,7 @@ function update(dt: number): void {
           p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
           p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
         ) {
-          if (e.walker.hit(PULSE_DAMAGE)) hapticEnemyDown();
+          if (e.walker.hit(PULSE_DAMAGE)) hapticEnemyDown(); else audio.enemyHit(); // 命中音(§6.7)
           spent.add(p);
           break;
         }
@@ -714,7 +778,7 @@ function update(dt: number): void {
           p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
           p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
         ) {
-          if (e.flyer.hit(PULSE_DAMAGE)) hapticEnemyDown();
+          if (e.flyer.hit(PULSE_DAMAGE)) hapticEnemyDown(); else audio.enemyHit(); // 命中音(§6.7)
           spent.add(p);
           break;
         }
@@ -726,7 +790,7 @@ function update(dt: number): void {
           p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
           p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
         ) {
-          if (e.turret.hit(PULSE_DAMAGE)) hapticEnemyDown();
+          if (e.turret.hit(PULSE_DAMAGE)) hapticEnemyDown(); else audio.enemyHit(); // 命中音(§6.7)
           spent.add(p);
           break;
         }
@@ -737,7 +801,7 @@ function update(dt: number): void {
         p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
         p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
       ) {
-        if (boss.boss.hit(PULSE_DAMAGE)) hapticEnemyDown();
+        if (boss.boss.hit(PULSE_DAMAGE)) hapticEnemyDown(); else audio.enemyHit(); // 命中音(§6.7)
         spent.add(p);
       }
     }
@@ -770,6 +834,7 @@ function update(dt: number): void {
       else if (d.kind === 'heal') player.hp++;
       // 糧食は所持数だけが増える(満腹度は即時回復しない。自動摂取で消費される)
       else satiety = { ...satiety, rations: satiety.rations + 1 };
+      audio.pickup(d.kind); // 取得音(§6.7): 種別で音色を変える
       return false;
     });
   }
@@ -787,6 +852,7 @@ function update(dt: number): void {
       const cacheBiome = biomeIdForCell(seed, biomeCellAt(seed, c.floorY));
       pushSupply(drops, new DropItem(supplyFor(seed, c.id, cacheBiome), c.x, c.floorY - 0.5, true));
       supplyCache = null;
+      audio.cacheOpen(); // 開封音(§6.7)
     }
   }
 
@@ -796,7 +862,7 @@ function update(dt: number): void {
     for (const e of enemies) {
       const b = e.walker.body;
       if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
-        if (player.damage(e.walker.centerX)) hapticDamage();
+        if (player.damage(e.walker.centerX)) { hapticDamage(); audio.hurt(); }
         break;
       }
     }
@@ -804,7 +870,7 @@ function update(dt: number): void {
       for (const e of flyers) {
         const b = e.flyer.body;
         if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
-          if (player.damage(e.flyer.centerX)) hapticDamage();
+          if (player.damage(e.flyer.centerX)) { hapticDamage(); audio.hurt(); }
           break;
         }
       }
@@ -812,11 +878,13 @@ function update(dt: number): void {
     if (!player.dead && boss) {
       const b = boss.boss.body;
       if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
-        if (player.damage(boss.boss.centerX)) hapticDamage();
+        if (player.damage(boss.boss.centerX)) { hapticDamage(); audio.hurt(); }
       }
     }
   }
   if (player.dead) {
+    audio.death(); // 死亡音と復活音(§6.7)。復活音はエンジン側で少し遅らせて鳴らす
+    audio.revive();
     // 遺留品(サバイバル段階 3): テレポートの前に、所持糧食を最後の安定接地点へ落とす
     dropRemainsOnDeath();
     player.body.x = respawnPoint.x;
@@ -912,10 +980,12 @@ function updateHud(): void {
       const exceedsStart = !newRecordAnnounced && nextMax > sessionStartBestLayer;
       if (milestone !== null) {
         caption.show(milestoneCaptionText(milestone), simTime);
+        audio.milestone(); // 節目のジングル(§6.7)
         if (exceedsStart) newRecordAnnounced = true;
       } else if (exceedsStart) {
         newRecordAnnounced = true;
         caption.show(newRecordCaptionText(nextMax), simTime);
+        audio.newRecord(); // 新記録のジングル(§6.7)
       }
     }
   }
