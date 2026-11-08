@@ -27,6 +27,20 @@ describe('Destruction', () => {
     expect(d.isDestroyed(3, 8)).toBe(false); // 経路外
   });
 
+  it('knownBroken は実タイルとして確認できた破壊だけを数える(未生成への盲目記録と再掘削は数えない)', () => {
+    const d = new Destruction();
+    d.bore(0, 5, 0, 20, 0, testTiles); // y=5 の床 x=0..20 の 21 枚(全て実タイル)
+    expect(d.knownBroken).toBe(21);
+    expect(d.size).toBe(21);
+    d.bore(0, 5, 0, 20, 0, testTiles); // 同じ場所の再掘削は増えない
+    expect(d.knownBroken).toBe(21);
+    const d2 = new Destruction();
+    const partial = (x: number, y: number): Tile | undefined => (x >= CHUNK_SIZE ? undefined : testTiles(x, y));
+    d2.bore(0, 5, 0, 100, 0, partial); // x=0..63 は実タイルの床、x=64..100 は未生成(盲目記録)
+    expect(d2.knownBroken).toBe(64);
+    expect(d2.size).toBe(101);
+  });
+
   it('bore はタイル不明(undefined=未生成チャンク)の位置を判定せず破壊集合へ入れる', () => {
     const d = new Destruction();
     // x>=64(チャンク1以降)は未生成扱い。生成せずに済ませ、生成時に applyTo で反映する

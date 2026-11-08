@@ -25,11 +25,11 @@ describe('Input のタッチ入口', () => {
     expect(cb).toHaveBeenCalledTimes(1);
   });
 
-  it('touchDown 中は fireHeld が立つ(KeyF)', () => {
+  it('KeyF は廃止済みで、押しても fireHeld は立たない(設計 §5、§6 段階 2)', () => {
     const input = new Input();
     expect(input.fireHeld).toBe(false);
     input.touchDown('KeyF');
-    expect(input.fireHeld).toBe(true);
+    expect(input.fireHeld).toBe(false);
     input.touchUp('KeyF');
     expect(input.fireHeld).toBe(false);
   });
@@ -255,5 +255,153 @@ describe('Input の砲スティック(武器切り替え段階1)', () => {
     expect(input.weaponMode).toBe('pulse');
     expect(cb).toHaveBeenCalledTimes(1);
     expect(cb).toHaveBeenLastCalledWith('pulse');
+  });
+});
+
+describe('Input の PC 武器切替(武器切り替え段階 2)', () => {
+  /** 砲モードへ切り替えた Input を作る */
+  const cannonInput = (): Input => {
+    const input = new Input();
+    input.toggleWeapon();
+    expect(input.weaponMode).toBe('cannon');
+    return input;
+  };
+
+  it('KeyQ の押下エッジで切り替わり、押下中の二重エッジでは連続切り替えしない', () => {
+    const input = new Input();
+    input.touchDown('KeyQ'); // keydown と同じ pressKey 経路
+    expect(input.weaponMode).toBe('cannon');
+    input.touchDown('KeyQ'); // 離す前の二重押下はエッジにならない
+    expect(input.weaponMode).toBe('cannon');
+    input.touchUp('KeyQ');
+    input.touchDown('KeyQ');
+    expect(input.weaponMode).toBe('pulse');
+    input.touchUp('KeyQ');
+  });
+
+  it('砲モードで左クリックを押すと溜めが立ち、離すと発射候補が立つ(パルスは出ない)', () => {
+    const input = cannonInput();
+    input.pressMouseLeft();
+    expect(input.mouseCannonHeld).toBe(true);
+    expect(input.fireHeld).toBe(true);
+    expect(input.pulseHeld).toBe(false); // 砲モードの保持でパルスは連射されない
+    input.releaseMouseLeft();
+    expect(input.mouseCannonHeld).toBe(false);
+    expect(input.fireHeld).toBe(false);
+    expect(input.takeCannonRelease()).toBe(true);
+    expect(input.takeCannonRelease()).toBe(false);
+    expect(input.takeFireCancel()).toBe(false);
+  });
+
+  it('パルスモードで左クリックを押すとパルスが立ち、砲の溜めと発射候補は立たない', () => {
+    const input = new Input();
+    input.pressMouseLeft();
+    expect(input.pulseHeld).toBe(true);
+    expect(input.fireHeld).toBe(false);
+    input.releaseMouseLeft();
+    expect(input.pulseHeld).toBe(false);
+    expect(input.takeCannonRelease()).toBe(false);
+  });
+
+  it('マウスの発射候補も expireCannonRelease で失効する', () => {
+    const input = cannonInput();
+    input.pressMouseLeft();
+    input.releaseMouseLeft();
+    input.expireCannonRelease();
+    expect(input.takeCannonRelease()).toBe(false);
+  });
+
+  it('マウス溜め中の切り替え(KeyQ)はキャンセルしてから切り替わり、その押下ではパルスも出ない', () => {
+    const input = cannonInput();
+    input.pressMouseLeft();
+    expect(input.fireHeld).toBe(true);
+    input.touchDown('KeyQ'); // 溜め中の Q = キャンセルしてから切り替え(設計 §3-6、§5)
+    expect(input.weaponMode).toBe('pulse');
+    expect(input.mouseCannonHeld).toBe(false);
+    expect(input.fireHeld).toBe(false);
+    expect(input.takeFireCancel()).toBe(true);
+    expect(input.takeCannonRelease()).toBe(false);
+    // 切り替えの瞬間も左クリックは押されたまま: その押下ではパルス連射も始まらない
+    expect(input.weaponNeedsNeutral).toBe(true);
+    expect(input.pulseHeld).toBe(false);
+    input.touchUp('KeyQ');
+    input.releaseMouseLeft(); // 解放でニュートラル要求が解除される
+    expect(input.weaponNeedsNeutral).toBe(false);
+    expect(input.takeCannonRelease()).toBe(false);
+    input.pressMouseLeft(); // 押し直せばパルスが出る
+    expect(input.pulseHeld).toBe(true);
+    input.releaseMouseLeft();
+  });
+
+  it('パルス連射中(左クリック保持)に切り替えると、その押下では溜めが始まらず、押し直すと始まる', () => {
+    const input = new Input();
+    input.pressMouseLeft();
+    expect(input.pulseHeld).toBe(true);
+    input.touchDown('KeyQ'); // 砲へ(左クリックは押されたまま)
+    expect(input.weaponMode).toBe('cannon');
+    expect(input.weaponNeedsNeutral).toBe(true);
+    expect(input.mouseCannonHeld).toBe(false);
+    expect(input.fireHeld).toBe(false);
+    expect(input.pulseHeld).toBe(false);
+    input.touchUp('KeyQ');
+    input.releaseMouseLeft(); // 解放で解除。その押下の発射候補は立たない
+    expect(input.weaponNeedsNeutral).toBe(false);
+    expect(input.takeCannonRelease()).toBe(false);
+    input.pressMouseLeft(); // 押し直すと溜めが始まる
+    expect(input.mouseCannonHeld).toBe(true);
+    expect(input.fireHeld).toBe(true);
+    input.releaseMouseLeft();
+  });
+
+  it('眺望中の左クリックでは溜めが始まらず、解放しても発射候補は立たない', () => {
+    const input = cannonInput();
+    input.touchDown('ShiftLeft');
+    input.pressMouseLeft();
+    expect(input.mouseCannonHeld).toBe(false);
+    expect(input.fireHeld).toBe(false);
+    input.releaseMouseLeft();
+    expect(input.takeCannonRelease()).toBe(false);
+    input.touchUp('ShiftLeft');
+  });
+
+  it('溜め中に眺望へ入って離すと発射せずキャンセルになる(スティックと同型)', () => {
+    const input = cannonInput();
+    input.pressMouseLeft();
+    expect(input.mouseCannonHeld).toBe(true);
+    input.touchDown('ShiftLeft');
+    input.releaseMouseLeft();
+    expect(input.takeFireCancel()).toBe(true);
+    expect(input.takeCannonRelease()).toBe(false);
+    input.touchUp('ShiftLeft');
+  });
+
+  it('window リスナ結線: KeyQ keydown で切り替わりリピートは除かれ、KeyF とマウスも実リスナを通る', () => {
+    const handlers = new Map<string, (e: unknown) => void>();
+    vi.stubGlobal('window', {
+      addEventListener: (type: string, fn: (e: unknown) => void) => handlers.set(type, fn),
+    });
+    const input = new Input();
+    const keydown = handlers.get('keydown')!;
+    const keyup = handlers.get('keyup')!;
+    const ev = (code: string, repeat = false): KeyboardEvent =>
+      ({ code, repeat, preventDefault: () => {} }) as unknown as KeyboardEvent;
+    keydown(ev('KeyQ'));
+    expect(input.weaponMode).toBe('cannon');
+    keydown(ev('KeyQ', true)); // オートリピートは切り替えにならない
+    expect(input.weaponMode).toBe('cannon');
+    keyup(ev('KeyQ'));
+    keydown(ev('KeyF')); // 廃止済み: 押しても溜めは立たない
+    expect(input.fireHeld).toBe(false);
+    keyup(ev('KeyF'));
+    const pointer = (pointerType: string, button: number): PointerEvent =>
+      ({ pointerType, button }) as unknown as PointerEvent;
+    handlers.get('pointerdown')!(pointer('mouse', 0)); // 砲モード: 左クリックで溜め
+    expect(input.fireHeld).toBe(true);
+    expect(input.pulseHeld).toBe(false);
+    handlers.get('pointerup')!(pointer('mouse', 0));
+    expect(input.takeCannonRelease()).toBe(true);
+    handlers.get('pointerdown')!(pointer('touch', 0)); // タッチの pointer では溜めもパルスも立たない
+    expect(input.fireHeld).toBe(false);
+    expect(input.pulseHeld).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TILE, type Tile } from './tiles';
-import { findFloorRuns, chooseSpawns, spawnRateForLayer, findAirPockets, chooseFlyerSpawns, flyerMulFor } from './spawn';
+import { findFloorRuns, chooseSpawns, spawnRateForLayer, findAirPockets, chooseFlyerSpawns, flyerMulFor, chooseTurretSpawns, turretMulFor } from './spawn';
 import { BIOME_IDS } from './biomeCells';
 
 /** y=10 行が床。x が 0..19 で連続し、x=24..30 にも短い床 */
@@ -141,19 +141,43 @@ describe('findAirPockets', () => {
 describe('chooseFlyerSpawns / flyerMulFor', () => {
   const pockets = findAirPockets(openSky, 0, 0, 80, 40);
 
-  it('地区ゲートは大空洞水域のみ 1.0、他地区は 0(第2弾 段階 1)', () => {
+  it('地区ゲートは大空洞水域が最大で、電力区と生体異物区にも開放されている(v2.0 Task 1)', () => {
     expect(flyerMulFor('waterVoid')).toBe(1);
+    expect(flyerMulFor('power')).toBeGreaterThan(0);
+    expect(flyerMulFor('biomech')).toBeGreaterThan(0);
+    // 飛行敵の主座は水域のまま: どの地区の倍率も水域を超えない
     for (const id of BIOME_IDS) {
-      if (id !== 'waterVoid') expect(flyerMulFor(id)).toBe(0);
+      expect(flyerMulFor(id)).toBeLessThanOrEqual(flyerMulFor('waterVoid'));
+    }
+    // 開放対象以外の地区は引き続き 0
+    for (const id of BIOME_IDS) {
+      if (id !== 'waterVoid' && id !== 'power' && id !== 'biomech') {
+        expect(flyerMulFor(id)).toBe(0);
+      }
     }
   });
 
-  it('大空洞水域では出現し、他地区では一切出ない', () => {
+  it('大空洞水域・電力区・生体異物区では出現し、未開放の地区では一切出ない', () => {
     expect(chooseFlyerSpawns(55, 5, pockets, [], 'waterVoid', []).length).toBeGreaterThan(0);
+    // 新地区でもポケットから出現を返す
+    expect(chooseFlyerSpawns(55, 5, pockets, [], 'power', []).length).toBeGreaterThan(0);
+    expect(chooseFlyerSpawns(55, 5, pockets, [], 'biomech', []).length).toBeGreaterThan(0);
     for (const id of BIOME_IDS) {
-      if (id !== 'waterVoid') {
+      if (id !== 'waterVoid' && id !== 'power' && id !== 'biomech') {
         expect(chooseFlyerSpawns(55, 5, pockets, [], id, [])).toHaveLength(0);
       }
+    }
+  });
+
+  it('新地区(power / biomech)でもポケットから出現を返し、ID は f: 接頭辞になる', () => {
+    for (const id of ['power', 'biomech'] as const) {
+      const spawns = chooseFlyerSpawns(55, 5, pockets, [], id, []);
+      expect(spawns.length).toBeGreaterThan(0);
+      expect(spawns.every((s) => s.id.startsWith('f:'))).toBe(true);
+      // 水域よりは少ない(主座は水域)
+      expect(spawns.length).toBeLessThanOrEqual(
+        chooseFlyerSpawns(55, 5, pockets, [], 'waterVoid', []).length,
+      );
     }
   });
 
@@ -192,5 +216,94 @@ describe('chooseFlyerSpawns / flyerMulFor', () => {
     const blocked = chooseFlyerSpawns(55, 5, pockets,
       base.map((s) => ({ x: s.x, y: s.y, r: 40 })), 'waterVoid', []);
     expect(blocked).toHaveLength(0);
+  });
+});
+
+describe('chooseTurretSpawns / turretMulFor', () => {
+  const runs = findFloorRuns(world, 0, 0, 40, 20);
+
+  it('地区ゲートは電力区 1.0 / 精錬区 0.8、他は 0', () => {
+    expect(turretMulFor('power')).toBe(1);
+    expect(turretMulFor('foundry')).toBe(0.8);
+    for (const id of BIOME_IDS) {
+      if (id !== 'power' && id !== 'foundry') expect(turretMulFor(id)).toBe(0);
+    }
+  });
+
+  it('電力区と精錬区では出現し、他地区では一切出ない', () => {
+    expect(chooseTurretSpawns(123, 5, runs, [], 'power', [], []).length).toBeGreaterThan(0);
+    for (const id of BIOME_IDS) {
+      if (id !== 'power' && id !== 'foundry') {
+        expect(chooseTurretSpawns(123, 5, runs, [], id, [], [])).toHaveLength(0);
+      }
+    }
+    // 第 0 層では電力区でも出ない(Walker と基礎率を共有)
+    expect(chooseTurretSpawns(123, 0, runs, [], 'power', [], [])).toHaveLength(0);
+  });
+
+  it('ID は t: 接頭辞で床の上に置かれ、同じ入力では同じ結果になる(決定論)', () => {
+    const a = chooseTurretSpawns(999, 5, runs, [], 'power', [], []);
+    const b = chooseTurretSpawns(999, 5, runs, [], 'power', [], []);
+    expect(a).toEqual(b);
+    expect(a.length).toBeGreaterThan(0);
+    for (const s of a) {
+      expect(s.id).toMatch(/^t:-?\d+,-?\d+$/);
+      expect(s.y).toBeCloseTo(10 - 0.9); // この世界の床行は 10、その上に左上が来る
+    }
+  });
+
+  it('保護点の近傍には出さない', () => {
+    const all = chooseTurretSpawns(123, 5, runs, [], 'power', [], []);
+    expect(all.length).toBeGreaterThan(0);
+    const guarded = chooseTurretSpawns(123, 5, runs, all.map((s) => ({ x: s.x, y: s.y, r: 40 })), 'power', [], []);
+    expect(guarded).toHaveLength(0);
+  });
+
+  it('大広間の矩形内には出さない', () => {
+    const everywhere = [{ x0: -100, x1: 200, y0: -100, y1: 200 }];
+    expect(chooseTurretSpawns(123, 5, runs, [], 'power', everywhere, [])).toHaveLength(0);
+    const far = [{ x0: 500, x1: 700, y0: 500, y1: 700 }];
+    expect(chooseTurretSpawns(123, 5, runs, [], 'power', far, []).length).toBeGreaterThan(0);
+  });
+
+  it('歩行敵の選定済み位置から 3 タイル以内には出さない', () => {
+    const base = chooseTurretSpawns(123, 5, runs, [], 'power', [], []);
+    expect(base.length).toBeGreaterThan(0);
+    // 選定位置そのものを occupied にすると、その砲台は消える
+    const blocked = chooseTurretSpawns(123, 5, runs, [], 'power', [], base.map((s) => ({ x: s.x, y: s.y })));
+    expect(blocked.some((s) => base.some((b) => b.id === s.id))).toBe(false);
+    // 3 タイル以内(チェビシェフ 3)も除外、4 タイル離れれば残る
+    for (const s of base) {
+      const near = chooseTurretSpawns(123, 5, runs, [], 'power', [], [{ x: s.x + 3, y: s.y }]);
+      expect(near.some((n) => n.id === s.id)).toBe(false);
+      const farEnough = chooseTurretSpawns(123, 5, runs, [], 'power', [], [{ x: s.x + 4, y: s.y }]);
+      expect(farEnough.some((n) => n.id === s.id)).toBe(true);
+    }
+  });
+
+  it('砲台同士は密度上限(24×12 目安)で近接しない', () => {
+    // 長い床を並べた世界で多数選定させ、選定同士の間隔を見る
+    const segments = (tx: number, ty: number): Tile =>
+      ty === 10 && tx >= 0 && tx < 6000 && tx % 60 < 20 ? TILE.SOLID : TILE.AIR;
+    const manyRuns = findFloorRuns(segments, 0, 0, 6000, 20);
+    const spawns = chooseTurretSpawns(7, 30, manyRuns, [], 'power', [], []);
+    expect(spawns.length).toBeGreaterThan(1);
+    for (let i = 0; i < spawns.length; i++) {
+      for (let j = i + 1; j < spawns.length; j++) {
+        const close = Math.abs(spawns[i].x - spawns[j].x) < 24 && Math.abs(spawns[i].y - spawns[j].y) < 12;
+        expect(close).toBe(false);
+      }
+    }
+  });
+
+  it('撃破済み(defeated)は選定後の減算で除外される', () => {
+    const base = chooseTurretSpawns(123, 5, runs, [], 'power', [], []);
+    expect(base.length).toBeGreaterThan(0);
+    const one = new Set([base[0].id]);
+    const filtered = chooseTurretSpawns(123, 5, runs, [], 'power', [], [], one);
+    expect(filtered.some((s) => s.id === base[0].id)).toBe(false);
+    const all = new Set(base.map((s) => s.id));
+    expect(chooseTurretSpawns(123, 5, runs, [], 'power', [], [], all)).toHaveLength(0);
+    expect(chooseTurretSpawns(123, 5, runs, [], 'power', [], [], new Set())).toEqual(base);
   });
 });

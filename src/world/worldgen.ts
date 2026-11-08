@@ -3,7 +3,7 @@ import { megaFacilityAt } from './megafacility';
 import { networkTileAt, sectorTrunkTileAt } from './network';
 import { biomeCellAt, biomeIdForCell } from './biomeCells';
 import { ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceTileAt, passageX, terrainModsAt, type TerrainMods } from './interface';
-import { grandHallAt, type GrandHall } from './grandhall';
+import { grandHallAt, hallChimneyAt, hallChimneyForHall, type GrandHall } from './grandhall';
 import { landmarkTileAt } from './landmark';
 import { restPointTileAt } from './restpoint';
 import { terrainProfileFor } from './biomeTerrain';
@@ -45,11 +45,26 @@ function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: T
   // 前室の底は連続した床。
   if (mods?.forceFloor) return TILE.SOLID;
 
-  // 2a. 大広間(§4.3)。内側は空気、底に 1 本だけ床の行を残す。梯子列は上の判定で
+  // 2a. 大広間(§4.3)。内側は空気、底に 1 本だけ床の行を残す。床は不壊(HARD)とし、
+  // 重粒子砲で掘れて広間番人・プレイヤーが落下するのを防ぐ。梯子列は上の判定で
   // 既に返しているため、縦の到達可能性は広間の中でも保たれる
   const hallHere = hall === undefined ? grandHallAt(seed, cell) : hall;
   if (hallHere && x >= hallHere.x0 && x < hallHere.x1 && y >= hallHere.y0 && y < hallHere.y1) {
-    return y === hallHere.floorY ? TILE.SOLID : TILE.AIR;
+    return y === hallHere.floorY ? TILE.HARD : TILE.AIR;
+  }
+
+  // 2b. 大広間の煙突(絶景拡張)。広間の天井から上向きの吹き抜けを空気として彫る。
+  // 煙突は 1 つ上のセルの領域へ伸びる場合があるため、タイルの属するセルの煙突だけでなく
+  // 下のセル(cell + 1)の広間の煙突も引く(grandHallAt 冒頭の hash ゲートで大半は安く棄却される)。
+  // 優先度は広間と同じ帯: 梯子列と前室の forceFloor は上の判定で既に保持され、
+  // tileAt の合成では休憩点・界面が煙突より先に決まる現行構造を維持する
+  const chimneyHere = hall === undefined ? hallChimneyAt(seed, cell) : (hallHere ? hallChimneyForHall(seed, hallHere) : null);
+  if (chimneyHere && x >= chimneyHere.x0 && x < chimneyHere.x1 && y >= chimneyHere.y0 && y < chimneyHere.y1) {
+    return TILE.AIR;
+  }
+  const chimneyBelow = hallChimneyAt(seed, cell + 1);
+  if (chimneyBelow && x >= chimneyBelow.x0 && x < chimneyBelow.x1 && y >= chimneyBelow.y0 && y < chimneyBelow.y1) {
+    return TILE.AIR;
   }
 
   // 2. 巨大空洞(低頻度ノイズ)。空洞内は bridgeEvery 床帯ごとの橋だけ残る
@@ -112,8 +127,17 @@ export function tileAt(seed: number, x: number, y: number): Tile {
 export function isHardAt(seed: number, x: number, y: number): boolean {
   const iface = interfaceTileAt(seed, x, y);
   const lm = landmarkTileAt(seed, x, y);
-  if (lm !== null && (iface === null || iface === TILE.HARD)) return lm === TILE.HARD;
-  return iface === TILE.HARD;
+  if (lm !== null || iface !== null) {
+    // 界面・大構造がタイルを決める位置は tileAt と同じ優先順位で判定する(広間床より先)
+    if (lm !== null && (iface === null || iface === TILE.HARD)) return lm === TILE.HARD;
+    return iface === TILE.HARD;
+  }
+  // 界面・大構造が無い位置でのみ、大広間の床の行を HARD と判定する(未生成チャンクへの
+  // bore でも広間床が破壊として記録されないようにする)。梯子列は noiseTileWith で
+  // 広間より先に LADDER として返るため、床の行でも HARD ではない
+  if (x === groupLadderX(seed, x)) return false;
+  const hall = grandHallAt(seed, biomeCellAt(seed, y));
+  return hall !== null && y === hall.floorY && x >= hall.x0 && x < hall.x1;
 }
 
 /** 実描画・物理が使う経路。破壊差分を最優先で反映(空なら tileAt と同値)。HARD は破壊済みでも HARD のまま */

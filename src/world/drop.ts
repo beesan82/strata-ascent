@@ -13,11 +13,13 @@ export type DropKind = 'charge' | 'heal' | 'ration';
  * 基礎確率(倍率 1.0 の地区での重み)。どちらか最大 1 個、合計は約 50%。
  * サバイバル設計 §5: 砲弾・回復を少し下げ、その分を糧食へ回して総量を膨らませない。
  */
-const BASE_RATE: Record<'w' | 'f', Record<DropKind, number>> = {
+const BASE_RATE: Record<'w' | 'f' | 't', Record<DropKind, number>> = {
   // Walker: 砲弾 22% / 回復 12% / 糧食 16%
   w: { charge: 0.22, heal: 0.12, ration: 0.16 },
   // 飛行敵: 砲弾 27% / 回復 12% / 糧食 11%
   f: { charge: 0.27, heal: 0.12, ration: 0.11 },
+  // 固定砲台(v2.0 Task 6): 砲弾 25% / 回復 10% / 糧食 10%
+  t: { charge: 0.25, heal: 0.1, ration: 0.1 },
 };
 
 /** 重みの合計がこの値を超えたら全体を圧縮する上限(サバイバル設計 §5) */
@@ -67,7 +69,7 @@ export function spawnIdHash(spawnId: string): number {
  * 順番依存の累積確率で地区差が歪まないようにするため)。
  */
 export function dropRatesFor(
-  enemyKind: 'w' | 'f',
+  enemyKind: 'w' | 'f' | 't',
   biomeId: BiomeId,
 ): Record<DropKind, number> {
   const base = BASE_RATE[enemyKind];
@@ -87,7 +89,7 @@ export function dropRatesFor(
 }
 
 /**
- * 撃破 1 回ぶんの抽選。敵種はスポーン ID の接頭辞(`w:` Walker / `f:` 飛行敵)で決まる。
+ * 撃破 1 回ぶんの抽選。敵種はスポーン ID の接頭辞(`w:` Walker / `f:` 飛行敵 / `t:` 固定砲台)で決まる。
  * ボス(`b:`)は対象外(確定ドロップは別経路)として常に null。
  * killIndex はセッション通算の撃破カウンタ(0 始まり)。
  */
@@ -97,7 +99,13 @@ export function dropFor(
   killIndex: number,
   biomeId: BiomeId,
 ): DropKind | null {
-  const kind = spawnId.startsWith('w:') ? 'w' : spawnId.startsWith('f:') ? 'f' : null;
+  const kind = spawnId.startsWith('w:')
+    ? 'w'
+    : spawnId.startsWith('f:')
+      ? 'f'
+      : spawnId.startsWith('t:')
+        ? 't'
+        : null;
   if (kind === null) return null;
   const rates = dropRatesFor(kind, biomeId);
   const roll = hash2(seed + DROP_SALT, spawnIdHash(spawnId), killIndex);

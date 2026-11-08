@@ -126,6 +126,7 @@ export function chooseSpawns(
 /**
  * 飛行敵の出現(アクション化 第2弾・§1)。床ランではなく「空間のポケット」を使う。
  * 地区ゲートはゾーン設計 §5 の予約どおり初出を大空洞水域に限り、
+ * v2.0 Task 1 で電力区と生体異物区にも開放した(倍率の根拠は FLYER_MUL のコメント)。
  * 基礎率は Walker と共有するが地区倍率は spawnMul とは独立に掛ける。
  */
 
@@ -187,17 +188,22 @@ export function findAirPockets(
 }
 
 /**
- * 飛行敵の地区ゲート(第2弾 §1)。段階 1 では大空洞水域のみ開放する。
- * 他地区への開放はこの表の数値を変えるだけで済む(段階 3 で判断)。
+ * 飛行敵の地区ゲート(第2弾 §1、v2.0 Task 1 で他地区へ開放)。
+ * 初出は大空洞水域のみだったが、v2.0 で電力区(power)と生体異物区(biomech)にも開放する。
+ * 倍率は出現統計(scripts/flyer-survey.ts 相当の計測、seed [1, 42, 20260711, 7, 99]、
+ * 地区ごとに 60 スキャン)で決めた: power 0.5 では飛行敵平均 5.717・合計 7.750、
+ * biomech 0.75 では飛行敵平均 5.467・合計 7.400 で、いずれも水域(飛行敵 7.733・
+ * 合計 8.817)以下に収まり、飛行敵の主座は水域のままになる。
+ * 他地区への開放はこの表の数値を変えるだけで済む。
  */
 const FLYER_MUL: Record<BiomeId, number> = {
   coldSteel: 0,
   habitation: 0,
   disposal: 0,
   waterVoid: 1.0,
-  power: 0,
+  power: 0.5,
   foundry: 0,
-  biomech: 0,
+  biomech: 0.75,
 };
 
 export function flyerMulFor(biomeId: BiomeId): number {
@@ -242,6 +248,87 @@ export function chooseFlyerSpawns(
     );
     if (crowded) continue;
     spawns.push({ x: cx, y: cy, phase: hash2(seed + 4103, p.x, p.y) * Math.PI * 2, id });
+  }
+  // 撃破済みは Walker と同じく選定の最後に差し引く(密度の繰り上がりによる置換を防ぐ)
+  if (defeated) return spawns.filter((s) => !defeated.has(s.id));
+  return spawns;
+}
+
+/**
+ * 固定砲台の出現(v2.0 Task 6)。Walker と同じ床ラン + hash の決定論で、
+ * 出現地区は電力区と精錬区のみ(倍率表でゲート)。
+ */
+
+export interface TurretSpawn {
+  /** 砲台ボディの左上(タイル座標) */
+  x: number;
+  y: number;
+  /** スポーン識別子(`t:` 接頭辞で Walker / Flyer と名前空間を分ける) */
+  id: string;
+}
+
+/** 砲台の地区ゲート: 電力区が本場(1.0)、精錬区は 0.8、他地区は 0 */
+const TURRET_MUL: Record<BiomeId, number> = {
+  coldSteel: 0,
+  habitation: 0,
+  disposal: 0,
+  waterVoid: 0,
+  power: 1.0,
+  foundry: 0.8,
+  biomech: 0,
+};
+
+export function turretMulFor(biomeId: BiomeId): number {
+  return TURRET_MUL[biomeId];
+}
+
+/** 既選の歩行敵との近接除外の距離(タイル、チェビシェフ距離) */
+const TURRET_OCCUPIED_R = 3;
+
+/**
+ * ランごとに hash で砲台の出現を決める。Walker と同じ流儀:
+ * 保護点の近傍・大広間の矩形内・歩行敵の選定済み位置との近接(3 タイル以内)・
+ * 砲台同士の密度上限(24×12 目安)を除く。撃破済みは選定後の減算。
+ * hash の塩は 4301 系(Walker 4001 系、Flyer 4101 系、drop 4201 と衝突しない)。
+ */
+export function chooseTurretSpawns(
+  seed: number,
+  layer: number,
+  runs: readonly FloorRun[],
+  protectedPoints: readonly ProtectedPoint[],
+  biomeId: BiomeId,
+  halls: readonly SpawnRect[],
+  occupied: readonly { x: number; y: number }[],
+  defeated?: ReadonlySet<string>,
+): TurretSpawn[] {
+  const rate = spawnRateForLayer(layer) * turretMulFor(biomeId);
+  if (rate <= 0) return [];
+  const spawns: TurretSpawn[] = [];
+  for (const run of runs) {
+    const id = `t:${run.x},${run.floorY}`;
+    if (hash2(seed + 4301, run.x, run.floorY) >= rate) continue;
+    const offset = Math.floor(hash2(seed + 4302, run.x, run.floorY) * Math.max(1, run.len - 2));
+    const sx = run.x + offset;
+    const sy = run.floorY - 0.9; // 砲台ボディ(高さ 0.9)の左上。床の上にちょうど乗る
+    const guarded = protectedPoints.some(
+      (p) => Math.max(Math.abs(sx - p.x), Math.abs(sy - p.y)) <= p.r,
+    );
+    if (guarded) continue;
+    // 大広間はボスの arena として空ける: ボディ矩形が少しでも重なれば出さない
+    const inHall = halls.some(
+      (h) => sx < h.x1 && sx + 0.9 > h.x0 && sy < h.y1 && sy + 0.9 > h.y0,
+    );
+    if (inHall) continue;
+    // 歩行敵の選定済み位置から 3 タイル以内には置かない(重なり・詰まりの回避)
+    const nearOccupied = occupied.some(
+      (o) => Math.max(Math.abs(sx - o.x), Math.abs(sy - o.y)) <= TURRET_OCCUPIED_R,
+    );
+    if (nearOccupied) continue;
+    const crowded = spawns.some(
+      (s) => Math.abs(s.x - sx) < DENSITY_DX && Math.abs(s.y - sy) < DENSITY_DY,
+    );
+    if (crowded) continue;
+    spawns.push({ x: sx, y: sy, id });
   }
   // 撃破済みは Walker と同じく選定の最後に差し引く(密度の繰り上がりによる置換を防ぐ)
   if (defeated) return spawns.filter((s) => !defeated.has(s.id));

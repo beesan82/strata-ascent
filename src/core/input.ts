@@ -18,7 +18,7 @@ const GAME_KEYS = new Set([
   'KeyW',
   'KeyS',
   'Space',
-  'KeyF',
+  'KeyQ',
   'KeyJ',
   'ShiftLeft',
   'KeyM',
@@ -52,11 +52,11 @@ export class Input {
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('pointerdown', (e) => {
       this.fireInput();
-      // パルスの発射はマウスの左ボタンだけ(タッチの pointerdown では立てない)
-      if (e.pointerType === 'mouse' && e.button === 0) this.mouseDown = true;
+      // マウスの左ボタンだけが PC の発射ボタンになる(タッチの pointerdown では立てない)
+      if (e.pointerType === 'mouse' && e.button === 0) this.pressMouseLeft();
     });
     window.addEventListener('pointerup', (e) => {
-      if (e.pointerType === 'mouse' && e.button === 0) this.mouseDown = false;
+      if (e.pointerType === 'mouse' && e.button === 0) this.releaseMouseLeft();
     });
     window.addEventListener('mousemove', (e) => {
       this.mouseX = e.clientX;
@@ -65,15 +65,25 @@ export class Input {
     });
     window.addEventListener('blur', () => {
       this.keys.clear();
+      // フォーカスを失ったまま解放の発射が成立しないよう、マウスの溜めはキャンセルして破棄する
+      if (this.mouseCannonHeldFlag) {
+        this.requestFireCancel();
+        this.mouseCannonHeldFlag = false;
+        this.cannonReleasePending = false;
+      }
       this.mouseDown = false;
     });
   }
 
-  /** キーが押されたときの共通処理(押下エッジ、ミュート切替、入力コールバック) */
+  /** キーが押されたときの共通処理(押下エッジ、ミュート切替、武器切替、入力コールバック) */
   private pressKey(code: string): void {
     this.keys.add(code);
     this.pressed.add(code);
     if (code === 'KeyM') this.muted = !this.muted;
+    // KeyQ = PC の武器切替(設計 §5)。エッジはこの経路に一本化され、keydown の
+    // オートリピートは呼び出し側で除かれるため、長押しで連続切り替えにはならない。
+    // 溜め中の Q は toggleWeapon 側で「キャンセルしてから切り替え」になる
+    if (code === 'KeyQ') this.toggleWeapon();
     this.fireInput();
   }
 
@@ -117,18 +127,24 @@ export class Input {
   }
 
   /**
-   * 切替ボタンの押下エッジ。スティックが倒れたまま切り替わったらニュートラル要求を立てる
-   * (安全策の消費 = 発射・溜めの抑止は setTouchAim / touchStick 側で行う)。
+   * 切り替えの押下エッジ(タッチの切替ボタン / PC の KeyQ がここへ合流する)。
+   * 入力が倒れたまま切り替わったらニュートラル要求を立てる(PC では「切り替えの瞬間に
+   * 左クリックが押されていたら」を engaged に含めて読み替える。設計 §5)。
+   * 安全策の消費 = 発射・溜めの抑止は setTouchAim / touchStick / マウス側で行う。
    * 溜め中に切り替えたら、先に溜めをキャンセルしてから切り替える(設計 §3-6)。
    */
   toggleWeapon(): void {
-    if (this.cannonStickHeldFlag || this.stickPhase !== 'idle') {
+    if (this.cannonStickHeldFlag || this.stickPhase !== 'idle' || this.mouseCannonHeldFlag) {
       this.requestFireCancel();
       this.cannonStickHeldFlag = false;
       this.stickPhase = 'idle';
+      this.mouseCannonHeldFlag = false;
       this.cannonReleasePending = false;
     }
-    this.applyWeapon({ type: 'toggle', stickEngaged: this.touchStickRatioNow > STICK_DEADZONE });
+    this.applyWeapon({
+      type: 'toggle',
+      stickEngaged: this.touchStickRatioNow > STICK_DEADZONE || this.mouseDown,
+    });
   }
 
   /** 重粒子砲の発射が成立した(main の fire から呼ぶ)。砲モードなら自動でパルスへ復帰する(設計 §3-3) */
@@ -139,12 +155,19 @@ export class Input {
   // ---- 砲スティック(砲モードの右スティック文法。設計 §1.2、§1.3) ----
   private stickPhase: CannonStickPhase = 'idle';
   private cannonStickHeldFlag = false;
-  /** スティック砲の発射候補(charging のまま離した)。発射の成否は Graviton 側が決め、fire の中でだけ消費できる */
+  /** 砲の発射候補(charging のまま離した。スティック・マウス共通)。発射の成否は Graviton 側が決め、fire の中でだけ消費できる */
   private cannonReleasePending = false;
+  /** マウスで砲を溜めているか(左クリックを押した時点のモード等でラッチし、解放まで保持する) */
+  private mouseCannonHeldFlag = false;
 
   /** 砲の溜め中か(右スティックを倒して離すまで)。左スティック抑止の判定に使う */
   get cannonStickHeld(): boolean {
     return this.cannonStickHeldFlag;
+  }
+
+  /** マウスで砲を溜めているか(左クリックを押して離すまで) */
+  get mouseCannonHeld(): boolean {
+    return this.mouseCannonHeldFlag;
   }
 
   /**
@@ -183,7 +206,42 @@ export class Input {
     }
   }
 
-  /** スティック砲の発射候補を 1 回だけ取り出す(main の fire の中でだけ呼ぶ) */
+  // ---- 砲マウス(PC の砲モード文法。設計 §5: 左クリック長押しで溜め、離して発射) ----
+
+  /**
+   * マウス左ボタンの押下(PC 経路の入口。window の pointerdown から呼ぶ)。
+   * 砲モードのときだけ溜めをラッチする。切り替え直後のニュートラル要求中と眺望中は
+   * その押下では溜めを開始しない(スティック側の安全策の PC 読み替え。設計 §3-2、§3-7、§5)。
+   */
+  pressMouseLeft(): void {
+    this.mouseDown = true;
+    if (this.weaponState.mode !== 'cannon') return;
+    if (this.weaponState.needsNeutral) return;
+    if (this.shiftHeld) return;
+    this.mouseCannonHeldFlag = true;
+  }
+
+  /**
+   * マウス左ボタンの解放。溜めていたらスティックと同じ枠組みに相乗りする:
+   * 発射候補を立てる(成否は Graviton の溜め量が決め、候補は expireCannonRelease で失効する)。
+   * 眺望中の解放はキャンセル要求にする(スティックの touchStickEnd と同型)。
+   * あわせて、切り替え時に押されていた押下の解放はニュートラル要求の解除条件になる
+   * (スティックが倒れたままなら解除しない。設計 §5)。
+   */
+  releaseMouseLeft(): void {
+    const wasDown = this.mouseDown;
+    this.mouseDown = false;
+    if (this.mouseCannonHeldFlag) {
+      this.mouseCannonHeldFlag = false;
+      if (this.shiftHeld) this.requestFireCancel();
+      else this.cannonReleasePending = true;
+    }
+    if (wasDown && this.weaponState.needsNeutral && this.touchStickRatioNow <= STICK_DEADZONE) {
+      this.applyWeapon({ type: 'neutral' });
+    }
+  }
+
+  /** 砲の発射候補を 1 回だけ取り出す(main の fire の中でだけ呼ぶ) */
   takeCannonRelease(): boolean {
     const v = this.cannonReleasePending;
     this.cannonReleasePending = false;
@@ -279,9 +337,16 @@ export class Input {
     return out;
   }
 
-  /** パルス発射中か(KeyJ / マウス左 / 右スティックの発射閾値超え) */
+  /**
+   * パルス発射中か(KeyJ / マウス左 / 右スティックの発射閾値超え)。
+   * マウス分はパルスモードのときだけ有効にする(砲モードで左クリックを保持しても
+   * パルスが連射されないため。設計 §5)。切り替え直後のニュートラル要求中も、
+   * 切り替え時に押されていたその押下では連射を開始しない(設計 §3-2 の PC 読み替え)。
+   */
   get pulseHeld(): boolean {
-    return this.keys.has('KeyJ') || this.mouseDown || this.touchAimFiring;
+    const mousePulse =
+      this.mouseDown && this.weaponState.mode === 'pulse' && !this.weaponState.needsNeutral;
+    return this.keys.has('KeyJ') || mousePulse || this.touchAimFiring;
   }
 
   get state(): PlayerInput {
@@ -295,8 +360,9 @@ export class Input {
   }
 
   get fireHeld(): boolean {
-    // KeyF は PC 経路(現行維持)。タッチは砲スティックの held が合流する
-    return this.keys.has('KeyF') || this.cannonStickHeldFlag;
+    // 砲の溜め中か(タッチ = 右スティック、PC = 左クリック長押し)。旧 PC 経路の KeyF は
+    // 切り替え式への統一に伴い廃止した(GAME_KEYS からも外してある。設計 §5、§6 段階 2)
+    return this.cannonStickHeldFlag || this.mouseCannonHeldFlag;
   }
 
   /** 眺望(§6.4): 左 Shift 長押し。右 Shift は Windows の固定キー機能(8 秒長押しでダイアログ)を避けて使わない */
