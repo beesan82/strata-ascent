@@ -14,7 +14,6 @@ import { Post } from './post';
 import { drawHierarchyDebug } from './debugHierarchy';
 import { drawBeam, drawCharge } from './beam';
 import { debrisFragments } from './beamShape';
-import { HEAT_SECONDS } from './hotedge';
 import { MegaStructure } from './megastructure';
 import { LightShafts } from './lightshaft';
 import { BeaconLights, ambientDelta, glowStrips, type GlowStrip } from './beacon';
@@ -212,21 +211,21 @@ export class Renderer {
   }
 
   /**
-   * 直近フレームの render の timeSec。invalidateBored が掘削縁の熱色の期限を
-   * 「直近フレーム時刻 + HEAT_SECONDS」で切るために使う(発射は update 側で起きる)。
+   * 直近フレームの render の timeSec。invalidateBored が掘削縁の熱の加熱時刻を
+   * 「直近フレーム時刻」で刻むために使う(発射は update 側で起きる)。
    */
   private timeSec = 0;
 
   /**
    * ChunkStore.applyDestructionと対で呼ぶ。ボーリングされたチャンクと、境界際の破壊で見た目が
    * 変わる隣接チャンクの焼き込み画像を再焼き込み待ちにする。affected は Destruction.bore の戻り値。
-   * あわせて再焼き込み対象へ掘削縁の熱色の期限を刻む(段階 3、設計 §5.1)。
+   * あわせて再焼き込み対象へ掘削縁の熱の加熱時刻を刻む(段階 3、熱表現の強化で段階制に)。
    */
   invalidateBored(affected: Iterable<string>, store: ChunkStore): void {
     for (const key of rebakeTargets(affected, (x, y) => store.destroyedMask(x, y), CHUNK_SIZE, REBAKE_DILATE)) {
       const [cx, cy] = key.split(',').map(Number);
       this.baker.invalidate(cx, cy);
-      this.baker.markHot(cx, cy, this.timeSec + HEAT_SECONDS);
+      this.baker.markHot(cx, cy, this.timeSec);
     }
   }
 
@@ -279,9 +278,9 @@ export class Renderer {
     const w = this.pipeline.bufW;
     const h = this.pipeline.bufH;
     this.timeSec = timeSec;
-    // 掘削縁の熱色: 焼き込み側の現在時刻を渡し、期限切れのチャンクは 1 回だけ通常の縁へ戻す
+    // 掘削縁の熱: 焼き込み側の現在時刻を渡し、冷却段階が進んだチャンクは 1 回だけ焼き直す
     this.baker.nowSec = timeSec;
-    this.baker.expireHot(timeSec);
+    this.baker.advanceHeat(timeSec);
     // cam.zoom<1 で ppt が縮み、画面に入るタイル数が増える(開放空間の豆粒化)。
     // cam.zoom は段キーパー+advanceZoom(core/zoom.ts)が段へ寄せた描画ズームそのもの:
     // 段に静止しているときは段の値、段の間を遷移しているときだけ非段の値を取る
