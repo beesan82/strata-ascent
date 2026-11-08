@@ -234,4 +234,15 @@ describe('Player 向きと歩行位相', () => {
     p.update({ ...noInput, right: true }, 1 / 60, floorTiles);
     expect(p.walkPhase).toBeGreaterThan(before);
   });
+
+  it('walkPhase は移動距離に比例して進む(歩幅 1 タイル = 位相 π)', () => {
+    const p = new Player(0, 8);
+    for (let i = 0; i < 120; i++) p.update(noInput, 1 / 60, floorTiles);
+    const x0 = p.body.x;
+    const phase0 = p.walkPhase;
+    for (let i = 0; i < 60; i++) p.update({ ...noInput, right: true }, 1 / 60, floorTiles);
+    const distance = p.body.x - x0;
+    expect(distance).toBeGreaterThan(3);
+    expect((p.walkPhase - phase0) / distance).toBeCloseTo(Math.PI, 1);
+  });
 });

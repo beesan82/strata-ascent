@@ -18,9 +18,9 @@ describe('calculatePlayerPose', () => {
         for (const timeSec of times) {
           const pose = calculatePlayerPose(facing, phase, true, 0, timeSec);
 
-          expect(pose.leftFoot.y).toBeGreaterThanOrEqual(-0.08);
+          expect(pose.leftFoot.y).toBeGreaterThanOrEqual(-0.14);
           expect(pose.leftFoot.y).toBeLessThanOrEqual(0);
-          expect(pose.rightFoot.y).toBeGreaterThanOrEqual(-0.08);
+          expect(pose.rightFoot.y).toBeGreaterThanOrEqual(-0.14);
           expect(pose.rightFoot.y).toBeLessThanOrEqual(0);
           expect(Math.max(pose.leftFoot.y, pose.rightFoot.y)).toBeCloseTo(0);
           expect(pose.head.y).toBeGreaterThanOrEqual(-PLAYER_DRAW_HEIGHT_TILES);

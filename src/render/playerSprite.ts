@@ -6,15 +6,16 @@ import {
 } from './playerPose';
 
 export const PLAYER_COLORS = {
-  face: '#d9dddc',
-  uniform: '#151820',
-  uniformLight: '#303640',
-  joint: '#6f7479',
-  chest: '#7f1f28',
-  chestLight: '#a9363e',
-  visor: '#171015',
-  indicator: '#e64747',
-  weapon: '#353a40',
+  face: '#c7d0ce',
+  uniform: '#16202b',
+  uniformDark: '#0a121a',
+  uniformLight: '#2a586f',
+  joint: '#51728d',
+  chest: '#9a6d32',
+  chestLight: '#caa64a',
+  visor: '#05090f',
+  indicator: '#c7d0ce',
+  weapon: '#192633',
 } as const;
 
 type PlayerPalette = { [Key in keyof typeof PLAYER_COLORS]: string };
@@ -78,6 +79,26 @@ const midpointWithBend = (from: Vec2, to: Vec2, bend: number): Vec2 => {
   };
 };
 
+/** 2 点間を幅のある面(四角形)で結ぶ。脚や腕を「線」ではなく「面」で描くための基本形 */
+const limbQuad = (
+  from: Vec2,
+  to: Vec2,
+  widthFrom: number,
+  widthTo: number,
+): Vec2[] => {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const nx = -dy / length;
+  const ny = dx / length;
+  return [
+    { x: from.x + nx * (widthFrom / 2), y: from.y + ny * (widthFrom / 2) },
+    { x: to.x + nx * (widthTo / 2), y: to.y + ny * (widthTo / 2) },
+    { x: to.x - nx * (widthTo / 2), y: to.y - ny * (widthTo / 2) },
+    { x: from.x - nx * (widthFrom / 2), y: from.y - ny * (widthFrom / 2) },
+  ];
+};
+
 const drawLeg = (
   ctx: CanvasRenderingContext2D,
   hip: Vec2,
@@ -88,10 +109,12 @@ const drawLeg = (
   rear: boolean,
 ): void => {
   const ankle = { x: foot.x, y: foot.y - 0.13 };
-  line(ctx, hip, knee, rear ? palette.uniform : palette.uniformLight, 0.17);
-  line(ctx, knee, ankle, palette.uniform, 0.15);
-  drawJoint(ctx, knee, 0.075, palette.joint);
-  drawJoint(ctx, ankle, 0.052, palette.joint);
+  // 脚は線ではなく面で描く(見た目改善 段階 2、設計 §4.1)。太もも 0.23→0.20、脛 0.19→0.15。
+  // 前脚は明段、後脚は暗段で分け、暗い背景の前でも下半身が消えない明度差を確保する
+  polygon(ctx, limbQuad(hip, knee, 0.23, 0.2), rear ? palette.uniform : palette.uniformLight);
+  polygon(ctx, limbQuad(knee, ankle, 0.19, 0.15), rear ? palette.uniformDark : palette.uniform);
+  drawJoint(ctx, knee, 0.085, palette.joint);
+  drawJoint(ctx, ankle, 0.055, palette.joint);
   polygon(ctx, [
     { x: ankle.x - facing * 0.07, y: ankle.y + 0.01 },
     { x: ankle.x + facing * 0.07, y: ankle.y + 0.01 },
@@ -199,9 +222,9 @@ const drawArm = (
   rear: boolean,
 ): void => {
   const elbow = midpointWithBend(shoulder, hand, bend);
-  line(ctx, shoulder, elbow, rear ? palette.uniform : palette.uniformLight, 0.13);
+  line(ctx, shoulder, elbow, rear ? palette.uniform : palette.uniformLight, 0.15);
   drawJoint(ctx, elbow, 0.063, palette.joint);
-  line(ctx, elbow, hand, palette.uniform, 0.115);
+  line(ctx, elbow, hand, palette.uniform, 0.13);
   drawJoint(ctx, hand, 0.046, palette.joint);
 };
 
@@ -319,6 +342,7 @@ const drawAccents = (
 const tintPalette = (ambientColor: string): PlayerPalette => ({
   face: mixHex(PLAYER_COLORS.face, ambientColor, 0.1),
   uniform: mixHex(PLAYER_COLORS.uniform, ambientColor, 0.25),
+  uniformDark: mixHex(PLAYER_COLORS.uniformDark, ambientColor, 0.25),
   uniformLight: mixHex(PLAYER_COLORS.uniformLight, ambientColor, 0.25),
   joint: mixHex(PLAYER_COLORS.joint, ambientColor, 0.22),
   chest: mixHex(PLAYER_COLORS.chest, ambientColor, 0.1),

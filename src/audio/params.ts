@@ -18,8 +18,9 @@ function clamp01(v: number): number {
 }
 
 /**
- * 足音: 接地歩行の walkPhase が π の倍数を跨いだフレームで 1 回鳴らす。walkPhase はラジアン
- * (playerPose は sin(walkPhase) で歩容を作る)なので、足が着く瞬間 = sin の零交差 = π ごと。
+ * 足音: 接地歩行の walkPhase が π の倍数を跨いだフレームで 1 回鳴らす。walkPhase は
+ * 移動距離駆動(歩幅 1 タイル = 位相 π、core/gait)で、着地は位相の π の倍数に置かれる
+ * ため、π 跨ぎがそのまま着地と一致する。
  * 設計書の「整数跨ぎ」を文字通り取ると 9 回/秒の連打になった(レビューで指摘)。
  */
 export function footstepCrossed(prevPhase: number, phase: number): boolean {
