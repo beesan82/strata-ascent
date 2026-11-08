@@ -24,7 +24,7 @@ function quantSlot(key: number): number {
   return h & QUANT_CACHE_SET_MASK;
 }
 
-/** 整数距離のスケール。Bayer オフセット×強度 12 は 3/8 刻みなので ×8 で整数になる。 */
+/** 整数距離のスケール。Bayer オフセット×強度 8 は 2/8 刻み(強度 12 では 3/8 刻み)なので ×8 で整数になる。 */
 const INT_SCALE = 8;
 
 /**
@@ -79,8 +79,8 @@ function quantCacheFor(palRgb: Uint8Array, strength: number): QuantCache {
  * r8,g8,b8 はディザ量を足した値の ×8、palInt はパレット ×8。重み 0.30/0.59/0.11 は ×100 して
  * 30/59/11。距離の大小は浮動小数版と一致する(差が 0 でなければ 1/6400 以上あり、丸め誤差より
  * 桁違いに大きい)。唯一食い違い得るのは厳密な同距離で、そのときだけ浮動小数版と同じ比較に委ねる
- * (scripts/quantties.ts が全入力を数え上げ、同距離は 2^24×16 入力中 205 件、うち整数の先勝ちと
- * 浮動小数の結果が割れるものが 46 件あることを確かめている)。
+ * (scripts/quantties.ts が全入力を数え上げ、強度 8 では同距離は 2^24×16 入力中 3363 件、うち整数の
+ * 先勝ちと浮動小数の結果が割れるものが 735 件あることを確かめている。強度 12 では 205 件 / 46 件)。
  */
 function nearestIndexInt(
   r8: number, g8: number, b8: number, palInt: Int32Array, palRgb: Uint8Array, d: number, p: number,
@@ -182,8 +182,12 @@ export function quantizeRgba(
 /** Internal pixel density per world tile for the high-fidelity renderer. */
 export const HIGH_FIDELITY_TILE_PX = 12;
 
-/** Dither strength in pixel-value units; visually tune only within the approved weak 8–16 range. */
-export const DITHER_STRENGTH = 12;
+/**
+ * Dither strength in pixel-value units; visually tune only within the approved weak 8–16 range.
+ * 段階 1 で 12 → 8 を採用(2026-11-08 の A/B 裁定): 3 場面比較で平坦面の網点が
+ * 計測でも目視でも減り(4×4 ブロック内色数 3.51 → 3.05)、新たなバンディングは出なかった。
+ */
+export const DITHER_STRENGTH = 8;
 
 export interface PixelLayout {
   bufW: number;

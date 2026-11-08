@@ -9,8 +9,11 @@ import { BACKDROP_JPEG_BASE64 } from './backdropData';
  * 従来の手続きシルエットのまま(フォールバック)。新しい描画パスは作らない。
  */
 
-/** 遠景画像の不透明度(空のフィルと手続きシルエットの間に収める) */
-export const BACKDROP_ALPHA = 0.45;
+/**
+ * 遠景画像の不透明度(空のフィルと手続きシルエットの間に収める)。
+ * 段階 1 で 0.45 → 0.36 に下げ、輪郭を残したまま色味を沈めて前景と分離する(設計 §3.3)。
+ */
+export const BACKDROP_ALPHA = 0.36;
 /** 最遠層のカメラ追従率(background.ts の FAR_FACTOR と一致させる) */
 const FAR_FACTOR = 0.006;
 /** 垂直パララックスは水平の 1/4(background.ts の farLayer と一致) */

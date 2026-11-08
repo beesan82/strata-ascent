@@ -15,6 +15,8 @@ import {
 } from './hardPlate';
 import { biomeBlend, blendBiomeVisuals, mixHex, type BiomeBlend } from './biome';
 import { reliefEdges, reliefBands, rimSegments } from './tileset/relief';
+import { plateAt } from './tileset/plate';
+import { stainSegmentAt } from './stains';
 import { DECOR_MARGIN, DecorCache, decorOpBounds, type DecorOp } from './decor';
 import { craterCells, dirtyBoundsAround, expandRect, type CellRect } from './dirtyBounds';
 import { restLampCellAt, restTallyCellAt, REST_TALLY_STROKES, traceAt, type Trace } from './traces';
@@ -303,9 +305,58 @@ export class ChunkBaker {
       }
     }
 
+    // プレート単位の面の明度構造(段階 1、設計 §3.1)。アトラスはバイオーム単位でキャッシュされ
+    // ワールド座標を持たないため、プレートの明度段・継ぎ目・角リベットはここで重ねる。
+    // 割り付けはワールド座標のハッシュのみから決まるので、部分再焼き込みでも全面と一致する。
+    // 明度段はパレット実在色の重ねで作る(暗段=STEEL.black、明段=#c7d0ce(パレット 27 番))。
+    for (let ty = span.y; ty < span.y + span.h; ty++) {
+      for (let tx = span.x; tx < span.x + span.w; tx++) {
+        if (chunk[ty * CHUNK_SIZE + tx] !== TILE.SOLID) continue;
+        const plate = plateAt(this.seed, bx + tx, by + ty);
+        const x0 = tx * BAKE_PPT;
+        const y0 = ty * BAKE_PPT;
+        if (plate.tone === 0) {
+          ctx.globalAlpha = 0.3;
+          ctx.fillStyle = STEEL.black;
+          ctx.fillRect(x0, y0, BAKE_PPT, BAKE_PPT);
+        } else if (plate.tone === 2) {
+          ctx.globalAlpha = 0.08;
+          ctx.fillStyle = '#c7d0ce';
+          ctx.fillRect(x0, y0, BAKE_PPT, BAKE_PPT);
+        }
+        ctx.globalAlpha = 0.8;
+        ctx.fillStyle = biome.palette.line;
+        if (plate.seamTop) ctx.fillRect(x0, y0, BAKE_PPT, 1);
+        if (plate.seamLeft) ctx.fillRect(x0, y0, 1, BAKE_PPT);
+        // プレート四隅のリベット(角のタイルだけが自分の角を描く)
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = biome.palette.edge;
+        const rivet = (cx: number, cy: number) => {
+          ctx.beginPath(); ctx.arc(cx, cy, 1.3, 0, Math.PI * 2); ctx.fill();
+        };
+        const inset = 2;
+        if (plate.lx === 0 && plate.ly === 0) rivet(x0 + inset, y0 + inset);
+        if (plate.lx === plate.w - 1 && plate.ly === 0) rivet(x0 + BAKE_PPT - inset, y0 + inset);
+        if (plate.lx === 0 && plate.ly === plate.h - 1) rivet(x0 + inset, y0 + BAKE_PPT - inset);
+        if (plate.lx === plate.w - 1 && plate.ly === plate.h - 1) rivet(x0 + BAKE_PPT - inset, y0 + BAKE_PPT - inset);
+        // 垂れ汚れ・錆の滲み(段階 1、設計 §3.1)。プレート上面からプレート内だけに垂れる。
+        // 錆色 #9a6d32 はパレット 30 番の実在色。
+        const stain = stainSegmentAt(this.seed, bx + tx, by + ty, plate);
+        if (stain) {
+          ctx.globalAlpha = (stain.kind === 1 ? 0.2 : 0.26) * stain.fade;
+          ctx.fillStyle = stain.kind === 1 ? '#9a6d32' : STEEL.black;
+          const sw = stain.w * BAKE_PPT;
+          ctx.fillRect((tx + stain.cx) * BAKE_PPT - sw / 2, y0, sw, BAKE_PPT);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+
     // 後退内面(厚み)＋上端リムライト。空気に面したSOLIDエッジに、露出面から内側へ純黒へ
     // 後退する暗帯を敷き、歩ける上端に明るいリム線を引く(可読性)。焼き込みのみ・当たり無改修。
     // 濃さ/深さは ambientLevel 連動で、明バイオームでは控えめにして足場を読める範囲に保つ。
+    // リムは段階 1 で間引いた: 上端のみ弱めて残し(alpha 0.55・幅 0.08)、側面・下端は消す
+    // (全辺の均一な発光が「図面」に見える主因だったため。立体感は陰影帯と面の段差で作る)。
     const P = BAKE_PPT;
     const reliefDepth = 0.24 + (1 - biome.ambientLevel) * 0.12; // 0.24〜0.36 タイル
     const bandAlpha = 0.32 + (1 - biome.ambientLevel) * 0.34;   // 0.32〜0.66
@@ -331,9 +382,10 @@ export class ChunkBaker {
           ctx.fillRect((tx + b.x) * P, (ty + b.y) * P, b.w * P, b.h * P);
         }
         for (const s of rimSegments(edges)) {
-          ctx.strokeStyle = s.top ? rimTopColor : biome.palette.edge;
-          ctx.globalAlpha = s.top ? 0.9 : 0.4;
-          ctx.lineWidth = Math.max(1, (s.top ? 0.12 : 0.07) * P);
+          if (!s.top) continue; // 側面・下端のリムは廃止(段階 1)
+          ctx.strokeStyle = rimTopColor;
+          ctx.globalAlpha = 0.55;
+          ctx.lineWidth = Math.max(1, 0.08 * P);
           ctx.beginPath();
           ctx.moveTo((tx + s.x1) * P, (ty + s.y1) * P);
           ctx.lineTo((tx + s.x2) * P, (ty + s.y2) * P);
