@@ -10,6 +10,7 @@ import { Lighting } from './lighting';
 import { biomeBlend, mixHex } from './biome';
 import { STEEL } from './steel';
 import { drawPlayer } from './playerSprite';
+import { windupPose } from './bossPose';
 import { Post } from './post';
 import { drawHierarchyDebug } from './debugHierarchy';
 import { drawBeam, drawCharge } from './beam';
@@ -78,9 +79,11 @@ export interface GravitonFx {
   debris?: readonly DebrisFx[];
   /** パルスの弾(ワールド座標の中心と方向)。平坦色の短矩形で描く */
   pulses?: readonly { x: number; y: number; dx: number; dy: number }[];
+  /** パルスの敵弾(固定砲台の弾、ワールド座標の中心と単位方向)。熱色系で描く */
+  shots?: readonly { x: number; y: number; dx: number; dy: number }[];
   /** 敵(ワールド座標の中心と被弾フラッシュ)。平坦色の矩形で描く。flyer は飛行敵、
-   *  w/h と bossPhase がある要素はボス(体格と相で描き分ける) */
-  enemies?: readonly { x: number; y: number; flash: boolean; flyer?: boolean; w?: number; h?: number; bossPhase?: BossPhase }[];
+   *  turret は固定砲台(angle が照準方向)、w/h と bossPhase がある要素はボス(体格と相で描き分ける) */
+  enemies?: readonly { x: number; y: number; flash: boolean; flyer?: boolean; turret?: boolean; angle?: number; w?: number; h?: number; bossPhase?: BossPhase; bossPhaseT?: number; bossDir?: 1 | -1 }[];
   /** ドロップ(ワールド座標の中心)。hidden は点滅の消灯側フレーム */
   drops?: readonly { x: number; y: number; kind: 'charge' | 'heal' | 'ration'; hidden: boolean }[];
   /** 補給キャッシュ(ワールド座標の中心)。未開封のものだけ渡す */
@@ -443,6 +446,27 @@ export class Renderer {
       }
     }
 
+    // 敵弾(固定砲台): パルスと同じ描き方の相乗りで、色だけ熱色系(外帯=錆、芯=金)に変える
+    if (fx.shots && fx.shots.length > 0) {
+      const oLong = Math.max(2, Math.round(0.62 * ppt));
+      const oShort = Math.max(1, Math.round(0.26 * ppt));
+      const cLong = Math.max(2, Math.round(0.44 * ppt));
+      const cShort = Math.max(1, Math.round(0.13 * ppt));
+      for (const p of fx.shots) {
+        const sx = Math.round((p.x - renderCam.x) * ppt + w / 2);
+        const sy = Math.round((p.y - renderCam.y) * ppt + h / 2);
+        const horiz = Math.abs(p.dx) >= Math.abs(p.dy);
+        ctx.fillStyle = '#9a6d32';
+        const ow = horiz ? oLong : oShort;
+        const oh = horiz ? oShort : oLong;
+        ctx.fillRect(Math.round(sx - ow / 2), Math.round(sy - oh / 2), ow, oh);
+        ctx.fillStyle = '#caa64a';
+        const cw = horiz ? cLong : cShort;
+        const ch = horiz ? cShort : cLong;
+        ctx.fillRect(Math.round(sx - cw / 2), Math.round(sy - ch / 2), cw, ch);
+      }
+    }
+
     // 敵: 同じ fx 相乗りで、世界の面構成の文法(胴の面・暗い下部・目の灯)に揃える(新規パスなし)。
     // 色はすべてパレット実在色(従来色は量子化で実質この色に寄っていた)。
     // 歩行敵は錆の胴+金の目、飛行敵は鋼の胴+白の目で区別する
@@ -452,35 +476,83 @@ export class Renderer {
         const sx = Math.round((e.x - renderCam.x) * ppt + w / 2);
         const sy = Math.round((e.y - renderCam.y) * ppt + h / 2);
         if (e.w !== undefined && e.h !== undefined) {
-          // ボス「広間番人」: 体格ぶんの胴 + プレートの継ぎ目 + 暗い足元。相の違いを色で読ませる:
-          // 予備動作は点滅(テレグラフ)、突進は熱色(錆)、硬直は淡色に芯を晒す(撃ち時の合図)
+          // ボス「広間番人」: 体格ぶんの胴 + プレートの継ぎ目 + 暗い足元 + 向き側の目の灯。
+          // 相の違いを読ませる: 予備動作は進捗が読める合図(bossPose: 沈み込み・震え・
+          // 加速する点滅と終盤の熱色固定・白くなる目)、突進は熱色(錆)、
+          // 硬直は淡色に芯を晒す(撃ち時の合図)
           const bw = Math.max(2, Math.round(e.w * ppt));
-          const bh = Math.max(2, Math.round(e.h * ppt));
+          const bhFull = Math.max(2, Math.round(e.h * ppt));
+          const pose = e.bossPhase === 'windup' ? windupPose(e.bossPhaseT ?? 0, timeSec) : null;
+          // 沈み込み: 足元(下辺)を床に anchored のまま、高さだけが縮む
+          const sinkPx = pose ? Math.round(pose.sinkTiles * ppt) : 0;
+          const bh = Math.max(2, bhFull - sinkPx);
+          const cx = sx + (pose ? Math.round(pose.shakeTiles * ppt) : 0);
+          const x0 = Math.round(cx - bw / 2);
+          const bottom = Math.round(sy + bhFull / 2);
+          const top = bottom - bh;
           let color = '#5a3a24';
-          if (e.bossPhase === 'windup') color = Math.floor(timeSec * 10) % 2 === 0 ? '#c7d0ce' : '#5a3a24';
+          if (pose) color = pose.bodyColor;
           else if (e.bossPhase === 'charge') color = '#9a6d32';
           else if (e.bossPhase === 'stunned') color = '#c7d0ce';
           ctx.fillStyle = e.flash ? '#c7d0ce' : color;
-          ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy - bh / 2), bw, bh);
+          ctx.fillRect(x0, top, bw, bh);
           // プレートの継ぎ目(縦 2 本 + 横 1 本)。相の色替え・フラッシュの上にも残す。
           // alpha は HARD 板の継ぎ目(0.9)に合わせる(薄いと量子化のディザで破線状に割れる)
           ctx.globalAlpha = 0.9;
           ctx.fillStyle = '#3d2618';
           const seamW = Math.max(1, Math.round(0.06 * ppt));
           for (const fxr of [1 / 3, 2 / 3]) {
-            ctx.fillRect(Math.round(sx - bw / 2 + bw * fxr - seamW / 2), Math.round(sy - bh / 2), seamW, bh);
+            ctx.fillRect(Math.round(x0 + bw * fxr - seamW / 2), top, seamW, bh);
           }
-          ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy - seamW / 2), bw, seamW);
+          ctx.fillRect(x0, Math.round(top + bh / 2 - seamW / 2), bw, seamW);
           ctx.globalAlpha = 1;
           ctx.fillStyle = '#3d2618';
-          ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy + bh / 2) - band, bw, band);
+          ctx.fillRect(x0, bottom - band, bw, band);
+          // 目の灯(向き側の上部 1 点)。歩行敵と同じ文法で、フラッシュ中は色を反転して残す。
+          // 予備動作中は pose の色(金→終盤は白)で明るくする
+          const eye = Math.max(1, Math.round(0.16 * ppt));
+          const dir = e.bossDir ?? 1;
+          ctx.fillStyle = e.flash ? '#9a6d32' : pose ? pose.eyeColor : '#caa64a';
+          ctx.fillRect(
+            Math.round(cx + dir * bw * 0.3 - eye / 2),
+            Math.round(top + bh * 0.25 - eye / 2),
+            eye,
+            eye,
+          );
           if (e.bossPhase === 'stunned' && !e.flash) {
             // 芯は金(パレット実在色)。淡色の本体と量子化後も分離して「撃ち時」を読ませる
             const coreW = Math.max(2, Math.round(bw * 0.3));
             const coreH = Math.max(2, Math.round(bh * 0.3));
             ctx.fillStyle = '#caa64a';
-            ctx.fillRect(Math.round(sx - coreW / 2), Math.round(sy - coreH / 2), coreW, coreH);
+            ctx.fillRect(Math.round(cx - coreW / 2), Math.round(top + bh / 2 - coreH / 2), coreW, coreH);
           }
+          continue;
+        }
+        if (e.turret) {
+          // 固定砲台: 鋼色の胴の面 + 暗い台座 + 照準方向へ向く砲身 + 金の目の灯
+          const s = Math.max(2, Math.round(0.9 * ppt));
+          const x0 = Math.round(sx - s / 2);
+          const y0 = Math.round(sy - s / 2);
+          ctx.fillStyle = e.flash ? '#c7d0ce' : '#51728d';
+          ctx.fillRect(x0, y0, s, s);
+          // 暗い台座(下部の帯)
+          ctx.fillStyle = '#16202b';
+          ctx.fillRect(x0, y0 + s - band, s, band);
+          // 砲身: 照準方向へ中心から 3 刻みの小矩形を並べる(平坦色・決定論)
+          const ang = e.angle ?? 0;
+          const bdx = Math.cos(ang);
+          const bdy = Math.sin(ang);
+          const barrel = Math.max(1, Math.round(0.18 * ppt));
+          ctx.fillStyle = '#16202b';
+          for (let i = 1; i <= 3; i++) {
+            const bx = Math.round(sx + bdx * i * s * 0.22 - barrel / 2);
+            const by = Math.round(sy + bdy * i * s * 0.22 - barrel / 2);
+            ctx.fillRect(bx, by, barrel, barrel);
+          }
+          // 目の灯(金)。フラッシュ中は胴が淡色になるので鋼色へ反転して残す
+          const eye = Math.max(1, Math.round(0.16 * ppt));
+          ctx.fillStyle = e.flash ? '#51728d' : '#caa64a';
+          ctx.fillRect(Math.round(sx - eye / 2), Math.round(sy - s * 0.18 - eye / 2), eye, eye);
           continue;
         }
         const s = Math.max(2, Math.round((e.flyer ? 0.8 : 0.9) * ppt));

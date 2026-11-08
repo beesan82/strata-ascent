@@ -8,9 +8,18 @@ import { CHUNK_SIZE, TILE, type Tile } from './tiles';
 export class Destruction {
   private masks = new Map<string, Uint8Array>();
   private count = 0;
+  private known = 0;
 
   get size(): number {
     return this.count;
+  }
+
+  /**
+   * 実タイルとして確認して壊した数の累計。未生成チャンクへの盲目記録(tiles が undefined)は
+   * 元が AIR かもしれないので数えない。「実際に壊れた量」の材料(破砕音の大きさ)に使う。
+   */
+  get knownBroken(): number {
+    return this.known;
   }
 
   isDestroyed(x: number, y: number): boolean {
@@ -88,6 +97,7 @@ export class Destruction {
         }
         mask[i] = 1;
         this.count++;
+        if (t !== undefined) this.known++;
         chunks.add(lastKey);
       }
     }

@@ -6,7 +6,7 @@ const SEED = 20260711;
 
 /** 固定 seed で多数のスポーン ID を振り、ドロップ種別の割合を数える */
 function distribution(
-  kind: 'w' | 'f',
+  kind: 'w' | 'f' | 't',
   biomeId: BiomeId,
   n = 4000,
 ): Record<'charge' | 'heal' | 'ration' | 'none', number> {
@@ -63,6 +63,10 @@ describe('dropRatesFor(重み方式の実効確率)', () => {
     expect(f.charge).toBeCloseTo(0.27);
     expect(f.heal).toBeCloseTo(0.12);
     expect(f.ration).toBeCloseTo(0.11);
+    const t = dropRatesFor('t', 'coldSteel');
+    expect(t.charge).toBeCloseTo(0.25);
+    expect(t.heal).toBeCloseTo(0.1);
+    expect(t.ration).toBeCloseTo(0.1);
   });
 
   it('重みの合計が 62% を超える地区では全体が 62% へ圧縮される(精錬区 Walker)', () => {
@@ -104,6 +108,25 @@ describe('dropFor(抽選の純関数)', () => {
     near(d.charge, 0.27);
     near(d.heal, 0.12);
     near(d.ration, 0.11);
+  });
+
+  it('固定砲台・倍率 1.0 の地区では砲弾≈25% / 回復≈10% / 糧食≈10%(v2.0 Task 6)', () => {
+    const d = distribution('t', 'coldSteel');
+    near(d.charge, 0.25);
+    near(d.heal, 0.1);
+    near(d.ration, 0.1);
+    near(d.charge + d.heal + d.ration, 0.45);
+  });
+
+  it('固定砲台にも地区倍率が効く(精錬区は砲弾 ×2.0 で圧縮され砲弾が最も多い)', () => {
+    const r = dropRatesFor('t', 'foundry');
+    // 重み 0.50 / 0.10 / 0.08、合計 0.68 > 0.62 で全体が圧縮される
+    expect(r.charge + r.heal + r.ration).toBeCloseTo(DROP_TOTAL_CAP);
+    expect(r.charge).toBeCloseTo(0.5 * (0.62 / 0.68), 6);
+    expect(r.charge).toBeGreaterThan(r.heal);
+    expect(r.charge).toBeGreaterThan(r.ration);
+    const d = distribution('t', 'foundry');
+    near(d.charge, 0.5 * (0.62 / 0.68));
   });
 
   it('精錬区では重み圧縮のうえで砲弾が最も多い(Walker 圧縮後≈39.7%)', () => {

@@ -90,6 +90,12 @@ export function nearestPlateDistance(seed: number, y: number): number {
 export const PASSAGE_FREQ = 110;
 export const PASSAGE_DECAY = 1.8;
 
+/** ボス予備動作の警告音: 短い矩形波の下降チャープ(Hz、秒)。音量は控えめに抑える */
+export const WARN_FREQ_START = 880;
+export const WARN_FREQ_END = 587;
+export const WARN_SECONDS = 0.18;
+export const WARN_GAIN = 0.1;
+
 /** 光柱のハム: 高周波(Hz)と、軸からこの距離(タイル)で 0 になる減衰 */
 export const HUM_FREQ = 2200;
 export const HUM_RANGE = 64;
@@ -97,4 +103,61 @@ export const HUM_RANGE = 64;
 /** dx: 光柱の軸からの水平距離、dy: 前室の縦範囲(板の下面〜床)からのはみ出し(中なら 0)。チェビシェフ距離で減衰 */
 export function beaconHum(dx: number, dy: number): number {
   return clamp01(1 - Math.max(Math.abs(dx), Math.abs(dy)) / HUM_RANGE);
+}
+
+/**
+ * 重粒子砲の音(2026-11-08 追加)。調整はこの節の定数だけで行う。
+ * 溜め音: 溜め比率 0→1 で基音が指数に上がる唸り。ゲインも比率で少し持ち上がる。
+ */
+export const CHARGE_FREQ_START = 55;
+export const CHARGE_FREQ_END = 220;
+/** 溜め音のゲイン(線形、マスター前)。連続音なので既存の短音より控えめに */
+export const CHARGE_GAIN = 0.2;
+
+export function chargeFreq(ratio: number): number {
+  return CHARGE_FREQ_START * (CHARGE_FREQ_END / CHARGE_FREQ_START) ** clamp01(ratio);
+}
+
+export function chargeGain(ratio: number): number {
+  return CHARGE_GAIN * (0.7 + 0.3 * clamp01(ratio));
+}
+
+/** 発射音: サブ正弦波の pitch 落下(重低音の芯) */
+export const FIRE_SUB_START_HZ = 120;
+export const FIRE_SUB_END_HZ = 34;
+export const FIRE_SUB_SECONDS = 0.5;
+export const FIRE_SUB_GAIN = 0.9;
+/** 発射音: ノイズの破裂感。ローパスの周波数を落として「ドン」から残響の尾へ変える */
+export const FIRE_NOISE_SECONDS = 0.32;
+export const FIRE_NOISE_GAIN = 0.65;
+export const FIRE_NOISE_START_HZ = 3800;
+export const FIRE_NOISE_END_HZ = 240;
+
+/**
+ * 破砕音: 掘削で実際に壊れたタイル数(Destruction.knownBroken の差分)から
+ * 音量・長さ・開始帯域を決める。破壊数は桁でばらつくので対数で圧縮し、
+ * CRUSH_MAX_TILES で最大に頭打ちさせる。1 発の掘削で 1 音に集約する前提。
+ */
+export const CRUSH_MAX_TILES = 600;
+export const CRUSH_GAIN_MIN = 0.3;
+export const CRUSH_GAIN_MAX = 0.85;
+export const CRUSH_SECONDS_MIN = 0.25;
+export const CRUSH_SECONDS_MAX = 1.1;
+export const CRUSH_HZ_MIN = 700;
+export const CRUSH_HZ_MAX = 2600;
+
+export interface CrushParams {
+  gain: number;
+  seconds: number;
+  /** ローパスの開始周波数(Hz)。鳴りながら 180 Hz まで落ちる */
+  startHz: number;
+}
+
+export function crushParams(brokenTiles: number): CrushParams {
+  const k = clamp01(Math.log1p(Math.max(0, brokenTiles)) / Math.log1p(CRUSH_MAX_TILES));
+  return {
+    gain: CRUSH_GAIN_MIN + (CRUSH_GAIN_MAX - CRUSH_GAIN_MIN) * k,
+    seconds: CRUSH_SECONDS_MIN + (CRUSH_SECONDS_MAX - CRUSH_SECONDS_MIN) * k,
+    startHz: CRUSH_HZ_MIN + (CRUSH_HZ_MAX - CRUSH_HZ_MIN) * k,
+  };
 }

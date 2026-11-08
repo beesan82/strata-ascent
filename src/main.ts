@@ -6,11 +6,12 @@ import { MAX_HP, Player } from './entities/player';
 import { Graviton, MAX_CHARGES, BORE_LENGTH, BORE_RADIUS, rechargeTimeFor } from './entities/graviton';
 import { pulseAimDir, PulseGun, PULSE_DAMAGE, PULSE_SIZE, type Pulse } from './entities/pulse';
 import { Boss, BOSS_BEAM_DAMAGE, BOSS_H, BOSS_HP, BOSS_W, Flyer, Walker } from './entities/enemy';
+import { Turret, TurretShot } from './entities/turret';
 import { beamHit } from './entities/beamHit';
 import { canAddSupply, canPickup, DropItem, pushDrop, pushSupply } from './entities/drop';
 import { dropFor } from './world/drop';
 import { chooseSupplyCaches, restStockSecondFor, supplyFor, type SupplyCache } from './world/supply';
-import { chooseFlyerSpawns, chooseSpawns, findAirPockets, findFloorRuns, flyerMulFor } from './world/spawn';
+import { chooseFlyerSpawns, chooseSpawns, chooseTurretSpawns, findAirPockets, findFloorRuns, flyerMulFor, turretMulFor } from './world/spawn';
 import { bossRewardFor, bossSpawnFor, type BossSpawn } from './world/boss';
 import { grandHallAt } from './world/grandhall';
 import { nearestRestPoint } from './world/restpoint';
@@ -44,6 +45,14 @@ import {
   type GroundAnchor,
 } from './core/remains';
 import { displayAltitude, highestLayer } from './core/coordinate';
+import {
+  crossedMilestone,
+  loadBestLayer,
+  milestoneCaptionText,
+  newRecordCaptionText,
+  saveBestLayer,
+  type LayerStorage,
+} from './core/records';
 import { autoViewStarted, initialView, viewState, type ViewState } from './core/view';
 import { Caption, captionText } from './render/caption';
 import { AudioEngine } from './audio/engine';
@@ -106,6 +115,10 @@ const pulseGun = new PulseGun();
 let enemies: { spawnId: string; walker: Walker }[] = [];
 /** 生存中の飛行敵(スポーン識別子つき)。出現の決定は walker と同じスキャンに相乗りする */
 let flyers: { spawnId: string; flyer: Flyer }[] = [];
+/** 生存中の固定砲台(スポーン識別子つき)。出現の決定は walker と同じスキャンに相乗りする */
+let turrets: { spawnId: string; turret: Turret }[] = [];
+/** 飛んでいる砲台の弾。プレイヤーに当たると消費され、地形・寿命でも消える */
+let turretShots: TurretShot[] = [];
 /**
  * 有効化中のボス「広間番人」(第2弾 §2)。大広間のあるセルにプレイヤーがいる間だけ
  * 1 体を有効化する。実体は範囲を離れると捨てられるが、撃破は記録保持に残る。
@@ -238,6 +251,23 @@ function refreshEnemies(): void {
     const hall = grandHallAt(seed, c);
     if (hall) halls.push(hall);
   }
+  // 固定砲台(v2.0 Task 6): 地区ゲート(電力区・精錬区)が開いているときだけ床ランを引く。
+  // 歩行敵の選定結果(desired)を occupied として渡し、近接する位置には置かない
+  if (turretMulFor(biomeId) > 0) {
+    const desiredTurrets = chooseTurretSpawns(
+      seed, layer, runs, protectedPoints, biomeId, halls,
+      desired.map((d) => ({ x: d.x, y: d.y })), defeatedEnemies,
+    );
+    const turretIds = new Set(desiredTurrets.map((d) => d.id));
+    turrets = turrets.filter((e) => turretIds.has(e.spawnId));
+    for (const d of desiredTurrets) {
+      if (!turrets.some((e) => e.spawnId === d.id)) {
+        turrets.push({ spawnId: d.id, turret: new Turret(d.x, d.y) });
+      }
+    }
+  } else if (turrets.length > 0) {
+    turrets = [];
+  }
   // 飛行敵(第2弾 §1): 地区ゲートが閉じている間はポケット走査自体をしない(他地区では無コスト)
   if (flyerMulFor(biomeId) > 0) {
     const pockets = findAirPockets(tiles, cx - ENEMY_SCAN_X, cy - ENEMY_SCAN_Y, cx + ENEMY_SCAN_X, cy + ENEMY_SCAN_Y);
@@ -298,6 +328,29 @@ document.addEventListener('visibilitychange', () => {
 let view: ViewState = initialView(biomeCellAt(seed, Math.floor(spawn.y)));
 // HUD の階層(§6.5): 到達した最高階層。落下で下がっても減らない
 let maxLayer = layerNumber(seed, biomeCellAt(seed, Math.floor(spawn.y)));
+/** localStorage の取得自体が例外になる環境があるため安全に取る(取れなければ記録なしで続行する) */
+function safeLocalStorage(): LayerStorage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+const recordStorage = safeLocalStorage();
+/**
+ * 最深到達の記録(v2.0 Task 7)。seed ごとに localStorage へ永続化され、HUD に併記される。
+ * ここでの読み込みと updateHud での保存だけが役割で、ゲームの数値・生成・物理には影響しない。
+ */
+let bestLayer = loadBestLayer(recordStorage, seed);
+/** セッション開始時点の記録。新記録の字幕はこれを初めて超えたときにセッションで 1 回だけ出す */
+const sessionStartBestLayer = bestLayer;
+let newRecordAnnounced = false;
+// スポーン位置も「到達した階層」に含める(開始時の maxLayer の定義と揃える)。字幕は出さず、
+// 記録だけを同期する。これにより ?x=&y= で深い位置から始めた場合も記録が保存される
+if (maxLayer > bestLayer) {
+  bestLayer = maxLayer;
+  saveBestLayer(recordStorage, seed, bestLayer);
+}
 renderer.profileStages = profileStages;
 const debug = params.get('debug');
 renderer.setDebug(debug);
@@ -358,14 +411,16 @@ function firstContact(ox: number, oy: number, angle: number): { x: number; y: nu
 /** チャージ完了→離した瞬間: エイム方向へ地形を貫通破壊し、タイルへ反映して焼き込みを無効化する */
 function fire(): void {
   hapticCannonFire();
-  // スティック砲の発射が成立したら、武器モードをパルスへ自動復帰させる(設計 §3-3)。
-  // PC の KeyF 発射では発射候補が無いのでモードには触れない
+  audio.cannonFire(); // 発射音(§6.7): サブの pitch 落下 + ノイズの破裂
+  // 砲の発射が成立したら、武器モードをパルスへ自動復帰させる(設計 §3-3)。
+  // 発射候補はタッチ(右スティック)と PC(左クリック)の解放で共通に立つ
   if (input.takeCannonRelease()) input.notifyCannonFired();
   const aim = renderer.aimAngle; // ライトコーンと同一の角度(=ビーム=破壊方向を保証)
   shotCounter++;
   // 掘削点は破壊の適用前に取る(適用後はタイルが空気になっている)
   const contact = firstContact(player.centerX, player.centerY, aim);
   // 未生成チャンクは生成せず破壊マスクだけ記録する(発射フレームでの同期生成を避ける)
+  const knownBefore = destruction.knownBroken;
   const affected = destruction.bore(
     player.centerX, player.centerY, aim, BORE_LENGTH, BORE_RADIUS,
     (tx, ty) => store.peekTileAt(tx, ty),
@@ -377,6 +432,8 @@ function fire(): void {
     store.applyDestruction(cx, cy); // 生成済みチャンクへその場で反映(再生成しない)
   }
   renderer.invalidateBored(affected, store); // 焼き込みを再焼き込み待ちに(境界際の隣チャンクも)
+  // 破砕音(§6.7): 実際に壊れた実タイル数に応じて 1 音だけ鳴らす(地形が壊れなければ鳴らない)
+  audio.cannonCrush(destruction.knownBroken - knownBefore);
   lastBeam = { angle: aim, ttl: BEAM_TTL };
   beamPush = { angle: aim, ttl: PUSH_TTL };
   if (contact) pushDebris(contact.x, contact.y, aim);
@@ -408,11 +465,20 @@ function applyBeamToEnemies(angle: number): void {
       anyKill = true;
     }
   }
+  for (const e of turrets) {
+    if (!e.turret.dead && beamHit(ox, oy, angle, e.turret.centerX, e.turret.centerY, halfDiag(e.turret.body.w, e.turret.body.h))) {
+      e.turret.hit(e.turret.hp); // 通常敵と同じ即死経路
+      pushDebris(e.turret.centerX, e.turret.centerY, angle); // 命中点の破片
+      anyKill = true;
+    }
+  }
   if (anyKill) hapticEnemyDown();
   for (const e of enemies) if (e.walker.dead) onEnemyKilled(e.spawnId, e.walker.centerX, e.walker.centerY);
   enemies = enemies.filter((e) => !e.walker.dead);
   for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY);
   flyers = flyers.filter((e) => !e.flyer.dead);
+  for (const e of turrets) if (e.turret.dead) onEnemyKilled(e.spawnId, e.turret.centerX, e.turret.centerY);
+  turrets = turrets.filter((e) => !e.turret.dead);
   if (boss && beamHit(ox, oy, angle, boss.boss.centerX, boss.boss.centerY, halfDiag(BOSS_W, BOSS_H))) {
     pushDebris(boss.boss.centerX, boss.boss.centerY, angle); // 命中点の破片(撃破でなくても出す)
     if (boss.boss.hit(BOSS_BEAM_DAMAGE)) {
@@ -598,14 +664,36 @@ function update(dt: number): void {
   if (frames % ENEMY_SCAN_INTERVAL_FRAMES === 0) refreshEnemies();
   for (const e of enemies) e.walker.update(dt, tiles);
   for (const e of flyers) e.flyer.update(dt, tiles, player.centerX, player.centerY);
+  // 固定砲台: 発射された弾を保持リストへ移し、弾の更新と消滅、地形との衝突を行う
+  for (const e of turrets) {
+    for (const s of e.turret.update(dt, tiles, player.centerX, player.centerY)) turretShots.push(s);
+  }
+  if (turretShots.length > 0) {
+    for (const s of turretShots) s.update(dt, tiles);
+    turretShots = turretShots.filter((s) => !s.dead);
+    // 弾とプレイヤーの重なり: 重なった弾は無敵時間で無効化されても消費する
+    if (!player.dead && turretShots.length > 0) {
+      const pb = player.body;
+      turretShots = turretShots.filter((s) => {
+        const b = s.body;
+        const overlap = pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y;
+        if (!overlap) return true;
+        if (player.damage(s.centerX)) hapticDamage();
+        return false;
+      });
+    }
+  }
   if (boss) {
     const hall = boss.spawn.hall;
     const playerInHall =
       player.centerX >= hall.x0 && player.centerX < hall.x1 &&
       player.centerY >= hall.y0 && player.centerY < hall.y1;
+    const prevPhase = boss.boss.phase;
     boss.boss.update(dt, tiles, player.centerX, player.centerY, playerInHall);
+    // 予備動作の開始に短い警告音を 1 回だけ重ねる(Task 2、音響エンジン相乗り)
+    if (prevPhase !== 'windup' && boss.boss.phase === 'windup') audio.bossWarn();
   }
-  if ((enemies.length > 0 || flyers.length > 0 || boss) && pulseGun.pulses.length > 0) {
+  if ((enemies.length > 0 || flyers.length > 0 || turrets.length > 0 || boss) && pulseGun.pulses.length > 0) {
     const spent = new Set<Pulse>();
     for (const p of pulseGun.pulses) {
       for (const e of enemies) {
@@ -631,6 +719,18 @@ function update(dt: number): void {
           break;
         }
       }
+      if (spent.has(p)) continue;
+      for (const e of turrets) {
+        const b = e.turret.body;
+        if (
+          p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
+          p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
+        ) {
+          if (e.turret.hit(PULSE_DAMAGE)) hapticEnemyDown();
+          spent.add(p);
+          break;
+        }
+      }
       if (spent.has(p) || !boss) continue;
       const b = boss.boss.body;
       if (
@@ -648,6 +748,8 @@ function update(dt: number): void {
     enemies = enemies.filter((e) => !e.walker.dead);
     for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY);
     flyers = flyers.filter((e) => !e.flyer.dead);
+    for (const e of turrets) if (e.turret.dead) onEnemyKilled(e.spawnId, e.turret.centerX, e.turret.centerY);
+    turrets = turrets.filter((e) => !e.turret.dead);
     if (boss && boss.boss.dead) {
       onBossKilled(boss.spawnId, boss.boss);
       boss = null;
@@ -727,6 +829,8 @@ function update(dt: number): void {
     groundAnchor = initialGroundAnchor(respawnPoint.x, respawnPoint.y);
     enemies = []; // 実体は捨てるが撃破記録(defeatedEnemies)は残す(§4: 死亡でリセットしない)
     flyers = [];
+    turrets = []; // 砲台も実体は捨てる(撃破済みなら記録により再出現しない)
+    turretShots = []; // 砲台の弾も消す
     boss = null; // ボスも実体は捨てる(撃破済みなら記録により再出現しない)
     pulseGun.pulses = [];
   }
@@ -774,6 +878,7 @@ function updateAudio(): void {
     hum,
     walking: player.body.onGround && player.body.vx !== 0,
     walkPhase: player.walkPhase,
+    chargeRatio: graviton.chargeRatio,
   });
 }
 
@@ -790,7 +895,30 @@ function updateHud(): void {
   const altitude = displayAltitude(player.body.y, player.body.h);
   // 接地しているときだけ更新する。孔の梯子は板の上面より 4 タイル上まで延びるので、登って降りただけで
   // 頭の cell が上の層になり n が上がっていた(段階3 の保留)。床に立った層だけを「到達」と数える
-  if (player.body.onGround) maxLayer = highestLayer(maxLayer, layerNumber(seed, biomeCellAt(seed, Math.floor(player.body.y))));
+  if (player.body.onGround) {
+    const prevMax = maxLayer;
+    const nextMax = highestLayer(prevMax, layerNumber(seed, biomeCellAt(seed, Math.floor(player.body.y))));
+    if (nextMax > prevMax) {
+      maxLayer = nextMax;
+      // 最深記録(v2.0 Task 7): 記録を上回ったら更新して保存する(表示と保存だけ)
+      if (nextMax > bestLayer) {
+        bestLayer = nextMax;
+        saveBestLayer(recordStorage, seed, bestLayer);
+      }
+      // 字幕: 節目(5 階層ごと)を跨いだら到達を知らせる。セッション開始時点の記録を初めて
+      // 超えたときは新記録として知らせる(セッションで 1 回だけ)。両方が重なったら節目を
+      // 優先し、新記録の字幕はその回で消費する
+      const milestone = crossedMilestone(prevMax, nextMax);
+      const exceedsStart = !newRecordAnnounced && nextMax > sessionStartBestLayer;
+      if (milestone !== null) {
+        caption.show(milestoneCaptionText(milestone), simTime);
+        if (exceedsStart) newRecordAnnounced = true;
+      } else if (exceedsStart) {
+        newRecordAnnounced = true;
+        caption.show(newRecordCaptionText(nextMax), simTime);
+      }
+    }
+  }
   const sys = regionAt(seed, Math.floor(player.centerX), Math.floor(player.body.y)).system;
   let cannon = `重粒子砲 ${graviton.charges}/3`;
   const r = graviton.chargeRatio;
@@ -813,7 +941,9 @@ function updateHud(): void {
   const satLabel = satLevel === 'low' ? '満腹低下' : satLevel === 'ok' ? '満腹' : '満腹危険';
   const satBars = Math.max(0, Math.min(10, Math.round(satiety.value / 10)));
   const satietyHud = ` — ${satLabel} [${'#'.repeat(satBars)}${'-'.repeat(10 - satBars)}] ${Math.floor(satiety.value)} / 糧食 ${satiety.rations}`;
-  hud.textContent = `第 ${maxLayer} 階層 / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${weapon} — HP ${hearts}${bossHud}${satietyHud}`;
+  // 最深記録の併記(v2.0 Task 7)。記録が 0(記録なし)のときは出さない
+  const bestHud = bestLayer > 0 ? ` / 最深記録 第 ${bestLayer} 階層` : '';
+  hud.textContent = `第 ${maxLayer} 階層${bestHud} / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${weapon} — HP ${hearts}${bossHud}${satietyHud}`;
 }
 
 let last = performance.now();
@@ -861,6 +991,12 @@ function frame(now: number): void {
       dx: p.dx,
       dy: p.dy,
     })),
+    shots: turretShots.map((s) => ({
+      x: s.centerX,
+      y: s.centerY,
+      dx: s.dx,
+      dy: s.dy,
+    })),
     enemies: [
       ...enemies.map((e) => ({
         x: e.walker.centerX,
@@ -873,6 +1009,13 @@ function frame(now: number): void {
         flash: e.flyer.flashT > 0,
         flyer: true,
       })),
+      ...turrets.map((e) => ({
+        x: e.turret.centerX,
+        y: e.turret.centerY,
+        flash: e.turret.flashT > 0,
+        turret: true,
+        angle: e.turret.angle,
+      })),
       // ボス: 体格(w/h)と相を渡し、renderer 側で相の違い(予備動作の点滅・硬直の晒し)を読む
       ...(boss
         ? [{
@@ -882,6 +1025,8 @@ function frame(now: number): void {
             w: BOSS_W,
             h: BOSS_H,
             bossPhase: boss.boss.phase,
+            bossPhaseT: boss.boss.phaseT,
+            bossDir: boss.boss.dir,
           }]
         : []),
     ],
