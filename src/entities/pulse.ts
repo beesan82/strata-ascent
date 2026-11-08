@@ -1,4 +1,4 @@
-import { moveBody, type Body, type TileLookup } from './physics';
+import { bodyOverlapsSolid, moveBody, type Body, type TileLookup } from './physics';
 
 /**
  * 連射武器「パルス」(アクション化 第1弾・第2段、設計書 2026-11-04-action-phase1)。
@@ -19,6 +19,39 @@ export interface Pulse {
 
 type DirInput = { left: boolean; right: boolean; up: boolean; down: boolean };
 
+/** 銃口が埋まっているときの後退刻み(タイル)。physics の衝突探索と同じ 1/16 */
+const SPAWN_STEP = 1 / 16;
+
+/**
+ * パルスのスポーン中心を決める。銃口 (muzzleX, muzzleY) が地形に埋まっていなければ
+ * そのまま使い、埋まっていれば安全点 (safeX, safeY = プレイヤー中心) へ向けて
+ * 少しずつ後退し、最初に弾の箱が地形と重ならない位置を使う。
+ * 銃口が壁の中にある角度・距離で撃っても、弾が壁の中で生まれて即消えたり、
+ * 壁際の敵に届かなくなったりする退行を防ぐため。安全点まで埋まっている場合は
+ * 安全点を返し、従来どおり moveBody の埋没ガードで即消滅する(退行なし)。
+ */
+export function resolvePulseSpawn(
+  tiles: TileLookup,
+  muzzleX: number,
+  muzzleY: number,
+  safeX: number,
+  safeY: number,
+): { x: number; y: number } {
+  const half = PULSE_SIZE / 2;
+  const embedded = (cx: number, cy: number): boolean =>
+    bodyOverlapsSolid(tiles, cx - half, cy - half, PULSE_SIZE, PULSE_SIZE);
+  if (!embedded(muzzleX, muzzleY)) return { x: muzzleX, y: muzzleY };
+  const dist = Math.hypot(safeX - muzzleX, safeY - muzzleY);
+  const steps = Math.max(1, Math.ceil(dist / SPAWN_STEP));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const cx = muzzleX + (safeX - muzzleX) * t;
+    const cy = muzzleY + (safeY - muzzleY) * t;
+    if (!embedded(cx, cy)) return { x: cx, y: cy };
+  }
+  return { x: safeX, y: safeY };
+}
+
 /** 8 方向照準: 入力から単位ベクトルを作る(入力が無ければ向きの水平) */
 export function pulseAimDir(input: DirInput, facing: 1 | -1): { x: number; y: number } {
   const dx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
@@ -35,8 +68,10 @@ export class PulseGun {
   private cooldown = 0;
 
   /**
-   * firing の間、間隔を置いて (originX, originY) から (dirX, dirY) へ撃つ。
+   * firing の間、間隔を置いて銃口 (originX, originY) から (dirX, dirY) へ撃つ。
    * 弾は moveBody の掃引衝突で進み、壁に当たるか射程を超えると消える。
+   * 銃口が地形に埋まっている場合は、安全点 (safeX, safeY) へ後退した位置から
+   * 生む(resolvePulseSpawn)。安全点の既定は銃口自身(後退なし)。
    */
   update(
     dt: number,
@@ -46,15 +81,18 @@ export class PulseGun {
     dirX: number,
     dirY: number,
     tiles: TileLookup,
+    safeX: number = originX,
+    safeY: number = originY,
   ): void {
     this.cooldown -= dt;
     if (firing && this.cooldown <= 0) {
       this.cooldown = PULSE_INTERVAL;
       this.shotsFired++;
+      const spawn = resolvePulseSpawn(tiles, originX, originY, safeX, safeY);
       this.pulses.push({
         body: {
-          x: originX - PULSE_SIZE / 2,
-          y: originY - PULSE_SIZE / 2,
+          x: spawn.x - PULSE_SIZE / 2,
+          y: spawn.y - PULSE_SIZE / 2,
           w: PULSE_SIZE,
           h: PULSE_SIZE,
           vx: dirX * PULSE_SPEED,

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   calculatePlayerPose,
   PLAYER_DRAW_HEIGHT_TILES,
+  PLAYER_FEET_OFFSET_TILES,
+  poseMuzzleWorld,
   type Vec2,
 } from './playerPose';
 
@@ -168,5 +170,33 @@ describe('calculatePlayerPose', () => {
       expect(pose.indicator).toBeGreaterThanOrEqual(0);
       expect(pose.indicator).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe('poseMuzzleWorld(発射原点用の銃口ワールド座標)', () => {
+  it('静止・右向き水平では中心の 1.17 前方・0.745 上方が銃口になる', () => {
+    const m = poseMuzzleWorld(10, 10, 1, 0, false, 0, 0);
+    expect(m.x).toBeCloseTo(11.17);
+    expect(m.y).toBeCloseTo(10 - 0.745);
+  });
+
+  it('描画アンカー計算と一致する(中心 + 足元オフセット + ポーズの銃口)', () => {
+    const angles = [-Math.PI / 2, -Math.PI / 4, 0, Math.PI / 4, Math.PI / 2, Math.PI];
+    for (const facing of [1, -1] as const) {
+      for (const angle of angles) {
+        for (const walking of [false, true]) {
+          const pose = calculatePlayerPose(facing, 1.1, walking, angle, 0.7);
+          const m = poseMuzzleWorld(3.25, 8.5, facing, 1.1, walking, angle, 0.7);
+          expect(m.x).toBeCloseTo(3.25 + pose.muzzle.x);
+          expect(m.y).toBeCloseTo(8.5 + PLAYER_FEET_OFFSET_TILES + pose.muzzle.y);
+        }
+      }
+    }
+  });
+
+  it('真上照準では銃口が中心より大きく上へ来る(腰固定にはならない)', () => {
+    const m = poseMuzzleWorld(10, 10, 1, 0, false, -Math.PI / 2, 0);
+    expect(m.y).toBeCloseTo(10 - 1.685);
+    expect(m.x).toBeCloseTo(10.23);
   });
 });

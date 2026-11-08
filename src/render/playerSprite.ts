@@ -1,6 +1,7 @@
 import { mixHex } from './biome';
 import {
   calculatePlayerPose,
+  PLAYER_FEET_OFFSET_TILES,
   type PlayerPose,
   type Vec2,
 } from './playerPose';
@@ -373,7 +374,7 @@ export function drawPlayer(
   );
   const palette = tintPalette(ambientColor);
   const supportContact = supportContactOnWeapon(pose);
-  const feetY = py + 0.875 * ppt;
+  const feetY = py + PLAYER_FEET_OFFSET_TILES * ppt;
 
   ctx.save();
   ctx.translate(px, feetY);
