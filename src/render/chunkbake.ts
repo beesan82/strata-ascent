@@ -19,7 +19,7 @@ import { plateAt } from './tileset/plate';
 import { stainSegmentAt } from './stains';
 import { DECOR_MARGIN, DecorCache, decorOpBounds, type DecorOp } from './decor';
 import { craterCells, dirtyBoundsAround, expandRect, type CellRect } from './dirtyBounds';
-import { hotEdges, type HotEdgeGrids } from './hotedge';
+import { hotEdges, heatStageAt, meltDrips, HEAT_LOOKS, type HeatStage, type HotEdgeGrids } from './hotedge';
 import { restLampCellAt, restTallyCellAt, REST_TALLY_STROKES, traceAt, type Trace } from './traces';
 import { restLampColor } from './landmarkLight';
 import { STEEL } from './steel';
@@ -80,8 +80,10 @@ export class ChunkBaker {
   private layer: HTMLCanvasElement | null = null;
   /** 帯ごとに焼いている途中の先読みチャンク(次に焼く帯の先頭行)。完成するまで cache には入れない */
   private pending = new Map<string, { canvas: HTMLCanvasElement; nextRow: number }>();
-  /** 掘削縁の熱色が残る期限(キー → 期限秒)。期限内は bake が熱色の縁を描く(段階 3) */
-  private hotUntil = new Map<string, number>();
+  /** 掘削縁の熱: キー → 加熱時刻(秒)。冷却段階は heatStageAt(経過秒)で決まる */
+  private hotSince = new Map<string, number>();
+  /** 掘削縁の熱: キー → 焼き込み済みの冷却段階。段階が変わったときだけ再焼き込みする */
+  private hotBakedStage = new Map<string, HeatStage>();
   /** 焼き込み側の現在時刻(秒)。renderer が毎フレーム render の timeSec を入れる */
   nowSec = 0;
 
@@ -214,27 +216,43 @@ export class ChunkBaker {
     return v;
   }
 
-  /** 掘削縁の熱色の期限を刻む(再焼き込み対象のチャンクに renderer から呼ばれる) */
-  markHot(cx: number, cy: number, untilSec: number): void {
+  /**
+   * 掘削縁の熱の加熱時刻を刻む(再焼き込み対象のチャンクに renderer から呼ばれる)。
+   * 再射撃は時計を戻して最も熱い段階からやり直す。呼び出しは invalidateBored の
+   * 無効化と対になっているので、次に焼かれる段階は 0 起点で記録しておく。
+   */
+  markHot(cx: number, cy: number, nowSec: number): void {
     const key = `${cx},${cy}`;
-    this.hotUntil.set(key, Math.max(this.hotUntil.get(key) ?? 0, untilSec));
+    this.hotSince.set(key, nowSec);
+    this.hotBakedStage.set(key, 0);
   }
 
-  /** そのチャンクの掘削縁がいま熱いか(bake の熱色パス用) */
-  private isHot(cx: number, cy: number): boolean {
-    return (this.hotUntil.get(`${cx},${cy}`) ?? -Infinity) > this.nowSec;
+  /** そのチャンクの掘削縁の現在の冷却段階(bake の熱パス用。熱くなければ 3) */
+  private heatStageOf(cx: number, cy: number): HeatStage {
+    const since = this.hotSince.get(`${cx},${cy}`);
+    return since === undefined ? 3 : heatStageAt(this.nowSec - since);
   }
 
   /**
-   * 熱色の期限切れ処理: 期限を過ぎたチャンクを 1 回だけ無効化し、通常の縁へ戻す
-   * (設計 §5.1 の「1 回の切り替え」。毎フレーム呼ばれるが、期限内は何もしない)。
+   * 熱の段階進行: 冷却段階が焼き込み済みの段階と食い違うチャンクを 1 回だけ無効化し、
+   * 段階に合った縁へ焼き直させる。冷え切った(段階 3)チャンクは記録を消して通常の縁へ戻す。
+   * 毎フレーム呼ばれるが、段階が変わらない間は何もしない。
    */
-  expireHot(nowSec: number): void {
-    for (const [key, until] of this.hotUntil) {
-      if (until > nowSec) continue;
-      this.hotUntil.delete(key);
-      const [cx, cy] = key.split(',').map(Number);
-      this.invalidate(cx, cy);
+  advanceHeat(nowSec: number): void {
+    for (const [key, since] of this.hotSince) {
+      const stage = heatStageAt(nowSec - since);
+      if (stage === 3) {
+        this.hotSince.delete(key);
+        this.hotBakedStage.delete(key);
+        const [cx, cy] = key.split(',').map(Number);
+        this.invalidate(cx, cy);
+        continue;
+      }
+      if (this.hotBakedStage.get(key) !== stage) {
+        this.hotBakedStage.set(key, stage);
+        const [cx, cy] = key.split(',').map(Number);
+        this.invalidate(cx, cy);
+      }
     }
   }
 
@@ -264,9 +282,13 @@ export class ChunkBaker {
       const [kx, ky] = key.split(',').map(Number);
       if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > radius) this.pending.delete(key);
     }
-    for (const key of this.hotUntil.keys()) {
+    for (const key of this.hotSince.keys()) {
       const [kx, ky] = key.split(',').map(Number);
-      if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > radius) this.hotUntil.delete(key);
+      if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > radius) this.hotSince.delete(key);
+    }
+    for (const key of this.hotBakedStage.keys()) {
+      const [kx, ky] = key.split(',').map(Number);
+      if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > radius) this.hotBakedStage.delete(key);
     }
     this.decor.evictFarFrom(cx, cy, radius);
   }
@@ -430,11 +452,14 @@ export class ChunkBaker {
 
     this.bakeHardPlates(ctx, chunk, around, bx, by, span);
 
-    // 掘削縁の熱色残光(段階 3、設計 §5.1): 期限内だけ、クレーターに面した固体の面へ
-    // 錆の帯と金の際線を焼く。期限は markHot/expireHot が管理し、冷えるときは expireHot の
-    // 無効化で 1 回だけ通常の縁に焼き直される(毎フレームの再焼き込みはしない)。
+    // 掘削縁の熱表現(段階 3 の残光を強化): 冷却段階に応じた層(白熱は白い芯+金+錆、
+    // 冷えるにつれて錆→暗い錆へ痩せる)を焼く。段階の切り替えは advanceHeat の無効化で
+    // 1 回だけ焼き直され、毎フレームの再焼き込みはしない。
     // 割り付けはワールド座標と破壊マスクだけから決まるので、部分再焼き込みでも全面と一致する。
-    if (this.isHot(cx, cy)) {
+    const heatStage = this.heatStageOf(cx, cy);
+    if (heatStage !== 3) {
+      this.hotBakedStage.set(`${cx},${cy}`, heatStage);
+      const look = HEAT_LOOKS[heatStage];
       const size = CHUNK_SIZE;
       const gn = size + 2;
       const grids: HotEdgeGrids = {
@@ -454,23 +479,40 @@ export class ChunkBaker {
           if (mask) grids.destroyed[gi] = mask[(wy - ccy * size) * size + (wx - ccx * size)];
         }
       }
-      const band = Math.max(1, Math.round(0.22 * P));
       for (const e of hotEdges(grids, size)) {
         if (e.x < span.x || e.x >= span.x + span.w || e.y < span.y || e.y >= span.y + span.h) continue;
         const x0 = e.x * P;
         const y0 = e.y * P;
-        ctx.globalAlpha = 0.5;
-        ctx.fillStyle = '#9a6d32';
-        if (e.side === 'n') ctx.fillRect(x0, y0, P, band);
-        else if (e.side === 's') ctx.fillRect(x0, y0 + P - band, P, band);
-        else if (e.side === 'w') ctx.fillRect(x0, y0, band, P);
-        else ctx.fillRect(x0 + P - band, y0, band, P);
-        ctx.globalAlpha = 0.9;
-        ctx.fillStyle = '#caa64a';
-        if (e.side === 'n') ctx.fillRect(x0, y0, P, 1);
-        else if (e.side === 's') ctx.fillRect(x0, y0 + P - 1, P, 1);
-        else if (e.side === 'w') ctx.fillRect(x0, y0, 1, P);
-        else ctx.fillRect(x0 + P - 1, y0, 1, P);
+        // 外側の層から順に重ねる(深さの大きい順)。深さはタイル単位 → px は最低 1px
+        for (const layer of look.layers) {
+          const d = Math.max(1, Math.round(layer.depth * P));
+          ctx.globalAlpha = layer.alpha;
+          ctx.fillStyle = layer.color;
+          if (e.side === 'n') ctx.fillRect(x0, y0, P, d);
+          else if (e.side === 's') ctx.fillRect(x0, y0 + P - d, P, d);
+          else if (e.side === 'w') ctx.fillRect(x0, y0, d, P);
+          else ctx.fillRect(x0 + P - d, y0, d, P);
+        }
+      }
+      // 溶けだれ(熱い段階だけ): 縁から下向きに垂れる熱色の筋。配置はワールド座標から
+      // 決定論で決まるため、部分再焼き込みでも全面と一致する。範囲判定は源の面ではなく
+      // だれの矩形そのもので行う(上のチャンクの面から垂れてくる分を取りこぼさないため)。
+      if (look.dripMaxLen > 0) {
+        for (const d of meltDrips(grids, size, heatStage, this.seed, bx, by)) {
+          if (d.x + d.w < span.x || d.x > span.x + span.w || d.y + d.len < span.y || d.y > span.y + span.h) continue;
+          const dx = d.x * P;
+          const dy = d.y * P;
+          const dw = Math.max(1, Math.round(d.w * P));
+          const dl = Math.max(1, Math.round(d.len * P));
+          ctx.globalAlpha = 0.75;
+          ctx.fillStyle = look.dripColor;
+          ctx.fillRect(dx, dy, dw, dl);
+          if (d.tip) {
+            ctx.globalAlpha = 0.95;
+            ctx.fillStyle = look.dripTipColor;
+            ctx.fillRect(dx, dy + dl - 2, dw, 2);
+          }
+        }
       }
       ctx.globalAlpha = 1;
     }
