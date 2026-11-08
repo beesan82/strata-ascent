@@ -13,6 +13,8 @@ import { drawPlayer } from './playerSprite';
 import { Post } from './post';
 import { drawHierarchyDebug } from './debugHierarchy';
 import { drawBeam, drawCharge } from './beam';
+import { debrisFragments } from './beamShape';
+import { HEAT_SECONDS } from './hotedge';
 import { MegaStructure } from './megastructure';
 import { LightShafts } from './lightshaft';
 import { BeaconLights, ambientDelta, glowStrips, type GlowStrip } from './beacon';
@@ -35,10 +37,10 @@ const VIEW_TILES_X = 34;
  */
 export const BAKE_KEEP_RADIUS = 2;
 
-/** 発射直後の画面シェイク最大振幅(px) */
-const SHAKE_MAX = 6;
+/** 発射直後の「押し」の最大振幅(px、画面座標)。SKY_PAD 以下に収める */
+const PUSH_MAX = 6;
 /**
- * drawSky の作業キャンバスの余白(px)。SHAKE_MAX 以上で、グラデのディザ位置が内部バッファと
+ * drawSky の作業キャンバスの余白(px)。PUSH_MAX 以上で、グラデのディザ位置が内部バッファと
  * そろうよう16の倍数にする(6だと量子化後に空の画素が約0.4%入れ替わった)。
  */
 const SKY_PAD = 16;
@@ -47,12 +49,34 @@ function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
+/** 発射直後の単発の「押し」(main が寿命比 t を渡す。方向はビームと逆向きに効く) */
+export interface BeamPush {
+  angle: number;
+  /** 強さ(1=発射直後 → 0=消衰) */
+  t: number;
+}
+
+/** 破片の発生点(ワールド座標)。形と配置は beamShape.debrisFragments が決める */
+export interface DebrisFx {
+  x: number;
+  y: number;
+  angle: number;
+  /** 発射ごとのキー(決定論ハッシュの種) */
+  key: number;
+  /** 発生からの経過秒 */
+  age: number;
+}
+
 /** 溜め中/発射ビームの演出パラメータ(main→renderへ毎フレーム渡す) */
 export interface GravitonFx {
   /** 溜め比率(0..1)。>0でチャージ発光を描く */
   chargeRatio: number;
   /** 生存中のビーム。nullなら描かない */
   beam: { angle: number; alpha: number } | null;
+  /** 発射直後の単発の押し。null/未指定なら画面は動かない */
+  push?: BeamPush | null;
+  /** 破片の発生点(掘削点・命中点)。fx 相乗りで小矩形だけを描く */
+  debris?: readonly DebrisFx[];
   /** パルスの弾(ワールド座標の中心と方向)。平坦色の短矩形で描く */
   pulses?: readonly { x: number; y: number; dx: number; dy: number }[];
   /** 敵(ワールド座標の中心と被弾フラッシュ)。平坦色の矩形で描く。flyer は飛行敵、
@@ -74,6 +98,7 @@ export function drawGravitonEffects(
   fx: GravitonFx,
   viewportWidth: number,
   viewportHeight: number,
+  ppt: number,
 ): void {
   if (fx.chargeRatio > 0) {
     drawCharge(ctx, muzzle.x, muzzle.y, fx.chargeRatio);
@@ -87,6 +112,7 @@ export function drawGravitonEffects(
       fx.beam.angle,
       beamLength,
       fx.beam.alpha,
+      ppt,
     );
   }
 }
@@ -186,13 +212,21 @@ export class Renderer {
   }
 
   /**
+   * 直近フレームの render の timeSec。invalidateBored が掘削縁の熱色の期限を
+   * 「直近フレーム時刻 + HEAT_SECONDS」で切るために使う(発射は update 側で起きる)。
+   */
+  private timeSec = 0;
+
+  /**
    * ChunkStore.applyDestructionと対で呼ぶ。ボーリングされたチャンクと、境界際の破壊で見た目が
    * 変わる隣接チャンクの焼き込み画像を再焼き込み待ちにする。affected は Destruction.bore の戻り値。
+   * あわせて再焼き込み対象へ掘削縁の熱色の期限を刻む(段階 3、設計 §5.1)。
    */
   invalidateBored(affected: Iterable<string>, store: ChunkStore): void {
     for (const key of rebakeTargets(affected, (x, y) => store.destroyedMask(x, y), CHUNK_SIZE, REBAKE_DILATE)) {
       const [cx, cy] = key.split(',').map(Number);
       this.baker.invalidate(cx, cy);
+      this.baker.markHot(cx, cy, this.timeSec + HEAT_SECONDS);
     }
   }
 
@@ -244,6 +278,10 @@ export class Renderer {
   ): void {
     const w = this.pipeline.bufW;
     const h = this.pipeline.bufH;
+    this.timeSec = timeSec;
+    // 掘削縁の熱色: 焼き込み側の現在時刻を渡し、期限切れのチャンクは 1 回だけ通常の縁へ戻す
+    this.baker.nowSec = timeSec;
+    this.baker.expireHot(timeSec);
     // cam.zoom<1 で ppt が縮み、画面に入るタイル数が増える(開放空間の豆粒化)。
     // cam.zoom は段キーパー+advanceZoom(core/zoom.ts)が段へ寄せた描画ズームそのもの:
     // 段に静止しているときは段の値、段の間を遷移しているときだけ非段の値を取る
@@ -256,17 +294,19 @@ export class Renderer {
     );
     renderCam.zoom = renderZoom;
 
-    // 発射直後の画面シェイク: シーン全体を微小にずらす。ビームの残光(alpha)に比例。
+    // 発射直後の単発の「押し」: 発射方向と逆向きへ画面全体を押し、0.1 秒で減衰する。
+    // 毎フレームのランダムな震え(旧シェイク)は廃止した(段階 3、設計 §5.1)。
     // ctxを丸ごと平行移動するので各レイヤーは一貫してずれる。restoreで必ず戻す。
-    const shake = fx.beam ? fx.beam.alpha * SHAKE_MAX : 0;
     if (this.profileStages) this.stageT = performance.now();
     ctx.save();
-    if (shake > 0.01) {
-      const internalShake = Math.max(1, Math.round(shake / this.pipeline.scale));
-      ctx.translate(
-        (Math.random() < 0.5 ? -1 : 1) * internalShake,
-        (Math.random() < 0.5 ? -1 : 1) * internalShake,
-      );
+    if (fx.push && fx.push.t > 0) {
+      const mag = (PUSH_MAX * fx.push.t) / this.pipeline.scale;
+      if (mag >= 0.5) {
+        ctx.translate(
+          Math.round(-Math.cos(fx.push.angle) * mag),
+          Math.round(-Math.sin(fx.push.angle) * mag),
+        );
+      }
     }
 
     // バイオーム混合(背景・環境光で共有)
@@ -366,42 +406,74 @@ export class Renderer {
 
     // 重力子砲の演出: ライトの「上」に描いて発光体として読ませる。
     // ただし post(グレイン+ビネット)の「前」に描くことで画面全体の質感と馴染ませる。
-    drawGravitonEffects(ctx, visualAnchors.muzzle, fx, w, h);
+    drawGravitonEffects(ctx, visualAnchors.muzzle, fx, w, h, ppt);
 
-    // パルスの弾: 同じ fx 相乗りで、平坦色の短矩形だけを描く(新規パスなし)
+    // 破片: 同じ fx 相乗りで、決定論配置の小矩形だけを描く(新規パスなし)
+    if (fx.debris && fx.debris.length > 0) {
+      for (const d of fx.debris) {
+        for (const f of debrisFragments(d.key, d.angle, d.age)) {
+          const s = Math.max(1, Math.round(f.size * ppt));
+          const sx = Math.round((d.x + f.dx - renderCam.x) * ppt + w / 2);
+          const sy = Math.round((d.y + f.dy - renderCam.y) * ppt + h / 2);
+          ctx.globalAlpha = f.alpha;
+          ctx.fillStyle = f.color;
+          ctx.fillRect(Math.round(sx - s / 2), Math.round(sy - s / 2), s, s);
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // パルスの弾: 同じ fx 相乗りで、ビームと同じ文法の 2 層(外帯=鋼、芯=白)で描く(新規パスなし)
     if (fx.pulses && fx.pulses.length > 0) {
-      ctx.fillStyle = '#d7ecff';
-      const long = Math.max(2, Math.round(0.55 * ppt));
-      const short = Math.max(1, Math.round(0.18 * ppt));
+      const oLong = Math.max(2, Math.round(0.62 * ppt));
+      const oShort = Math.max(1, Math.round(0.26 * ppt));
+      const cLong = Math.max(2, Math.round(0.44 * ppt));
+      const cShort = Math.max(1, Math.round(0.13 * ppt));
       for (const p of fx.pulses) {
         const sx = Math.round((p.x - renderCam.x) * ppt + w / 2);
         const sy = Math.round((p.y - renderCam.y) * ppt + h / 2);
         const horiz = Math.abs(p.dx) >= Math.abs(p.dy);
-        const bw = horiz ? long : short;
-        const bh = horiz ? short : long;
-        ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy - bh / 2), bw, bh);
+        ctx.fillStyle = '#51728d';
+        const ow = horiz ? oLong : oShort;
+        const oh = horiz ? oShort : oLong;
+        ctx.fillRect(Math.round(sx - ow / 2), Math.round(sy - oh / 2), ow, oh);
+        ctx.fillStyle = '#c7d0ce';
+        const cw = horiz ? cLong : cShort;
+        const ch = horiz ? cShort : cLong;
+        ctx.fillRect(Math.round(sx - cw / 2), Math.round(sy - ch / 2), cw, ch);
       }
     }
 
-    // 敵: 同じ fx 相乗りで平坦色の矩形 + 帯だけ(新規パスなし)。
-    // 歩行敵は足元の帯、飛行敵は上部の帯(回転翼の見立て)と色で区別する
+    // 敵: 同じ fx 相乗りで、世界の面構成の文法(胴の面・暗い下部・目の灯)に揃える(新規パスなし)。
+    // 色はすべてパレット実在色(従来色は量子化で実質この色に寄っていた)。
+    // 歩行敵は錆の胴+金の目、飛行敵は鋼の胴+白の目で区別する
     if (fx.enemies && fx.enemies.length > 0) {
       const band = Math.max(1, Math.round(0.18 * ppt));
       for (const e of fx.enemies) {
         const sx = Math.round((e.x - renderCam.x) * ppt + w / 2);
         const sy = Math.round((e.y - renderCam.y) * ppt + h / 2);
         if (e.w !== undefined && e.h !== undefined) {
-          // ボス「広間番人」: 体格ぶんの矩形 + 足元の帯。相の違いを色で読ませる:
-          // 予備動作は点滅(テレグラフ)、突進は熱色、硬直は淡色に芯を晒す(撃ち時の合図)
+          // ボス「広間番人」: 体格ぶんの胴 + プレートの継ぎ目 + 暗い足元。相の違いを色で読ませる:
+          // 予備動作は点滅(テレグラフ)、突進は熱色(錆)、硬直は淡色に芯を晒す(撃ち時の合図)
           const bw = Math.max(2, Math.round(e.w * ppt));
           const bh = Math.max(2, Math.round(e.h * ppt));
-          let color = '#5d343c';
-          if (e.bossPhase === 'windup') color = Math.floor(timeSec * 10) % 2 === 0 ? '#e8b4b8' : '#5d343c';
-          else if (e.bossPhase === 'charge') color = '#a8564f';
-          else if (e.bossPhase === 'stunned') color = '#c9b8a6';
-          ctx.fillStyle = e.flash ? '#f2d7d7' : color;
+          let color = '#5a3a24';
+          if (e.bossPhase === 'windup') color = Math.floor(timeSec * 10) % 2 === 0 ? '#c7d0ce' : '#5a3a24';
+          else if (e.bossPhase === 'charge') color = '#9a6d32';
+          else if (e.bossPhase === 'stunned') color = '#c7d0ce';
+          ctx.fillStyle = e.flash ? '#c7d0ce' : color;
           ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy - bh / 2), bw, bh);
-          ctx.fillStyle = '#2c1e22';
+          // プレートの継ぎ目(縦 2 本 + 横 1 本)。相の色替え・フラッシュの上にも残す。
+          // alpha は HARD 板の継ぎ目(0.9)に合わせる(薄いと量子化のディザで破線状に割れる)
+          ctx.globalAlpha = 0.9;
+          ctx.fillStyle = '#3d2618';
+          const seamW = Math.max(1, Math.round(0.06 * ppt));
+          for (const fxr of [1 / 3, 2 / 3]) {
+            ctx.fillRect(Math.round(sx - bw / 2 + bw * fxr - seamW / 2), Math.round(sy - bh / 2), seamW, bh);
+          }
+          ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy - seamW / 2), bw, seamW);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = '#3d2618';
           ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy + bh / 2) - band, bw, band);
           if (e.bossPhase === 'stunned' && !e.flash) {
             // 芯は金(パレット実在色)。淡色の本体と量子化後も分離して「撃ち時」を読ませる
@@ -413,11 +485,21 @@ export class Renderer {
           continue;
         }
         const s = Math.max(2, Math.round((e.flyer ? 0.8 : 0.9) * ppt));
-        ctx.fillStyle = e.flash ? '#f2d7d7' : e.flyer ? '#7fa3c0' : '#8a4b52';
-        ctx.fillRect(Math.round(sx - s / 2), Math.round(sy - s / 2), s, s);
-        ctx.fillStyle = e.flyer ? '#2e3d4a' : '#3a2b30';
-        const bandY = e.flyer ? Math.round(sy - s / 2) : Math.round(sy + s / 2) - band;
-        ctx.fillRect(Math.round(sx - s / 2), bandY, s, band);
+        const x0 = Math.round(sx - s / 2);
+        const y0 = Math.round(sy - s / 2);
+        // 胴の面
+        ctx.fillStyle = e.flash ? '#c7d0ce' : e.flyer ? '#51728d' : '#9a6d32';
+        ctx.fillRect(x0, y0, s, s);
+        // 暗い帯: 歩行敵は足元、飛行敵は上部(回転翼の見立て)
+        ctx.fillStyle = e.flyer ? '#16202b' : '#3d2618';
+        const bandY = e.flyer ? y0 : y0 + s - band;
+        ctx.fillRect(x0, bandY, s, band);
+        // 目の灯(1 点)。フラッシュ中は胴が淡色になるので色を反転して残す
+        const eye = Math.max(1, Math.round(0.16 * ppt));
+        ctx.fillStyle = e.flyer
+          ? (e.flash ? '#51728d' : '#c7d0ce')
+          : (e.flash ? '#9a6d32' : '#caa64a');
+        ctx.fillRect(Math.round(sx - eye / 2), Math.round(sy - s * 0.18 - eye / 2), eye, eye);
       }
     }
 
@@ -488,7 +570,7 @@ export class Renderer {
       drawHierarchyDebug(ctx, renderCam, this.seed, w, h, tilesAcross);
     }
 
-    ctx.restore(); // シェイクの平行移動を戻す
+    ctx.restore(); // 「押し」の平行移動を戻す
     // update側がボーリング/ビーム方向として読めるよう、算出したエイム角を公開する
     this.aimAngle = angle;
     const tPresent = performance.now();
