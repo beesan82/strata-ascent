@@ -176,15 +176,16 @@ describe('player sprite', () => {
     expect(
       (playerSprite as unknown as { PLAYER_COLORS: unknown }).PLAYER_COLORS,
     ).toEqual({
-      face: '#d9dddc',
-      uniform: '#151820',
-      uniformLight: '#303640',
-      joint: '#6f7479',
-      chest: '#7f1f28',
-      chestLight: '#a9363e',
-      visor: '#171015',
-      indicator: '#e64747',
-      weapon: '#353a40',
+      face: '#c7d0ce',
+      uniform: '#16202b',
+      uniformDark: '#0a121a',
+      uniformLight: '#2a586f',
+      joint: '#51728d',
+      chest: '#9a6d32',
+      chestLight: '#caa64a',
+      visor: '#05090f',
+      indicator: '#c7d0ce',
+      weapon: '#192633',
     });
   });
 

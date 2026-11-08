@@ -1,4 +1,5 @@
 import { TILE } from '../world/tiles';
+import { walkPhaseAdvance } from '../core/gait';
 import { moveBody, type Body, type TileLookup } from './physics';
 
 export interface PlayerInput {
@@ -36,7 +37,7 @@ export class Player {
   body: Body;
   /** 向き(1=右, -1=左)。描画用でゲームプレイには影響しない */
   facing: 1 | -1 = 1;
-  /** 歩行アニメーションの位相(接地歩行中のみ進む) */
+  /** 歩行アニメーションの位相(接地歩行中のみ進む。移動距離駆動: 歩幅 1 タイル = π) */
   walkPhase = 0;
   private coyoteT = 0;
   private bufferT = 0;
@@ -106,7 +107,8 @@ export class Player {
 
     if (b.vx > 0) this.facing = 1;
     else if (b.vx < 0) this.facing = -1;
-    if (b.vx !== 0 && b.onGround) this.walkPhase += dt * 9 * (Math.abs(b.vx) / WALK_SPEED);
+    // 位相は時間ではなく移動距離で進める(歩幅と同期させ、足裏の滑りを消す。core/gait)
+    if (b.vx !== 0 && b.onGround) this.walkPhase += walkPhaseAdvance(Math.abs(b.vx) * dt);
 
     // ジャンプの押下エッジでバッファを積み、解放エッジで可変ジャンプの割り込みを行う
     const jumpPressed = input.jump && !this.prevJump;
