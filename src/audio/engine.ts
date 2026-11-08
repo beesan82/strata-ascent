@@ -1,10 +1,34 @@
 import type { BiomeId } from '../world/biomeCells';
 import {
-  BEAT_DETUNE_HZ, chargeFreq, chargeGain, crushParams, dbToGain, droneParams,
+  BEAT_DETUNE_HZ, chargeFreq, chargeGain, crushParams, dbToGain,
+  DOWN_FREQ_END, DOWN_FREQ_START, DOWN_GAIN, DOWN_NOISE_GAIN, DOWN_NOISE_HZ, DOWN_NOISE_SECONDS, DOWN_SECONDS,
+  droneParams,
   FIRE_NOISE_END_HZ, FIRE_NOISE_GAIN, FIRE_NOISE_SECONDS, FIRE_NOISE_START_HZ,
   FIRE_SUB_END_HZ, FIRE_SUB_GAIN, FIRE_SUB_SECONDS, FIRE_SUB_START_HZ,
-  footstepCrossed, HUM_FREQ, interfaceBeat, MASTER_DB, PASSAGE_DECAY, PASSAGE_FREQ,
+  footstepCrossed, HIT_FREQ, HIT_GAIN, HIT_NOISE_GAIN, HIT_NOISE_HZ, HIT_SECONDS, HUM_FREQ, interfaceBeat,
+  DEATH_FREQ_END, DEATH_FREQ_START, DEATH_GAIN, DEATH_SECONDS,
+  HURT_FREQ_END, HURT_FREQ_START, HURT_GAIN, HURT_SECONDS,
+  JUMP_FREQ_END, JUMP_FREQ_START, JUMP_GAIN, JUMP_SECONDS,
+  LADDER_FREQ_A, LADDER_FREQ_B, LADDER_GAIN, LADDER_SECONDS, landGain, LAND_NOISE_HZ, LAND_SECONDS,
+  MASTER_DB, PASSAGE_DECAY, PASSAGE_FREQ,
+  PULSE_FREQ_END, PULSE_FREQ_START, PULSE_GAIN, PULSE_SECONDS, pulseDetune,
+  REVIVE_DELAY, REVIVE_GAIN, REVIVE_NOTE_GAP, REVIVE_NOTES,
+  CACHE_GAIN, CACHE_HZ_END, CACHE_HZ_START, CACHE_SECONDS,
+  EAT_GAIN, EAT_GAP, EAT_HZ, EAT_SECONDS,
+  JINGLE_GAIN, JINGLE_NOTE_GAP, JINGLE_NOTE_SECONDS, MILESTONE_NOTES, NEW_RECORD_NOTES,
+  PICKUP_GAIN, PICKUP_NOTE_GAP, pickupNotes,
+  RECHARGE_FREQ, RECHARGE_GAIN, RECHARGE_SECONDS,
+  RESPAWN_FREQ, RESPAWN_GAIN, RESPAWN_SECONDS, REST_STOCK_GAIN, REST_STOCK_NOTES,
+  SATIETY_WARN_FREQ, SATIETY_WARN_GAIN, SATIETY_WARN_GAP, SATIETY_WARN_SECONDS,
+  SWITCH_FREQ, SWITCH_GAIN, SWITCH_SECONDS,
+  BOSS_APPEAR_FREQ, BOSS_APPEAR_GAIN, BOSS_APPEAR_NOISE_GAIN, BOSS_APPEAR_NOISE_HZ, BOSS_APPEAR_SECONDS,
+  BOSS_CHARGE_GAIN, BOSS_CHARGE_HZ_END, BOSS_CHARGE_HZ_START, BOSS_CHARGE_SECONDS,
+  BOSS_CRASH_GAIN, BOSS_CRASH_HZ, BOSS_CRASH_SECONDS, BOSS_CRASH_SUB_FREQ, BOSS_CRASH_SUB_GAIN, BOSS_CRASH_SUB_SECONDS,
+  BOSS_DOWN_FREQ_END, BOSS_DOWN_FREQ_START, BOSS_DOWN_GAIN, BOSS_DOWN_NOISE_GAIN, BOSS_DOWN_NOISE_HZ, BOSS_DOWN_NOISE_SECONDS, BOSS_DOWN_SECONDS,
+  FLYER_FREQ_END, FLYER_FREQ_START, FLYER_GAIN, FLYER_SECONDS,
+  TURRET_FREQ_END, TURRET_FREQ_START, TURRET_GAIN, TURRET_SECONDS,
   reverbBucket, reverbSecondsForBucket,
+  STARVE_FREQ_END, STARVE_FREQ_START, STARVE_GAIN, STARVE_SECONDS,
   WARN_FREQ_END, WARN_FREQ_START, WARN_GAIN, WARN_SECONDS,
 } from './params';
 
@@ -22,6 +46,10 @@ import {
  *   保持し、比率が 0 に戻れば短いリリースで止める。発射音(cannonFire)はサブ正弦波の pitch 落下 +
  *   ローパスを落とすノイズの破裂。破砕音(cannonCrush)は破壊数でパラメータが変わるノイズの崩落。
  * - ボス警告音(bossWarn): 予備動作の開始に 1 回だけ鳴る短い矩形波の下降チャープ。
+ * - パルス(pulseFire): 6 発/秒の連射に耐える短い三角波の下降音。発射インデックスで pitch を
+ *   ばらし(pulseDetune)、異常な高密度の呼び出しは最小間隔で間引く。残響には送らず締める。
+ * - 命中(enemyHit)と撃破(enemyDown): ワンショット。撃破は main の onEnemyKilled に集約され、
+ *   パルスでもビームでも同じ音になる。
  * 全ての公開メソッドは開始前(ctx === null)なら何もしない。
  */
 export interface AudioFrame {
@@ -54,6 +82,8 @@ const LONG_NOISE_SECONDS = 1.5;
 const CHARGE_FOLLOW = 0.03;
 /** 溜め音のリリース(キャンセル/発射で比率が 0 に戻ったときの止まり方) */
 const CHARGE_RELEASE = 0.05;
+/** パルス音の最小発音間隔(秒)。通常の連射(1/6 秒)では効かず、異常な集中だけを間引く */
+const PULSE_MIN_INTERVAL = 0.03;
 
 interface Charge {
   main: OscillatorNode;
@@ -84,6 +114,7 @@ export class AudioEngine {
   private humGain!: GainNode;
   private isMuted = false;
   private prevWalkPhase = 0;
+  private lastPulseAt = -Infinity;
 
   get started(): boolean {
     return this.ctx !== null;
@@ -177,6 +208,538 @@ export class AudioEngine {
     if (frame.walking && footstepCrossed(this.prevWalkPhase, frame.walkPhase)) this.footstep();
     this.prevWalkPhase = frame.walkPhase;
     this.updateCharge(frame.chargeRatio);
+  }
+
+  /**
+   * パルスの発射音: 短い三角波の pitch 落下。連射(6 発/秒)でも煩くならないよう
+   * 残響には送らず dry だけで締め、pitch は発射インデックスで決定論にばらす。
+   * 発射間隔(1/6 秒)より詰まった呼び出しは PULSE_MIN_INTERVAL で間引く(保険)。
+   */
+  pulseFire(shotIndex: number): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    if (now - this.lastPulseAt < PULSE_MIN_INTERVAL) return;
+    this.lastPulseAt = now;
+    const mul = pulseDetune(shotIndex);
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(PULSE_FREQ_START * mul, now);
+    osc.frequency.exponentialRampToValueAtTime(PULSE_FREQ_END * mul, now + PULSE_SECONDS);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(PULSE_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + PULSE_SECONDS);
+    osc.connect(g);
+    g.connect(this.dry);
+    osc.start(now);
+    osc.stop(now + PULSE_SECONDS + 0.05);
+  }
+
+  /** 敵への命中(非撃破): 矩形波の低いブリップ + ノイズのティック */
+  enemyHit(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = HIT_FREQ;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(HIT_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + HIT_SECONDS);
+    osc.connect(g);
+    g.connect(this.dry);
+    osc.start(now);
+    osc.stop(now + HIT_SECONDS + 0.05);
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = HIT_NOISE_HZ;
+    bp.Q.value = 1;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(HIT_NOISE_GAIN, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + HIT_SECONDS);
+    src.connect(bp);
+    bp.connect(ng);
+    ng.connect(this.dry);
+    src.start(now);
+    src.stop(now + HIT_SECONDS + 0.05);
+  }
+
+  /** 敵の撃破: 正弦波の pitch 落下(芯)+ ローパスのノイズ(崩れ)。パルスでもビームでも同じ音 */
+  enemyDown(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(DOWN_FREQ_START, now);
+    osc.frequency.exponentialRampToValueAtTime(DOWN_FREQ_END, now + DOWN_SECONDS);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(DOWN_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + DOWN_SECONDS);
+    osc.connect(g);
+    g.connect(this.dry);
+    g.connect(this.convolver);
+    osc.start(now);
+    osc.stop(now + DOWN_SECONDS + 0.05);
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseLong;
+    src.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = DOWN_NOISE_HZ;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(DOWN_NOISE_GAIN, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + DOWN_NOISE_SECONDS);
+    src.connect(lp);
+    lp.connect(ng);
+    ng.connect(this.dry);
+    src.start(now, Math.random());
+    src.stop(now + DOWN_NOISE_SECONDS + 0.05);
+  }
+
+  /** プレイヤーの被弾: 鋸波の pitch 落下。ハプティクス(中)と対になる */
+  hurt(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(HURT_FREQ_START, now);
+    osc.frequency.exponentialRampToValueAtTime(HURT_FREQ_END, now + HURT_SECONDS);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(HURT_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + HURT_SECONDS);
+    osc.connect(g);
+    g.connect(this.dry);
+    g.connect(this.convolver);
+    osc.start(now);
+    osc.stop(now + HURT_SECONDS + 0.05);
+  }
+
+  /** 飢餓ダメージ: 被弾とは別の、三角波の空虚な下降 */
+  starveHurt(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(STARVE_FREQ_START, now);
+    osc.frequency.exponentialRampToValueAtTime(STARVE_FREQ_END, now + STARVE_SECONDS);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(STARVE_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + STARVE_SECONDS);
+    osc.connect(g);
+    g.connect(this.dry);
+    osc.start(now);
+    osc.stop(now + STARVE_SECONDS + 0.05);
+  }
+
+  /** プレイヤーの死亡: 長い pitch 落下 */
+  death(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(DEATH_FREQ_START, now);
+    osc.frequency.exponentialRampToValueAtTime(DEATH_FREQ_END, now + DEATH_SECONDS);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(DEATH_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + DEATH_SECONDS);
+    osc.connect(g);
+    g.connect(this.dry);
+    g.connect(this.convolver);
+    osc.start(now);
+    osc.stop(now + DEATH_SECONDS + 0.05);
+  }
+
+  /** 復活: 死亡と同一フレームに呼ばれるため、少し遅らせて 2 音の正弦波を出す */
+  revive(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t0 = ctx.currentTime + REVIVE_DELAY;
+    REVIVE_NOTES.forEach((freq, i) => {
+      const t = t0 + i * REVIVE_NOTE_GAP;
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(REVIVE_GAIN, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+      osc.connect(g);
+      g.connect(this.dry);
+      g.connect(this.convolver);
+      osc.start(t);
+      osc.stop(t + 0.3);
+    });
+  }
+
+  /** ジャンプ: 軽い pitch 上昇 */
+  jump(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(JUMP_FREQ_START, now);
+    osc.frequency.exponentialRampToValueAtTime(JUMP_FREQ_END, now + JUMP_SECONDS);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(JUMP_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + JUMP_SECONDS);
+    osc.connect(g);
+    g.connect(this.dry);
+    osc.start(now);
+    osc.stop(now + JUMP_SECONDS + 0.05);
+  }
+
+  /** 着地: 低いノイズのドスン。ゲインは landGain(落下速度)が決め、0 なら鳴らさない */
+  land(fallSpeed: number): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const gain = landGain(fallSpeed);
+    if (gain <= 0) return;
+    const now = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = LAND_NOISE_HZ;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + LAND_SECONDS);
+    src.connect(lp);
+    lp.connect(g);
+    g.connect(this.dry);
+    g.connect(this.convolver);
+    src.start(now);
+    src.stop(now + LAND_SECONDS + 0.05);
+  }
+
+  /** 梯子の段: 短いノイズのティック。段の偶奇で周波数を交互に変える */
+  ladderRung(rungIndex: number): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = rungIndex % 2 === 0 ? LADDER_FREQ_A : LADDER_FREQ_B;
+    bp.Q.value = 1.2;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(LADDER_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + LADDER_SECONDS);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.dry);
+    src.start(now);
+    src.stop(now + LADDER_SECONDS + 0.05);
+  }
+
+  /**
+   * 上行の短い音列(取得・補給・ジングルの共通形)。各音は正弦波で、立ち上がりだけ
+   * 線形に開いてクリックを消し、指数で減衰させる。残響にも送って広がりを持たせる。
+   */
+  private noteRun(notes: readonly number[], gain: number, gap: number, noteSeconds: number): void {
+    const ctx = this.ctx!;
+    const t0 = ctx.currentTime;
+    notes.forEach((freq, i) => {
+      const t = t0 + i * gap;
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(gain, t + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.001, t + noteSeconds);
+      osc.connect(g);
+      g.connect(this.dry);
+      g.connect(this.convolver);
+      osc.start(t);
+      osc.stop(t + noteSeconds + 0.05);
+    });
+  }
+
+  /** ドロップ取得: 種別ごとの上行 2 音(pickupNotes) */
+  pickup(kind: string): void {
+    if (!this.ctx) return;
+    this.noteRun(pickupNotes(kind), PICKUP_GAIN, PICKUP_NOTE_GAP, 0.16);
+  }
+
+  /** 補給キャッシュ開封: バンドパスを掃引するノイズの擦れ */
+  cacheOpen(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseLong;
+    src.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 1.1;
+    bp.frequency.setValueAtTime(CACHE_HZ_START, now);
+    bp.frequency.exponentialRampToValueAtTime(CACHE_HZ_END, now + CACHE_SECONDS);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(CACHE_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + CACHE_SECONDS);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.dry);
+    g.connect(this.convolver);
+    src.start(now, Math.random());
+    src.stop(now + CACHE_SECONDS + 0.05);
+  }
+
+  /** 休憩点の初回補給: 温かい上行 2 音 */
+  restStock(): void {
+    if (!this.ctx) return;
+    this.noteRun(REST_STOCK_NOTES, REST_STOCK_GAIN, 0.08, 0.25);
+  }
+
+  /** 復活点の更新: 控えめな単音(箱に入るたびでなく、移ったときだけ呼ばれる前提) */
+  respawnSet(): void {
+    if (!this.ctx) return;
+    this.noteRun([RESPAWN_FREQ], RESPAWN_GAIN, 0, RESPAWN_SECONDS + 0.05);
+  }
+
+  /** 武器切替: 短い矩形波のクリック */
+  weaponSwitch(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = SWITCH_FREQ;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(SWITCH_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + SWITCH_SECONDS);
+    osc.connect(g);
+    g.connect(this.dry);
+    osc.start(now);
+    osc.stop(now + SWITCH_SECONDS + 0.05);
+  }
+
+  /** 砲の弾回復の完了: ごく小さな単音の合図 */
+  rechargeTick(): void {
+    if (!this.ctx) return;
+    this.noteRun([RECHARGE_FREQ], RECHARGE_GAIN, 0, RECHARGE_SECONDS + 0.03);
+  }
+
+  /** 満腹度の警告(レベルが low / critical へ落ちた遷移): 低い矩形波の 2 連 */
+  satietyWarn(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t0 = ctx.currentTime;
+    for (let i = 0; i < 2; i++) {
+      const t = t0 + i * SATIETY_WARN_GAP;
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.value = SATIETY_WARN_FREQ;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(SATIETY_WARN_GAIN, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + SATIETY_WARN_SECONDS);
+      osc.connect(g);
+      g.connect(this.dry);
+      osc.start(t);
+      osc.stop(t + SATIETY_WARN_SECONDS + 0.05);
+    }
+  }
+
+  /** 糧食の自動摂取: ローパスのノイズを 2 回噛む */
+  eat(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t0 = ctx.currentTime;
+    for (let i = 0; i < 2; i++) {
+      const t = t0 + i * EAT_GAP;
+      const src = ctx.createBufferSource();
+      src.buffer = this.noise;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = EAT_HZ;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(EAT_GAIN, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + EAT_SECONDS);
+      src.connect(lp);
+      lp.connect(g);
+      g.connect(this.dry);
+      src.start(t);
+      src.stop(t + EAT_SECONDS + 0.05);
+    }
+  }
+
+  /** 階層の節目到達: 3 音の上行ジングル */
+  milestone(): void {
+    if (!this.ctx) return;
+    this.noteRun(MILESTONE_NOTES, JINGLE_GAIN, JINGLE_NOTE_GAP, JINGLE_NOTE_SECONDS);
+  }
+
+  /** 最深の新記録: 4 音の上行ジングル */
+  newRecord(): void {
+    if (!this.ctx) return;
+    this.noteRun(NEW_RECORD_NOTES, JINGLE_GAIN, JINGLE_NOTE_GAP, JINGLE_NOTE_SECONDS);
+  }
+
+  /** 砲台の発射: 矩形波の硬い下降。パルス(三角波・低め)と音色で分ける */
+  turretFire(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(TURRET_FREQ_START, now);
+    osc.frequency.exponentialRampToValueAtTime(TURRET_FREQ_END, now + TURRET_SECONDS);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(TURRET_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + TURRET_SECONDS);
+    osc.connect(g);
+    g.connect(this.dry);
+    osc.start(now);
+    osc.stop(now + TURRET_SECONDS + 0.05);
+  }
+
+  /** 飛行敵の追尾開始: 小さな上昇チャープ。頻発しても煩くならない音量に抑える */
+  flyerAlert(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(FLYER_FREQ_START, now);
+    osc.frequency.exponentialRampToValueAtTime(FLYER_FREQ_END, now + FLYER_SECONDS);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(FLYER_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + FLYER_SECONDS);
+    osc.connect(g);
+    g.connect(this.dry);
+    osc.start(now);
+    osc.stop(now + FLYER_SECONDS + 0.05);
+  }
+
+  /** ボスの出現: 低い正弦波が膨らんで消える + ノイズの地鳴り */
+  bossAppear(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = BOSS_APPEAR_FREQ;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(BOSS_APPEAR_GAIN, now + BOSS_APPEAR_SECONDS * 0.4);
+    g.gain.exponentialRampToValueAtTime(0.001, now + BOSS_APPEAR_SECONDS);
+    osc.connect(g);
+    g.connect(this.dry);
+    g.connect(this.convolver);
+    osc.start(now);
+    osc.stop(now + BOSS_APPEAR_SECONDS + 0.05);
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseLong;
+    src.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = BOSS_APPEAR_NOISE_HZ;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(BOSS_APPEAR_NOISE_GAIN, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + BOSS_APPEAR_SECONDS);
+    src.connect(lp);
+    lp.connect(ng);
+    ng.connect(this.dry);
+    src.start(now, Math.random());
+    src.stop(now + BOSS_APPEAR_SECONDS + 0.05);
+  }
+
+  /** ボスの突進開始: バンドパスを掃引するノイズの疾走 */
+  bossCharge(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseLong;
+    src.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 1;
+    bp.frequency.setValueAtTime(BOSS_CHARGE_HZ_START, now);
+    bp.frequency.exponentialRampToValueAtTime(BOSS_CHARGE_HZ_END, now + BOSS_CHARGE_SECONDS);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(BOSS_CHARGE_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + BOSS_CHARGE_SECONDS);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.dry);
+    g.connect(this.convolver);
+    src.start(now, Math.random());
+    src.stop(now + BOSS_CHARGE_SECONDS + 0.05);
+  }
+
+  /** ボスの激突(硬直入り): 低いノイズの衝突 + サブのドスン */
+  bossCrash(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseLong;
+    src.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = BOSS_CRASH_HZ;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(BOSS_CRASH_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + BOSS_CRASH_SECONDS);
+    src.connect(lp);
+    lp.connect(g);
+    g.connect(this.dry);
+    g.connect(this.convolver);
+    src.start(now, Math.random());
+    src.stop(now + BOSS_CRASH_SECONDS + 0.05);
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.value = BOSS_CRASH_SUB_FREQ;
+    const sg = ctx.createGain();
+    sg.gain.setValueAtTime(BOSS_CRASH_SUB_GAIN, now);
+    sg.gain.exponentialRampToValueAtTime(0.001, now + BOSS_CRASH_SUB_SECONDS);
+    sub.connect(sg);
+    sg.connect(this.dry);
+    sub.start(now);
+    sub.stop(now + BOSS_CRASH_SUB_SECONDS + 0.05);
+  }
+
+  /** ボスの撃破: 通常撃破より長く重い pitch 落下 + ノイズの崩壊 */
+  bossDown(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(BOSS_DOWN_FREQ_START, now);
+    osc.frequency.exponentialRampToValueAtTime(BOSS_DOWN_FREQ_END, now + BOSS_DOWN_SECONDS);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(BOSS_DOWN_GAIN, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + BOSS_DOWN_SECONDS);
+    osc.connect(g);
+    g.connect(this.dry);
+    g.connect(this.convolver);
+    osc.start(now);
+    osc.stop(now + BOSS_DOWN_SECONDS + 0.05);
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseLong;
+    src.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = BOSS_DOWN_NOISE_HZ;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(BOSS_DOWN_NOISE_GAIN, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + BOSS_DOWN_NOISE_SECONDS);
+    src.connect(lp);
+    lp.connect(ng);
+    ng.connect(this.dry);
+    ng.connect(this.convolver);
+    src.start(now, Math.random());
+    src.stop(now + BOSS_DOWN_NOISE_SECONDS + 0.05);
   }
 
   /** 通過音(見晴らし台に出た瞬間) */
@@ -347,6 +910,7 @@ export class AudioEngine {
     g.connect(this.dry);
     g.connect(this.convolver);
     src.start(now);
+    src.stop(now + FOOTSTEP_SECONDS + 0.05);
   }
 
   /** 層のドローンを切り替える。旧組はゲインを 0 へ追従させて 2 秒後に止める */

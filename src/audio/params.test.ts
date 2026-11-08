@@ -5,7 +5,9 @@ import {
   BEAT_RANGE, beaconHum, CHARGE_FREQ_END, CHARGE_FREQ_START, CHARGE_GAIN, chargeFreq, chargeGain,
   CRUSH_GAIN_MAX, CRUSH_GAIN_MIN, CRUSH_HZ_MAX, CRUSH_HZ_MIN, CRUSH_MAX_TILES, CRUSH_SECONDS_MAX, CRUSH_SECONDS_MIN, crushParams,
   dbToGain, DRONE_TABLE, droneParams, footstepCrossed, HUM_RANGE, interfaceBeat,
-  MASTER_DB, nearestPlateDistance, REVERB_BUCKETS, REVERB_MAX, REVERB_MIN, reverbBucket, reverbSeconds, reverbSecondsForBucket,
+  MASTER_DB, nearestPlateDistance, PULSE_DETUNE, pulseDetune, REVERB_BUCKETS, REVERB_MAX, REVERB_MIN, reverbBucket, reverbSeconds, reverbSecondsForBucket,
+  LAND_GAIN_MAX, LAND_MIN_VY, landGain, LADDER_RUNG_STEP, rungCrossed,
+  MILESTONE_NOTES, NEW_RECORD_NOTES, PICKUP_NOTES, pickupNotes,
 } from './params';
 
 describe('audio params', () => {
@@ -109,5 +111,53 @@ describe('audio params', () => {
     const p1 = crushParams(1);
     expect(p1.gain).toBeGreaterThanOrEqual(CRUSH_GAIN_MIN);
     expect(p1.seconds).toBeGreaterThanOrEqual(CRUSH_SECONDS_MIN);
+  });
+  it('パルスの pitch ばらしは決定論で、±PULSE_DETUNE の範囲に収まり、毎回同じにはならない', () => {
+    for (let i = 0; i < 64; i++) {
+      expect(pulseDetune(i)).toBe(pulseDetune(i)); // 同じ index では同じ値
+      expect(pulseDetune(i)).toBeGreaterThanOrEqual(1 - PULSE_DETUNE);
+      expect(pulseDetune(i)).toBeLessThanOrEqual(1 + PULSE_DETUNE);
+    }
+    const values = new Set(Array.from({ length: 12 }, (_, i) => pulseDetune(i)));
+    expect(values.size).toBeGreaterThanOrEqual(8); // 連射で単調にならない程度にはばらつく
+  });
+  it('着地音のゲインは小さな落下では 0、落下速度で増えて LAND_GAIN_MAX で頭打ち', () => {
+    expect(landGain(0)).toBe(0);
+    expect(landGain(LAND_MIN_VY - 0.1)).toBe(0);
+    expect(landGain(LAND_MIN_VY)).toBeGreaterThan(0);
+    expect(landGain(25)).toBeCloseTo(LAND_GAIN_MAX, 10); // MAX_FALL
+    expect(landGain(100)).toBeCloseTo(LAND_GAIN_MAX, 10);
+    let prev = -1;
+    for (let v = LAND_MIN_VY; v <= 25; v += 2) { const g = landGain(v); expect(g).toBeGreaterThan(prev); prev = g; }
+  });
+  it('梯子の段は LADDER_RUNG_STEP ごとの跨ぎで鳴る(足音の π 跨ぎと同じ形)', () => {
+    expect(rungCrossed(0, LADDER_RUNG_STEP - 0.01)).toBe(false);
+    expect(rungCrossed(0, LADDER_RUNG_STEP)).toBe(true);
+    expect(rungCrossed(LADDER_RUNG_STEP, LADDER_RUNG_STEP * 2)).toBe(true);
+    expect(rungCrossed(0.2, 0.3)).toBe(false);
+    expect(rungCrossed(1, 1)).toBe(false);
+  });
+  it('取得音は種別ごとに異なる上昇 2 音で、未知の種別は既定に落ちる', () => {
+    for (const kind of ['charge', 'heal', 'ration'] as const) {
+      const notes = pickupNotes(kind);
+      expect(notes).toBe(PICKUP_NOTES[kind]);
+      expect(notes.length).toBe(2);
+      expect(notes[1]).toBeGreaterThan(notes[0]); // 拾えた手応えとして上行
+    }
+    expect(pickupNotes('charge')).not.toEqual(pickupNotes('heal'));
+    expect(pickupNotes('heal')).not.toEqual(pickupNotes('ration'));
+    expect(pickupNotes('unknown')).toBe(PICKUP_NOTES.ration);
+  });
+  it('ジングルは節目が 3 音の上行、新記録はそれより長く高く終わる', () => {
+    expect(MILESTONE_NOTES.length).toBe(3);
+    for (let i = 1; i < MILESTONE_NOTES.length; i++) {
+      expect(MILESTONE_NOTES[i]).toBeGreaterThan(MILESTONE_NOTES[i - 1]);
+    }
+    expect(NEW_RECORD_NOTES.length).toBeGreaterThan(MILESTONE_NOTES.length);
+    for (let i = 1; i < NEW_RECORD_NOTES.length; i++) {
+      expect(NEW_RECORD_NOTES[i]).toBeGreaterThan(NEW_RECORD_NOTES[i - 1]);
+    }
+    expect(NEW_RECORD_NOTES[NEW_RECORD_NOTES.length - 1])
+      .toBeGreaterThan(MILESTONE_NOTES[MILESTONE_NOTES.length - 1]);
   });
 });
