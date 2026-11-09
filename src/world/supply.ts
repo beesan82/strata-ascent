@@ -70,13 +70,21 @@ export interface SupplyTable {
   ration: number;
   heal: number;
   charge: number;
+  material: number;
+}
+
+/** 消耗品 3 種の内訳(合計 1)。素材を混ぜる前の地区別の比率 */
+interface ConsumableTable {
+  ration: number;
+  heal: number;
+  charge: number;
 }
 
 /**
- * キャッシュの中身の地区別確率(サバイバル設計 §6)。
+ * キャッシュの中身のうち消耗品の地区別比率(サバイバル設計 §6)。
  * 居住は生活物資、電力・精錬は砲弾、廃棄は残骸の薬莢、水域は流着した補給、生体は有機物。
  */
-const SUPPLY_TABLE: Record<BiomeId, SupplyTable> = {
+const SUPPLY_CONSUMABLES: Record<BiomeId, ConsumableTable> = {
   coldSteel: { ration: 0.5, heal: 0.25, charge: 0.25 },
   habitation: { ration: 0.55, heal: 0.35, charge: 0.1 },
   disposal: { ration: 0.35, heal: 0.25, charge: 0.4 },
@@ -86,19 +94,37 @@ const SUPPLY_TABLE: Record<BiomeId, SupplyTable> = {
   biomech: { ration: 0.55, heal: 0.3, charge: 0.15 },
 };
 
+/**
+ * キャッシュから素材セルが出る確率(エクストラクション段階 A)。地区によらず一定で、
+ * 残り(1 − この値)を消耗品 3 種が地区別の比率で分け合う(比率そのものは変えない)。
+ */
+export const SUPPLY_MATERIAL_RATE = 0.2;
+
+/** キャッシュの中身の地区別確率(素材を混ぜた後。合計 1) */
 export function supplyTableFor(biomeId: BiomeId): SupplyTable {
-  return SUPPLY_TABLE[biomeId];
+  const c = SUPPLY_CONSUMABLES[biomeId];
+  const k = 1 - SUPPLY_MATERIAL_RATE;
+  return {
+    ration: c.ration * k,
+    heal: c.heal * k,
+    charge: c.charge * k,
+    material: SUPPLY_MATERIAL_RATE,
+  };
 }
 
 const SUPPLY_SALT = 4302;
 
-/** キャッシュ 1 個の中身(必ず既存 3 種のいずれか 1 個)。決定論 */
+/**
+ * キャッシュ 1 個の中身(消耗品 3 種か素材のいずれか 1 個)。決定論。
+ * 区間の並びは 糧食 → 回復 → 砲弾 → 素材(素材は末尾に足した)。
+ */
 export function supplyFor(seed: number, cacheId: string, biomeId: BiomeId): DropKind {
   const t = supplyTableFor(biomeId);
   const roll = hash2(seed + SUPPLY_SALT, spawnIdHash(cacheId), 0);
   if (roll < t.ration) return 'ration';
   if (roll < t.ration + t.heal) return 'heal';
-  return 'charge';
+  if (roll < t.ration + t.heal + t.charge) return 'charge';
+  return 'material';
 }
 
 const REST_STOCK_SALT = 4303;

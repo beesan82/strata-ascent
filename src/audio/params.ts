@@ -252,14 +252,18 @@ export function rungCrossed(prevDist: number, dist: number): boolean {
 }
 
 /**
- * ドロップ取得音: 種別ごとに異なる上行 2 音(Hz)。砲弾は鋭く、回復は丸く、糧食は低めに。
+ * ドロップ取得音: 種別ごとに異なる上行 2 音(Hz)。砲弾は鋭く、回復は丸く、糧食は低めに、
+ * 素材(段階 A)は中域で硬く。
  * 未知の種別は糧食の音に落とす(新しい種別が増えても無音にならないための既定)。
  */
 export const PICKUP_NOTES: Record<string, readonly number[]> = {
   charge: [659.25, 987.77],
   heal: [523.25, 783.99],
   ration: [392, 523.25],
+  material: [440, 659.25],
 };
+/** 素材の取得は砲弾の素材を低めのレートで鳴らす(金属の塊として砲弾より重く) */
+export const PICKUP_MATERIAL_RATE = 0.8;
 export const PICKUP_NOTE_GAP = 0.06;
 export const PICKUP_GAIN = 0.18;
 
@@ -281,6 +285,18 @@ export const REST_STOCK_GAIN = 0.18;
 export const RESPAWN_FREQ = 440;
 export const RESPAWN_SECONDS = 0.09;
 export const RESPAWN_GAIN = 0.09;
+
+/**
+ * 素材の確保(エクストラクション段階 A): 休憩点で携行素材を預けた合図。
+ * 復活点更新(confirm 単発)と同時に鳴ることが多いので、それより短く高い上行 3 音にして
+ * 重なっても聞き分けられるようにする。サンプルは confirm を高めのレートで 2 回噛む。
+ */
+export const SECURE_NOTES: readonly number[] = [523.25, 659.25, 783.99];
+export const SECURE_GAIN = 0.16;
+export const SECURE_NOTE_GAP = 0.05;
+export const SECURE_NOTE_SECONDS = 0.14;
+export const SECURE_SAMPLE_RATE = 1.3;
+export const SECURE_SAMPLE_GAP = 0.08;
 
 /** 武器切替: 短いクリック */
 export const SWITCH_FREQ = 1250;

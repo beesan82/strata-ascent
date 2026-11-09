@@ -7,6 +7,7 @@ import {
   DROP_LIFETIME,
   DROP_BLINK_TIME,
   MAX_DROPS,
+  MAX_GROUND_MATERIALS,
   MAX_GROUND_RATIONS,
   MAX_SUPPLIES,
   pushDrop,
@@ -116,6 +117,37 @@ describe('pushSupply(補給品と糧食の溢れ)', () => {
     expect(drops.every((d) => !d.blinking)).toBe(true);
   });
 
+  it('素材セル(段階 A)は補給品として寿命なしで残り、点滅もしない', () => {
+    const d = new DropItem('material', 5, 9, true);
+    step(d, DROP_LIFETIME + 120);
+    expect(d.expired).toBe(false);
+    expect(d.blinking).toBe(false);
+  });
+
+  it('素材セルが地面上限 8 を超えたら、最も古い素材だけが点滅して消える状態になる', () => {
+    const drops: DropItem[] = [];
+    const items: DropItem[] = [];
+    for (let i = 0; i < MAX_GROUND_MATERIALS; i++) {
+      const d = new DropItem('material', i, 0, true);
+      items.push(d);
+      pushSupply(drops, d);
+    }
+    for (const d of items) expect(d.blinking).toBe(false);
+    pushSupply(drops, new DropItem('material', 99, 0, true));
+    expect(items[0].blinking).toBe(true);
+    expect(items[1].blinking).toBe(false);
+  });
+
+  it('素材と糧食の上限は種別ごとに独立で、互いの溢れ処理を起こさない', () => {
+    const drops: DropItem[] = [];
+    for (let i = 0; i < MAX_GROUND_RATIONS; i++) pushSupply(drops, new DropItem('ration', i, 0, true));
+    for (let i = 0; i < MAX_GROUND_MATERIALS; i++) pushSupply(drops, new DropItem('material', 50 + i, 0, true));
+    expect(drops.every((d) => !d.blinking)).toBe(true);
+    // 糧食 16 + 素材 8 = 24 で、補給品全体の上限 32 の内側に収まる
+    expect(supplyCount(drops)).toBe(MAX_GROUND_RATIONS + MAX_GROUND_MATERIALS);
+    expect(MAX_GROUND_RATIONS + MAX_GROUND_MATERIALS).toBeLessThan(MAX_SUPPLIES);
+  });
+
   it('supplyCount / canAddSupply: 補給品全体の上限 32', () => {
     const drops: DropItem[] = [];
     expect(supplyCount(drops)).toBe(0);
@@ -132,19 +164,25 @@ describe('pushSupply(補給品と糧食の溢れ)', () => {
 
 describe('canPickup(満タン時は拾えない)', () => {
   it('砲弾: 満タンなら false、空きがあれば true', () => {
-    expect(canPickup('charge', 3, 3, 5, 5, 0, 2)).toBe(false);
-    expect(canPickup('charge', 2, 3, 5, 5, 0, 2)).toBe(true);
-    expect(canPickup('charge', 0, 3, 1, 5, 2, 2)).toBe(true);
+    expect(canPickup('charge', 3, 3, 5, 5, 0, 2, 0, 5)).toBe(false);
+    expect(canPickup('charge', 2, 3, 5, 5, 0, 2, 0, 5)).toBe(true);
+    expect(canPickup('charge', 0, 3, 1, 5, 2, 2, 5, 5)).toBe(true);
   });
 
   it('回復: 全快なら false、減っていれば true', () => {
-    expect(canPickup('heal', 0, 3, 5, 5, 0, 2)).toBe(false);
-    expect(canPickup('heal', 3, 3, 4, 5, 0, 2)).toBe(true);
+    expect(canPickup('heal', 0, 3, 5, 5, 0, 2, 0, 5)).toBe(false);
+    expect(canPickup('heal', 3, 3, 4, 5, 0, 2, 5, 5)).toBe(true);
   });
 
   it('糧食: 所持上限 2 なら false、空きがあれば true(満腹度は見ない)', () => {
-    expect(canPickup('ration', 0, 3, 5, 5, 2, 2)).toBe(false);
-    expect(canPickup('ration', 3, 3, 1, 5, 1, 2)).toBe(true);
-    expect(canPickup('ration', 0, 3, 5, 5, 0, 2)).toBe(true);
+    expect(canPickup('ration', 0, 3, 5, 5, 2, 2, 0, 5)).toBe(false);
+    expect(canPickup('ration', 3, 3, 1, 5, 1, 2, 5, 5)).toBe(true);
+    expect(canPickup('ration', 0, 3, 5, 5, 0, 2, 0, 5)).toBe(true);
+  });
+
+  it('素材: 携行枠が満杯なら false、空きがあれば true(消耗品の状態は見ない)', () => {
+    expect(canPickup('material', 0, 3, 1, 5, 0, 2, 5, 5)).toBe(false);
+    expect(canPickup('material', 3, 3, 5, 5, 2, 2, 4, 5)).toBe(true);
+    expect(canPickup('material', 3, 3, 5, 5, 2, 2, 0, 5)).toBe(true);
   });
 });

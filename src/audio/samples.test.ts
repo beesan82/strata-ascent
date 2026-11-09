@@ -25,6 +25,8 @@ describe('audio samples table', () => {
     expect(pickupSampleName('charge')).toBe('pickupCharge');
     expect(pickupSampleName('heal')).toBe('pickupHeal');
     expect(pickupSampleName('ration')).toBe('pickupRation');
+    // 素材セル(段階 A)は砲弾の素材を流用し、専用ファイルを足さない(レート差は engine 側)
+    expect(pickupSampleName('material')).toBe('pickupCharge');
     expect(pickupSampleName('unknown')).toBe('pickupRation');
   });
   it('環境ループは全バイオームに割り当てがあり、実在する素材を指す', () => {

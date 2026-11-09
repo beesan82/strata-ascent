@@ -16,9 +16,10 @@ import {
   CACHE_GAIN, CACHE_HZ_END, CACHE_HZ_START, CACHE_SECONDS,
   EAT_GAIN, EAT_GAP, EAT_HZ, EAT_SECONDS,
   JINGLE_GAIN, JINGLE_NOTE_GAP, JINGLE_NOTE_SECONDS, MILESTONE_NOTES, NEW_RECORD_NOTES,
-  PICKUP_GAIN, PICKUP_NOTE_GAP, pickupNotes,
+  PICKUP_GAIN, PICKUP_MATERIAL_RATE, PICKUP_NOTE_GAP, pickupNotes,
   RECHARGE_FREQ, RECHARGE_GAIN, RECHARGE_SECONDS,
   RESPAWN_FREQ, RESPAWN_GAIN, RESPAWN_SECONDS, REST_STOCK_GAIN, REST_STOCK_NOTES,
+  SECURE_GAIN, SECURE_NOTE_GAP, SECURE_NOTE_SECONDS, SECURE_NOTES, SECURE_SAMPLE_GAP, SECURE_SAMPLE_RATE,
   SATIETY_WARN_FREQ, SATIETY_WARN_GAIN, SATIETY_WARN_GAP, SATIETY_WARN_SECONDS,
   SWITCH_FREQ, SWITCH_GAIN, SWITCH_SECONDS,
   BOSS_APPEAR_FREQ, BOSS_APPEAR_GAIN, BOSS_APPEAR_NOISE_GAIN, BOSS_APPEAR_NOISE_HZ, BOSS_APPEAR_SECONDS,
@@ -781,7 +782,7 @@ export class AudioEngine {
   /** ドロップ取得: 種別の素材(pickupSampleName)。無いときは従来の上行 2 音 */
   pickup(kind: string): void {
     if (!this.ctx) return;
-    const rate = kind === 'charge' ? 1.1 : kind === 'ration' ? 0.85 : 1;
+    const rate = kind === 'charge' ? 1.1 : kind === 'ration' ? 0.85 : kind === 'material' ? PICKUP_MATERIAL_RATE : 1;
     if (this.playSample(pickupSampleName(kind), { gain: 0.5, rate, wet: SAMPLE_WET, space: 'room' })) return;
     this.noteRun(pickupNotes(kind), PICKUP_GAIN, PICKUP_NOTE_GAP, 0.16);
   }
@@ -823,6 +824,20 @@ export class AudioEngine {
     if (!this.ctx) return;
     if (this.playSample('confirm', { gain: 0.5, wet: SAMPLE_WET, space: 'room' })) return;
     this.noteRun([RESPAWN_FREQ], RESPAWN_GAIN, 0, RESPAWN_SECONDS + 0.05);
+  }
+
+  /**
+   * 素材の確保(エクストラクション段階 A): 休憩点で携行素材を預けたときの合図。
+   * 確認音の素材を高めのレートで 2 回噛む(復活点更新の単発と重なっても区別がつく)。
+   * 無いときは短い上行 3 音。携行が 0 のときは呼ばれない前提
+   */
+  secure(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t0 = ctx.currentTime;
+    if (this.playSample('confirm', { gain: 0.45, rate: SECURE_SAMPLE_RATE, at: t0, wet: SAMPLE_WET, space: 'room' })
+      && this.playSample('confirm', { gain: 0.45, rate: SECURE_SAMPLE_RATE, at: t0 + SECURE_SAMPLE_GAP, wet: SAMPLE_WET, space: 'room' })) return;
+    this.noteRun(SECURE_NOTES, SECURE_GAIN, SECURE_NOTE_GAP, SECURE_NOTE_SECONDS);
   }
 
   /** 武器切替: 掛け金(ラッチ)のサンプル。無いときは従来の矩形波クリック */

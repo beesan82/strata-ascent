@@ -71,11 +71,12 @@ export const EAT_SAMPLES: readonly SampleName[] = ['eat0', 'eat1'];
 export const MINING_SAMPLES: readonly SampleName[] = ['mining0', 'mining1'];
 
 /**
- * ドロップ取得音の素材: 種別で素材を変える。未知の種別は糧食に落とす
- * (params.pickupNotes の既定と同じ考え方で、新種別が増えても無音にしない)。
+ * ドロップ取得音の素材: 種別で素材を変える。素材セル(段階 A)は砲弾と同じ素材を
+ * 低めのレート(params.PICKUP_MATERIAL_RATE)で鳴らして専用ファイルを足さない。
+ * 未知の種別は糧食に落とす(params.pickupNotes の既定と同じ考え方で、新種別が増えても無音にしない)。
  */
 export function pickupSampleName(kind: string): SampleName {
-  if (kind === 'charge') return 'pickupCharge';
+  if (kind === 'charge' || kind === 'material') return 'pickupCharge';
   if (kind === 'heal') return 'pickupHeal';
   return 'pickupRation';
 }

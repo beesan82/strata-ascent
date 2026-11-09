@@ -1,6 +1,7 @@
 import { Camera } from '../core/camera';
 import type { Player } from '../entities/player';
 import type { BossPhase } from '../entities/enemy';
+import type { DropKind } from '../world/drop';
 import type { ChunkStore } from '../world/chunks';
 import { CHUNK_SIZE } from '../world/tiles';
 import { Background } from './background';
@@ -95,7 +96,7 @@ export interface GravitonFx {
    *  turret は固定砲台(angle が照準方向)、w/h と bossPhase がある要素はボス(体格と相で描き分ける) */
   enemies?: readonly { x: number; y: number; flash: boolean; flyer?: boolean; turret?: boolean; angle?: number; w?: number; h?: number; bossPhase?: BossPhase; bossPhaseT?: number; bossDir?: 1 | -1 }[];
   /** ドロップ(ワールド座標の中心)。hidden は点滅の消灯側フレーム */
-  drops?: readonly { x: number; y: number; kind: 'charge' | 'heal' | 'ration'; hidden: boolean }[];
+  drops?: readonly { x: number; y: number; kind: DropKind; hidden: boolean }[];
   /** 補給キャッシュ(ワールド座標の中心)。未開封のものだけ渡す */
   caches?: readonly { x: number; y: number }[];
 }
@@ -599,8 +600,8 @@ export class Renderer {
     }
 
     // ドロップ: 同じ fx 相乗りで平坦色だけ(新規パスなし)。
-    // 砲弾セルは紫の角型+暗い芯、回復セルは緑の十字+淡い芯、糧食セルは金の横長+切り欠きで、
-    // 色と形の両方で判別する。
+    // 砲弾セルは紫の角型+暗い芯、回復セルは緑の十字+淡い芯、糧食セルは金の横長+切り欠き、
+    // 素材セルは鋼青の縦長+淡い上端帯で、色と形の両方で判別する。
     // 色は 32 色パレットの実在色を使う(任意色は量子化で別色相へ寄る: 例 #7fc46a→金 #caa64a)
     if (fx.drops && fx.drops.length > 0) {
       const s = Math.max(2, Math.round(0.5 * ppt));
@@ -622,6 +623,15 @@ export class Renderer {
           const notch = Math.max(1, Math.round(s * 0.3));
           ctx.fillStyle = '#3d2618';
           ctx.fillRect(Math.round(sx - notch / 2), Math.round(sy - hgt / 2), notch, hgt);
+        } else if (d.kind === 'material') {
+          // 素材セル(エクストラクション段階 A): 鋼青の縦長の塊+淡い上端帯。糧食(金の横長)とは
+          // 向きと色、砲弾(紫の角型)とは色と縦横比で分ける。色はパレット実在色
+          const wid = Math.max(2, Math.round(s * 0.62));
+          ctx.fillStyle = '#3a73a4';
+          ctx.fillRect(Math.round(sx - wid / 2), Math.round(sy - s / 2), wid, s);
+          const cap = Math.max(1, Math.round(s * 0.3));
+          ctx.fillStyle = '#c7d0ce';
+          ctx.fillRect(Math.round(sx - wid / 2), Math.round(sy - s / 2), wid, cap);
         } else {
           ctx.fillStyle = '#3c755f';
           const t = Math.max(1, Math.round(s * 0.38));
