@@ -6,6 +6,7 @@ describe('pickupLabel', () => {
     expect(pickupLabel('charge')).toBe('砲弾');
     expect(pickupLabel('pulsecell')).toBe('パルス弾セル');
     expect(pickupLabel('material')).toBe('素材');
+    expect(pickupLabel('valuable')).toBe('貴重品');
     expect(pickupLabel('heal')).toBe('回復');
     expect(pickupLabel('ration')).toBe('糧食');
   });

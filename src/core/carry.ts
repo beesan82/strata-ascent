@@ -6,11 +6,17 @@
  * 弾薬(砲弾・パルス弾セル)も同じ枠を素材と共有する(弾薬設計 §1)。
  * 消耗品の即時消費と糧食の所持は現行どおり枠外。
  * 確保済みはセッション内の数で、永続化しない(段階 D で改めて判断)。
- * 段階 A では死亡しても携行はそのまま残る(ロストは段階 B)。
+ * 段階 3-B(設計書 2026-11-10-stage3b-design)で死亡時のロストが入った: 未確保の携行は
+ * 全て遺留品として地面へ落ち、携行は 0 になる(確保済みは減らない)。落とし方は main の
+ * dropRemainsOnDeath と core/remains の remainsDropKinds。
+ * 同じ段階で貴重品(valuable)を足した。用途は持ち帰ることだけで、確保額の記録に使う。
  */
 
-/** 携行できる種別。素材セル、砲弾(重粒子砲 1 発)、パルス弾セル(パルス 20 発) */
-export type CarryKind = 'material' | 'shell' | 'pulsecell';
+/**
+ * 携行できる種別。素材セル、貴重品(持ち帰って確保額にするだけ)、
+ * 砲弾(重粒子砲 1 発)、パルス弾セル(パルス 20 発)
+ */
+export type CarryKind = 'material' | 'valuable' | 'shell' | 'pulsecell';
 
 /**
  * 種別表。個数レコードの初期化と総数の数え方はここから導く。
@@ -18,11 +24,16 @@ export type CarryKind = 'material' | 'shell' | 'pulsecell';
  */
 export const CARRY_KIND_INFO: Record<CarryKind, { label: string; ammo: boolean }> = {
   material: { label: '素材', ammo: false },
+  valuable: { label: '貴重品', ammo: false },
   shell: { label: '砲弾', ammo: true },
   pulsecell: { label: 'パルス弾セル', ammo: true },
 };
 
-export const CARRY_KINDS: readonly CarryKind[] = ['material', 'shell', 'pulsecell'];
+/** 種別の並び(アイテムボックスの表示順も兼ねる: 戦利品 → 弾薬) */
+export const CARRY_KINDS: readonly CarryKind[] = ['material', 'valuable', 'shell', 'pulsecell'];
+
+/** 貴重品 1 個あたりの確保額(段階 3-B §3)。通貨ではなく記録のための値 */
+export const VALUABLE_VALUE = 500;
 
 /** 携行枠の初期値(総個数) */
 export const INITIAL_CARRY_CAP = 5;
@@ -70,6 +81,14 @@ export function securedTotal(state: CarryState): number {
   return n;
 }
 
+/**
+ * 確保額 = 確保済みの貴重品の個数 × VALUABLE_VALUE(段階 3-B §3)。
+ * 別カウンタで累積せず、毎回 secured から導く(引き出せば下がる)。
+ */
+export function securedValue(state: CarryState): number {
+  return state.secured.valuable * VALUABLE_VALUE;
+}
+
 /** 携行枠が満杯か(満杯のときは拾えず地面に残る: canPickup と同じ扱い) */
 export function isCarryFull(state: CarryState): boolean {
   return carriedTotal(state) >= state.cap;
@@ -88,10 +107,12 @@ export interface SecureResult {
   state: CarryState;
   /** このとき確保済みへ移した総個数(0 なら合図を出さない) */
   moved: number;
+  /** moved のうち貴重品の個数(字幕に確保額を出すため。段階 3-B §3) */
+  valuables: number;
 }
 
 /**
- * 確保: 休憩点の箱に入ったとき、携行中の戦利品(弾薬以外)を確保済みへ移す。
+ * 確保: 休憩点の箱に入ったとき、携行中の戦利品(弾薬以外 = 素材と貴重品)を確保済みへ移す。
  * 弾薬は携行に残る(休憩点に入るたびに武器が空になるのを避ける。保管へ入れるのは
  * 箱の操作 storeCarry で明示的に行う)。どの休憩点でも成立する(前進・後退どちらでも)。
  * 移す物が無ければ state は変わらない。
@@ -99,7 +120,8 @@ export interface SecureResult {
 export function secureCarry(state: CarryState): SecureResult {
   let moved = 0;
   for (const k of CARRY_KINDS) if (!isAmmoKind(k)) moved += state.carried[k];
-  if (moved === 0) return { state, moved: 0 };
+  if (moved === 0) return { state, moved: 0, valuables: 0 };
+  const valuables = state.carried.valuable;
   const carried = { ...state.carried };
   const secured = { ...state.secured };
   for (const k of CARRY_KINDS) {
@@ -107,12 +129,29 @@ export function secureCarry(state: CarryState): SecureResult {
     secured[k] += carried[k];
     carried[k] = 0;
   }
-  return { state: { ...state, carried, secured }, moved };
+  return { state: { ...state, carried, secured }, moved, valuables };
 }
 
-/** 確保の字幕文言(最深記録の字幕と同じ流儀で、既存の字幕系に相乗りする) */
-export function secureCaptionText(moved: number): string {
-  return `素材 ${moved} 個を確保`;
+/**
+ * 確保の字幕文言(最深記録の字幕と同じ流儀で、既存の字幕系に相乗りする)。
+ * materials は素材の個数、valuables は貴重品の個数。貴重品が無ければ従来の文言のまま。
+ * 貴重品を含むときは、今回ぶんの確保額(個数 × VALUABLE_VALUE)を添える。
+ */
+export function secureCaptionText(materials: number, valuables = 0): string {
+  if (valuables <= 0) return `素材 ${materials} 個を確保`;
+  const value = `確保額 +${valuables * VALUABLE_VALUE}`;
+  if (materials <= 0) return `貴重品 ${valuables} 個を確保（${value}）`;
+  return `素材 ${materials} 個・貴重品 ${valuables} 個を確保（${value}）`;
+}
+
+/**
+ * ロスト(段階 3-B §1): 死亡時に携行を全て 0 にする。確保済みと枠はそのまま。
+ * 落とした物は呼び出し側が遺留品として地面へ置く(core/remains の remainsDropKinds)。
+ * 携行が空なら同じ state を返す。
+ */
+export function loseCarry(state: CarryState): CarryState {
+  if (carriedTotal(state) === 0) return state;
+  return { ...state, carried: emptyCounts() };
 }
 
 /**

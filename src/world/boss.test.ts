@@ -64,16 +64,17 @@ describe('bossSpawnFor(ボスの配置、第2弾 §2)', () => {
 });
 
 describe('bossRewardFor(ボスの確定ドロップ、サバイバル段階 2)', () => {
-  it('構成は回復 1 + 砲弾 1 + 糧食 1 で総数 3(設計 §5・§10)', () => {
+  it('構成は回復 1 + 砲弾 1 + 糧食 1(設計 §5・§10)に貴重品 1 を確定で足した総数 4(段階 3-B §2)', () => {
     const reward = bossRewardFor();
-    expect(reward).toHaveLength(3);
+    expect(reward).toHaveLength(4);
     expect(reward.filter((k) => k === 'heal')).toHaveLength(1);
     expect(reward.filter((k) => k === 'charge')).toHaveLength(1);
     expect(reward.filter((k) => k === 'ration')).toHaveLength(1);
+    expect(reward.filter((k) => k === 'valuable')).toHaveLength(1);
   });
 
-  it('並びは出現位置の割り当て順(中心=回復、左=砲弾、右=糧食)で決定的', () => {
-    expect(bossRewardFor()).toEqual(['heal', 'charge', 'ration']);
+  it('並びは出現位置の割り当て順(中心=回復、左=砲弾、右=糧食、中心と右の間=貴重品)で決定的', () => {
+    expect(bossRewardFor()).toEqual(['heal', 'charge', 'ration', 'valuable']);
     expect(bossRewardFor()).toEqual(bossRewardFor());
   });
 });

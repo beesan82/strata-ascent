@@ -253,7 +253,7 @@ export function rungCrossed(prevDist: number, dist: number): boolean {
 
 /**
  * ドロップ取得音: 種別ごとに異なる上行 2 音(Hz)。砲弾は鋭く、回復は丸く、糧食は低めに、
- * 素材(段階 A)は中域で硬く。
+ * 素材(段階 A)は中域で硬く、貴重品(段階 3-B)は高く明るく。
  * 未知の種別は糧食の音に落とす(新しい種別が増えても無音にならないための既定)。
  */
 export const PICKUP_NOTES: Record<string, readonly number[]> = {
@@ -262,9 +262,12 @@ export const PICKUP_NOTES: Record<string, readonly number[]> = {
   ration: [392, 523.25],
   material: [440, 659.25],
   pulsecell: [659.25, 1046.5], // パルス弾セル: 砲弾と同じ出だしで上を高く(軽いセルの束)
+  valuable: [783.99, 1174.66], // 貴重品: 回復の終わりの音から上へ 5 度(明るい小物)
 };
 /** 素材の取得は砲弾の素材を低めのレートで鳴らす(金属の塊として砲弾より重く) */
 export const PICKUP_MATERIAL_RATE = 0.8;
+/** 貴重品の取得は回復の素材を高めのレートで鳴らす(専用ファイルを足さない) */
+export const PICKUP_VALUABLE_RATE = 1.3;
 export const PICKUP_NOTE_GAP = 0.06;
 export const PICKUP_GAIN = 0.18;
 

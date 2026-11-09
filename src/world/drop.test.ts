@@ -9,21 +9,28 @@ function distribution(
   kind: 'w' | 'f' | 't',
   biomeId: BiomeId,
   n = 4000,
-): Record<'heal' | 'ration' | 'material' | 'none', number> {
-  const counts = { heal: 0, ration: 0, material: 0, none: 0 };
+): Record<'heal' | 'ration' | 'material' | 'valuable' | 'none', number> {
+  const counts = { heal: 0, ration: 0, material: 0, valuable: 0, none: 0 };
   for (let i = 0; i < n; i++) {
     const r: EnemyDropKind | null = dropFor(SEED, `${kind}:${i * 3 + 11},${500 + i}`, 0, biomeId);
     if (r === 'heal') counts.heal++;
     else if (r === 'ration') counts.ration++;
     else if (r === 'material') counts.material++;
+    else if (r === 'valuable') counts.valuable++;
     else counts.none++;
   }
   return {
     heal: counts.heal / n,
     ration: counts.ration / n,
     material: counts.material / n,
+    valuable: counts.valuable / n,
     none: counts.none / n,
   };
+}
+
+/** 敵ドロップとして正しい戻り値か(弾薬を含まない 4 種か null) */
+function isEnemyDrop(r: EnemyDropKind | null): boolean {
+  return r === 'heal' || r === 'ration' || r === 'material' || r === 'valuable' || r === null;
 }
 
 /** 設計の許容幅(固定 seed・4000 サンプルで理論値 ±3.5 ポイント以内) */
@@ -33,14 +40,14 @@ function near(actual: number, expected: number): void {
 }
 
 describe('dropProfileFor(地区倍率表)', () => {
-  it('回復は第2弾 §3、糧食はサバイバル設計 §5 の倍率表どおり、素材は全地区 ×1.0。砲弾の倍率は無い', () => {
-    expect(dropProfileFor('coldSteel')).toEqual({ heal: 1.0, ration: 1.0, material: 1.0 });
-    expect(dropProfileFor('habitation')).toEqual({ heal: 1.5, ration: 1.6, material: 1.0 });
-    expect(dropProfileFor('disposal')).toEqual({ heal: 1.0, ration: 0.7, material: 1.0 });
-    expect(dropProfileFor('waterVoid')).toEqual({ heal: 1.0, ration: 0.8, material: 1.0 });
-    expect(dropProfileFor('power')).toEqual({ heal: 1.0, ration: 0.9, material: 1.0 });
-    expect(dropProfileFor('foundry')).toEqual({ heal: 1.0, ration: 0.8, material: 1.0 });
-    expect(dropProfileFor('biomech')).toEqual({ heal: 1.2, ration: 1.3, material: 1.0 });
+  it('回復は第2弾 §3、糧食はサバイバル設計 §5 の倍率表どおり、素材・貴重品は全地区 ×1.0。砲弾の倍率は無い', () => {
+    expect(dropProfileFor('coldSteel')).toEqual({ heal: 1.0, ration: 1.0, material: 1.0, valuable: 1.0 });
+    expect(dropProfileFor('habitation')).toEqual({ heal: 1.5, ration: 1.6, material: 1.0, valuable: 1.0 });
+    expect(dropProfileFor('disposal')).toEqual({ heal: 1.0, ration: 0.7, material: 1.0, valuable: 1.0 });
+    expect(dropProfileFor('waterVoid')).toEqual({ heal: 1.0, ration: 0.8, material: 1.0, valuable: 1.0 });
+    expect(dropProfileFor('power')).toEqual({ heal: 1.0, ration: 0.9, material: 1.0, valuable: 1.0 });
+    expect(dropProfileFor('foundry')).toEqual({ heal: 1.0, ration: 0.8, material: 1.0, valuable: 1.0 });
+    expect(dropProfileFor('biomech')).toEqual({ heal: 1.2, ration: 1.3, material: 1.0, valuable: 1.0 });
   });
 
   it('全地区ぶん定義されている', () => {
@@ -49,6 +56,7 @@ describe('dropProfileFor(地区倍率表)', () => {
       expect(p.heal).toBeGreaterThan(0);
       expect(p.ration).toBeGreaterThan(0);
       expect(p.material).toBeGreaterThan(0);
+      expect(p.valuable).toBeGreaterThan(0);
     }
   });
 });
@@ -75,19 +83,27 @@ describe('dropRatesFor(重み方式の実効確率)', () => {
         const r = dropRatesFor(kind, biome);
         const p = dropProfileFor(biome);
         const base = { w: [0.12, 0.16], f: [0.12, 0.11], t: [0.1, 0.1] }[kind];
-        expect(r.heal + r.ration + r.material).toBeLessThan(DROP_TOTAL_CAP);
+        expect(r.heal + r.ration + r.material + r.valuable).toBeLessThan(DROP_TOTAL_CAP);
         expect(r.heal).toBeCloseTo(base[0] * p.heal, 10);
         expect(r.ration).toBeCloseTo(base[1] * p.ration, 10);
         expect(r.material).toBeCloseTo(0.08, 10);
+        expect(r.valuable).toBeCloseTo(0.02 * p.valuable, 10);
       }
     }
   });
 
-  it('最も重い居住区画の Walker でも合計 51.6% で上限以下', () => {
+  it('最も重い居住区画の Walker でも 3 種の合計 51.6%、貴重品を足して 53.6% で上限以下', () => {
     const r = dropRatesFor('w', 'habitation');
     expect(r.heal + r.ration + r.material).toBeCloseTo(0.516);
+    expect(r.heal + r.ration + r.material + r.valuable).toBeCloseTo(0.536);
     expect(r.heal).toBeCloseTo(0.18);
     expect(r.ration).toBeCloseTo(0.256);
+  });
+
+  it('貴重品は全敵種で基礎 2%(段階 3-B §2、地区倍率 1.0)', () => {
+    for (const kind of ['w', 'f', 't'] as const) {
+      expect(dropRatesFor(kind, 'coldSteel').valuable).toBeCloseTo(0.02);
+    }
   });
 
   it('上限を超える重みを渡せば圧縮される仕組み自体は残っている(定数の確認)', () => {
@@ -111,18 +127,35 @@ describe('dropFor(抽選の純関数)', () => {
       for (const kind of ['w', 'f', 't'] as const) {
         for (let i = 0; i < 300; i++) {
           const r = dropFor(SEED, `${kind}:${i * 5 + 1},${900 + i}`, i, biome);
-          expect(r === 'heal' || r === 'ration' || r === 'material' || r === null).toBe(true);
+          expect(isEnemyDrop(r)).toBe(true);
         }
       }
     }
   });
 
-  it('Walker・倍率 1.0 の地区では回復≈12% / 糧食≈16% / 素材≈8%、残り≈64% は何も落ちない', () => {
+  it('Walker・倍率 1.0 の地区では回復≈12% / 糧食≈16% / 素材≈8% / 貴重品≈2%、残り≈62% は何も落ちない', () => {
     const d = distribution('w', 'coldSteel');
     near(d.heal, 0.12);
     near(d.ration, 0.16);
     near(d.material, 0.08);
-    near(d.none, 0.64);
+    near(d.valuable, 0.02);
+    near(d.none, 0.62);
+  });
+
+  it('貴重品は全敵種・全地区で出るが低確率(段階 3-B §2)', () => {
+    for (const biome of BIOME_IDS) {
+      for (const kind of ['w', 'f', 't'] as const) {
+        const d = distribution(kind, biome, 4000);
+        expect(d.valuable).toBeGreaterThan(0.005);
+        expect(d.valuable).toBeLessThan(0.04);
+      }
+    }
+  });
+
+  it('飛行敵でも 3 種の合計は基礎値どおり≈31% のままで、貴重品≈2% が別に乗る(区間の末尾に足した)', () => {
+    const d = distribution('f', 'coldSteel');
+    near(d.heal + d.ration + d.material, 0.31);
+    near(d.valuable, 0.02);
   });
 
   it('飛行敵・倍率 1.0 の地区では回復≈12% / 糧食≈11% / 素材≈8%', () => {
@@ -207,10 +240,10 @@ describe('dropFor(抽選の純関数)', () => {
     }
   });
 
-  it('結果は最大 1 個: 戻り値は 3 種か null のいずれか単一', () => {
+  it('結果は最大 1 個: 戻り値は 4 種か null のいずれか単一', () => {
     for (let i = 0; i < 200; i++) {
       const r = dropFor(SEED, `w:${i},${i * 2}`, i, 'foundry');
-      expect(r === 'heal' || r === 'ration' || r === 'material' || r === null).toBe(true);
+      expect(isEnemyDrop(r)).toBe(true);
     }
   });
 });
