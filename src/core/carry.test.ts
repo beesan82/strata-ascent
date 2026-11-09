@@ -7,9 +7,11 @@ import {
   initialCarry,
   isCarryFull,
   isCarryKind,
+  removeCarry,
   secureCaptionText,
   secureCarry,
   securedTotal,
+  withdrawCarry,
   type CarryState,
 } from './carry';
 
@@ -108,5 +110,42 @@ describe('secureCarry(確保)', () => {
 describe('secureCaptionText(確保の字幕)', () => {
   it('移した個数を含む', () => {
     expect(secureCaptionText(3)).toBe('素材 3 個を確保');
+  });
+});
+
+describe('removeCarry(ボックスで落とす)', () => {
+  it('携行から 1 個減り、元の state は変えない', () => {
+    const s0 = carrying(3);
+    const s1 = removeCarry(s0, 'material');
+    expect(carriedTotal(s1)).toBe(2);
+    expect(carriedTotal(s0)).toBe(3);
+    expect(securedTotal(s1)).toBe(0);
+  });
+
+  it('持っていなければ同じ state を返す', () => {
+    const s = initialCarry();
+    expect(removeCarry(s, 'material')).toBe(s);
+  });
+});
+
+describe('withdrawCarry(保管から引き出す)', () => {
+  it('確保済みが 1 減り携行が 1 増える(未確保に戻る)', () => {
+    const s0 = secureCarry(carrying(3)).state;
+    const s1 = withdrawCarry(s0, 'material');
+    expect(securedTotal(s1)).toBe(2);
+    expect(carriedTotal(s1)).toBe(1);
+    expect(securedTotal(s0)).toBe(3);
+  });
+
+  it('携行枠が満杯なら引き出せず同じ state を返す', () => {
+    let s = secureCarry(carrying(2)).state;
+    for (let i = 0; i < 5; i++) s = addCarry(s, 'material');
+    expect(isCarryFull(s)).toBe(true);
+    expect(withdrawCarry(s, 'material')).toBe(s);
+  });
+
+  it('保管が空なら引き出せず同じ state を返す', () => {
+    const s = initialCarry();
+    expect(withdrawCarry(s, 'material')).toBe(s);
   });
 });

@@ -87,3 +87,26 @@ export function secureCarry(state: CarryState): SecureResult {
 export function secureCaptionText(moved: number): string {
   return `素材 ${moved} 個を確保`;
 }
+
+/**
+ * 携行から 1 個を取り出す(アイテムボックスで「落とす」とき)。
+ * その種別を持っていなければ何もせず同じ state を返す。
+ */
+export function removeCarry(state: CarryState, kind: CarryKind): CarryState {
+  if (state.carried[kind] <= 0) return state;
+  return { ...state, carried: { ...state.carried, [kind]: state.carried[kind] - 1 } };
+}
+
+/**
+ * 保管(確保済み)から携行へ 1 個を戻す(アイテムボックスでの引き出し)。
+ * 戻した分は未確保に戻る。携行枠が満杯か、保管にその種別が無ければ何もせず同じ state を返す。
+ * 呼べる場所(休憩点のみ)の判定は呼び出し側の責務で、ここは在庫と枠だけを見る。
+ */
+export function withdrawCarry(state: CarryState, kind: CarryKind): CarryState {
+  if (isCarryFull(state) || state.secured[kind] <= 0) return state;
+  return {
+    ...state,
+    carried: { ...state.carried, [kind]: state.carried[kind] + 1 },
+    secured: { ...state.secured, [kind]: state.secured[kind] - 1 },
+  };
+}

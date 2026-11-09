@@ -46,12 +46,15 @@ import {
 } from './core/remains';
 import {
   addCarry,
+  CARRY_KINDS,
   carriedTotal,
   initialCarry,
   isCarryKind,
+  removeCarry,
   secureCaptionText,
   secureCarry,
   securedTotal,
+  withdrawCarry,
   type CarryState,
 } from './core/carry';
 import { displayAltitude, highestLayer } from './core/coordinate';
@@ -337,7 +340,7 @@ let groundAnchor: GroundAnchor = initialGroundAnchor(spawn.x, spawn.y);
 let remainsSites: DropItem[][] = [];
 const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
-installTouchControls(input); // タッチ端末でのみ画面ボタンが出る(それ以外は何もしない)
+installTouchControls(input, () => toggleItemBox()); // タッチ端末でのみ画面ボタンが出る(それ以外は何もしない)。箱ボタンはアイテムボックスの開閉
 const renderer = new Renderer(canvas, seed);
 // 音(§6.7): キー/クリックのたびに AudioContext の開始・resume を試みる(ブラウザの自動再生制限)。
 // M はトグル(Input.muted)。最初のキーが M のときに一瞬鳴らないよう、開始の前にミュートを渡す
@@ -347,6 +350,109 @@ input.onInput(() => {
   audio.start();
 });
 input.onWeaponChange(() => audio.weaponSwitch()); // 切替音(§6.7)。砲の自動復帰でも鳴る
+
+// ---- アイテムボックス(設計 2026-11-09-item-box) ----
+// DOM のパネルで、いつでも開ける(タッチは「箱」ボタン、PC は KeyB、Esc で閉じる)。
+// 開いている間は frame がゲーム更新を止める(ポーズ)。携行のタップ = その場に 1 個落とす、
+// 保管のタップ = 休憩点にいる間だけ携行へ 1 個戻す(戻すと未確保に戻る)。
+const itemBoxEl = document.getElementById('itembox')!;
+const itemBoxCarryEl = document.getElementById('itembox-carry')!;
+const itemBoxSecuredEl = document.getElementById('itembox-secured')!;
+const itemBoxNoteEl = document.getElementById('itembox-note')!;
+let boxOpen = false;
+
+/** プレイヤーが休憩点の箱の中にいるか(update の確保判定と同じ式で、その場で判定する) */
+function isInRestBoxNow(): boolean {
+  const rp = nearestRestPoint(seed, player.centerX, player.centerY);
+  const feet = player.body.y + player.body.h;
+  return (
+    player.centerX > rp.left && player.centerX < rp.right &&
+    player.centerY < rp.floorY && Math.abs(feet - rp.floorY) < 0.6
+  );
+}
+
+function renderItemBox(): void {
+  itemBoxCarryEl.textContent = '';
+  const total = carriedTotal(carry);
+  for (let i = 0; i < carry.cap; i++) {
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    if (i < total) {
+      cell.className = 'ibox-cell';
+      const icon = document.createElement('div');
+      icon.className = 'ibox-icon';
+      cell.appendChild(icon);
+      cell.addEventListener('click', () => {
+        // 携行から 1 個をその場に落とす(補給品として置かれ、また拾える)。
+        // 地面の補給品プールに空きが無いときは落とさない(アイテムが消えてしまうため)
+        if (!canAddSupply(drops, 1)) return;
+        const next = removeCarry(carry, 'material');
+        if (next === carry) return;
+        carry = next;
+        pushSupply(drops, new DropItem('material', player.centerX, player.centerY, true));
+        renderItemBox();
+      });
+    } else {
+      cell.className = 'ibox-cell empty';
+    }
+    itemBoxCarryEl.appendChild(cell);
+  }
+  itemBoxSecuredEl.textContent = '';
+  const atRest = isInRestBoxNow();
+  if (securedTotal(carry) === 0) {
+    const span = document.createElement('span');
+    span.className = 'ibox-empty-note';
+    span.textContent = '（なし）';
+    itemBoxSecuredEl.appendChild(span);
+  } else {
+    for (const kind of CARRY_KINDS) {
+      const n = carry.secured[kind];
+      if (n <= 0) continue;
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = atRest ? 'ibox-chip' : 'ibox-chip locked';
+      const icon = document.createElement('div');
+      icon.className = 'ibox-icon';
+      chip.appendChild(icon);
+      const label = document.createElement('span');
+      label.textContent = `素材 ×${n}`;
+      chip.appendChild(label);
+      if (atRest) {
+        chip.addEventListener('click', () => {
+          const next = withdrawCarry(carry, kind);
+          if (next === carry) return; // 枠が満杯なら何も起きない
+          carry = next;
+          audio.secure();
+          renderItemBox();
+        });
+      }
+      itemBoxSecuredEl.appendChild(chip);
+    }
+  }
+  itemBoxNoteEl.textContent = atRest
+    ? '保管をタップで携行へ戻す（戻すと未確保）'
+    : '保管の引き出しは休憩点で';
+}
+
+function setItemBox(open: boolean): void {
+  boxOpen = open;
+  itemBoxEl.hidden = !open;
+  if (open) {
+    graviton.cancelCharge(); // 開いた瞬間に砲の溜めは破棄する(設計 §開閉)
+    renderItemBox();
+  }
+}
+
+function toggleItemBox(): void {
+  setItemBox(!boxOpen);
+}
+
+document.getElementById('itembox-close')!.addEventListener('click', () => setItemBox(false));
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.code === 'KeyB') toggleItemBox();
+  else if (e.code === 'Escape' && boxOpen) setItemBox(false);
+});
 // タブを隠すと rAF が止まり updateAudio が来ないが、AudioContext は進み続けるので context ごと止める
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) audio.suspend();
@@ -1072,7 +1178,7 @@ let acc = 0;
 function frame(now: number): void {
   acc += Math.min(now - last, 100); // タブ復帰時のスパイラル防止
   last = now;
-  if (freezeSimulation) {
+  if (freezeSimulation || boxOpen) {
     acc = 0;
   } else {
     while (acc >= STEP_MS) {

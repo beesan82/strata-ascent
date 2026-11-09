@@ -69,16 +69,63 @@
       #touch.mode-cannon .tstick-base { border-color: rgba(188, 150, 255, 0.55); }
       #touch.mode-cannon .tstick-knob { background: rgba(141, 98, 203, 0.5); border-color: rgba(188, 150, 255, 0.6); }
       .sz-jump { width: 84px; height: 84px; font-size: 26px; }
+      .sz-box { width: 48px; height: 48px; font-size: 15px; }
       /* 切替ボタン(旧 .sz-cannon の枠)。ラベル「パルス」が 76px 円に収まるよう font-size を下げる */
       .sz-weapon { width: 76px; height: 76px; font-size: 16px; }
       .sz-view { width: 48px; height: 48px; font-size: 16px; }
     }
+    /* アイテムボックス(設計 2026-11-09-item-box)。DOM のパネルで、ゲーム内描画(量子化)の対象外。
+       開いている間は main がゲーム更新を止める */
+    #itembox {
+      position: fixed; left: 50%; top: calc(10px + env(safe-area-inset-top)); transform: translateX(-50%);
+      width: min(92vw, 430px); z-index: 30;
+      background: rgba(16, 20, 24, 0.92); border: 1px solid rgba(200, 208, 214, 0.4);
+      color: #c8d0d6; font: 13px monospace; letter-spacing: 0.12em;
+      padding: 12px 14px; box-sizing: border-box;
+    }
+    #itembox[hidden] { display: none; }
+    .ibox-head {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 14px; margin-bottom: 8px;
+    }
+    #itembox-close {
+      background: none; border: 1px solid rgba(200, 208, 214, 0.4); color: #c8d0d6;
+      width: 30px; height: 30px; font: 16px monospace; cursor: pointer;
+    }
+    .ibox-label { color: #9aa4ad; font-size: 11px; margin: 8px 0 5px; }
+    .ibox-cells { display: flex; gap: 6px; flex-wrap: wrap; }
+    .ibox-cell {
+      width: 44px; height: 44px; box-sizing: border-box;
+      border: 1px solid rgba(200, 208, 214, 0.35); background: rgba(28, 34, 40, 0.5);
+      padding: 0; cursor: pointer;
+    }
+    .ibox-cell.empty { cursor: default; opacity: 0.45; }
+    /* 素材セルの見た目(ゲーム内の鋼青+淡色の上端帯を CSS で寄せる) */
+    .ibox-icon { width: 100%; height: 100%; background: linear-gradient(#c7d0ce 0 22%, #3a73a4 22% 100%); }
+    .ibox-chips { display: flex; gap: 6px; flex-wrap: wrap; min-height: 30px; }
+    .ibox-chip {
+      display: inline-flex; align-items: center; gap: 7px;
+      border: 1px solid rgba(200, 208, 214, 0.35); background: rgba(28, 34, 40, 0.5);
+      color: #c8d0d6; font: 12px monospace; padding: 4px 8px; cursor: pointer;
+    }
+    .ibox-chip .ibox-icon { width: 14px; height: 20px; }
+    .ibox-chip.locked { cursor: default; opacity: 0.6; }
+    .ibox-empty-note { color: #9aa4ad; font-size: 11px; }
+    #itembox-note { color: #9aa4ad; font-size: 11px; margin-top: 9px; min-height: 14px; }
   </style>
 </head>
 <body>
   <canvas id="game"></canvas>
   <div id="hud"></div>
   <div id="caption"></div>
+  <div id="itembox" hidden>
+    <div class="ibox-head"><span>アイテムボックス</span><button id="itembox-close" type="button">×</button></div>
+    <div class="ibox-label">携行（タップで落とす）</div>
+    <div id="itembox-carry" class="ibox-cells"></div>
+    <div class="ibox-label">保管（確保済み）</div>
+    <div id="itembox-secured" class="ibox-chips"></div>
+    <div id="itembox-note"></div>
+  </div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

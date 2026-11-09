@@ -121,7 +121,7 @@ function makeStick(
 }
 
 /** タッチ端末(pointer: coarse)でのみ操作系を組み立てる。それ以外では何もしない */
-export function installTouchControls(input: Input): void {
+export function installTouchControls(input: Input, onBoxToggle?: () => void): void {
   if (!window.matchMedia('(pointer: coarse)').matches) return;
 
   const root = document.createElement('div');
@@ -213,6 +213,15 @@ export function installTouchControls(input: Input): void {
       onUp: () => input.touchUp('Space'),
     }),
   );
+  // アイテムボックスの開閉(設計 2026-11-09-item-box)。開閉とポーズの実処理は main 側のコールバック
+  if (onBoxToggle) {
+    rightRow.appendChild(
+      makeButton('箱', 'sz-box', {
+        onDown: () => onBoxToggle(),
+        onUp: () => {},
+      }),
+    );
+  }
   right.appendChild(rightRow);
   root.appendChild(right);
 
