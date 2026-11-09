@@ -34,6 +34,7 @@ import { poseMotionOf, poseMuzzleWorld } from './render/playerPose';
 import { findSpawn, isHardAt } from './world/worldgen';
 import { sampleOpenness, targetZoomForOpenness, nextZoomStep, advanceZoom } from './core/zoom';
 import { lookahead } from './core/stick';
+import { PickupLog } from './core/pickupLog';
 import {
   initialSatiety,
   MAX_RATIONS,
@@ -131,6 +132,8 @@ if (collectStats) {
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
+const pickupLogEl = document.getElementById('pickuplog')!;
+const pickupLog = new PickupLog();
 const caption = new Caption(document.getElementById('caption')!);
 
 const destruction = new Destruction();
@@ -1096,6 +1099,7 @@ function update(dt: number): void {
       // 糧食は所持数だけが増える(満腹度は即時回復しない。自動摂取で消費される)
       else satiety = { ...satiety, rations: satiety.rations + 1 };
       audio.pickup(d.kind); // 取得音(§6.7): 種別で音色を変える
+      pickupLog.push(d.kind, simTime); // 取得ログ: 何を取ったかを画面端に出す
       return false;
     });
   }
@@ -1401,6 +1405,9 @@ function frame(now: number): void {
     }
   }
   updateHud();
+  // 取得ログの同期: 表示文字列が変わったフレームだけ DOM を触る(HUD と同じ流儀)
+  const logText = pickupLog.lines(simTime).join('\n');
+  if (pickupLogEl.textContent !== logText) pickupLogEl.textContent = logText;
   caption.update(simTime);
   requestAnimationFrame(frame);
 }
