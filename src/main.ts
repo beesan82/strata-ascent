@@ -387,6 +387,9 @@ let lastBeam: { angle: number; ttl: number } | null = null;
 // 発射直後の単発の「押し」(演出)。発射方向と逆向きへ画面を押し、0.1 秒で減衰する
 const PUSH_TTL = 0.1;
 let beamPush: { angle: number; ttl: number } | null = null;
+// 溜めが満タン(chargeRatio=1)になってからの経過秒(描画の完了リング用。段階1 エフェクト設計 §2-4)。
+// graviton の状態機械には触らず、update で chargeRatio を見て数えるだけ
+let chargeFullT = 0;
 
 // 破片の発生点(演出)。掘削点と命中点に置き、形と配置は render/beamShape が決める
 interface DebrisBurst { x: number; y: number; angle: number; key: number; ttl: number }
@@ -682,6 +685,8 @@ function update(dt: number): void {
   graviton.update(dt, input.fireHeld, fire, rechargeTimeFor(satLevelNow === 'critical' || satLevelNow === 'starving'));
   // 自動回復で弾が増えたときだけ小さく知らせる(§6.7)。発射で減った分は差し引きで消える
   if (graviton.charges > chargesBefore) audio.rechargeTick();
+  // 満タン継続時間(描画専用): 満タンの間だけ積み、離す・発射・キャンセルで ratio が落ちれば 0 に戻る
+  chargeFullT = graviton.chargeRatio >= 1 ? chargeFullT + dt : 0;
   input.expireCannonRelease(); // スティック砲の発射候補は、この update で発射しなければ失効する
   // パルス(連射武器): 照準は右スティックのアナログ方向 > 保持照準 > 移動入力の 8 方向。
   // タッチチャンネルは PC では常に無効なので、キーボード/マウス時は従来どおり 8 方向になる
@@ -1050,6 +1055,7 @@ function frame(now: number): void {
     : stickAim ? canvas.height / 2 + stickAim.y * aimR : canvas.height / 2;
   renderer.render(store, camera, player, aimMouseX, aimMouseY, simTime, {
     chargeRatio: graviton.chargeRatio,
+    chargeFullT,
     beam,
     push,
     debris: debrisBursts.map((b) => ({

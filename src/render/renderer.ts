@@ -13,8 +13,9 @@ import { drawPlayer } from './playerSprite';
 import { windupPose } from './bossPose';
 import { Post } from './post';
 import { drawHierarchyDebug } from './debugHierarchy';
-import { drawBeam, drawCharge } from './beam';
+import { drawBeam, drawCharge, drawChargeGlow } from './beam';
 import { debrisFragments } from './beamShape';
+import { shotShape, type ShotShape } from './shotShape';
 import { MegaStructure } from './megastructure';
 import { LightShafts } from './lightshaft';
 import { BeaconLights, ambientDelta, glowStrips, type GlowStrip } from './beacon';
@@ -45,6 +46,13 @@ const PUSH_MAX = 6;
  */
 const SKY_PAD = 16;
 
+/**
+ * 溜めのグローを present 後に表示解像度で重ねるか(段階1 エフェクト設計 §2-5)。
+ * render p50 の悪化が +0.5ms を超える場合は false にして in-buffer の演出だけで出す
+ * (裁定は docs/superpowers/plans/2026-11-09-fx-stage1.md の末尾に記録する)。
+ */
+const CHARGE_GLOW_OVERLAY = true;
+
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
@@ -71,6 +79,8 @@ export interface DebrisFx {
 export interface GravitonFx {
   /** 溜め比率(0..1)。>0でチャージ発光を描く */
   chargeRatio: number;
+  /** 溜めが満タン(chargeRatio=1)になってからの経過秒。完了リングの拡大に使う。未指定は 0 */
+  chargeFullT?: number;
   /** 生存中のビーム。nullなら描かない */
   beam: { angle: number; alpha: number } | null;
   /** 発射直後の単発の押し。null/未指定なら画面は動かない */
@@ -91,8 +101,40 @@ export interface GravitonFx {
 }
 
 /**
+ * 弾(パルス・敵弾)を 2 層(外帯+芯)で描く。軸に沿った向きは従来どおり整数 px に丸めて置き
+ * (回転なし・差分なし)、斜めは速度の角度で回転させる。回転描画は低解像度+量子化で
+ * 階段状になるが、それがドット調として正しい(段階1 エフェクト設計 §1)。
+ */
+function drawShot(
+  ctx: CanvasRenderingContext2D, sx: number, sy: number, shape: ShotShape,
+  outerColor: string, coreColor: string,
+): void {
+  if (shape.axis !== 'diag') {
+    const horiz = shape.axis === 'h';
+    const ow = horiz ? shape.outerLen : shape.outerWid;
+    const oh = horiz ? shape.outerWid : shape.outerLen;
+    ctx.fillStyle = outerColor;
+    ctx.fillRect(Math.round(sx - ow / 2), Math.round(sy - oh / 2), ow, oh);
+    const cw = horiz ? shape.coreLen : shape.coreWid;
+    const ch = horiz ? shape.coreWid : shape.coreLen;
+    ctx.fillStyle = coreColor;
+    ctx.fillRect(Math.round(sx - cw / 2), Math.round(sy - ch / 2), cw, ch);
+    return;
+  }
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(shape.angle);
+  ctx.fillStyle = outerColor;
+  ctx.fillRect(-shape.outerLen / 2, -shape.outerWid / 2, shape.outerLen, shape.outerWid);
+  ctx.fillStyle = coreColor;
+  ctx.fillRect(-shape.coreLen / 2, -shape.coreWid / 2, shape.coreLen, shape.coreWid);
+  ctx.restore();
+}
+
+/**
  * Draws weapon effects from the visible muzzle. Gameplay destruction keeps its
  * existing player-center origin in main.ts; this contract is render-only.
+ * timeSec は溜め演出(収束パーティクルの位相・電弧の形)の時刻。
  */
 export function drawGravitonEffects(
   ctx: CanvasRenderingContext2D,
@@ -101,9 +143,10 @@ export function drawGravitonEffects(
   viewportWidth: number,
   viewportHeight: number,
   ppt: number,
+  timeSec = 0,
 ): void {
   if (fx.chargeRatio > 0) {
-    drawCharge(ctx, muzzle.x, muzzle.y, fx.chargeRatio);
+    drawCharge(ctx, muzzle.x, muzzle.y, fx.chargeRatio, fx.chargeFullT ?? 0, timeSec);
   }
   if (fx.beam) {
     const beamLength = Math.hypot(viewportWidth, viewportHeight) * 1.15;
@@ -301,13 +344,15 @@ export class Renderer {
     // ctxを丸ごと平行移動するので各レイヤーは一貫してずれる。restoreで必ず戻す。
     if (this.profileStages) this.stageT = performance.now();
     ctx.save();
+    // 押しの平行移動量(px)。present 後のグローの銃口位置にも同じずれを足す
+    let pushX = 0;
+    let pushY = 0;
     if (fx.push && fx.push.t > 0) {
       const mag = (PUSH_MAX * fx.push.t) / this.pipeline.scale;
       if (mag >= 0.5) {
-        ctx.translate(
-          Math.round(-Math.cos(fx.push.angle) * mag),
-          Math.round(-Math.sin(fx.push.angle) * mag),
-        );
+        pushX = Math.round(-Math.cos(fx.push.angle) * mag);
+        pushY = Math.round(-Math.sin(fx.push.angle) * mag);
+        ctx.translate(pushX, pushY);
       }
     }
 
@@ -408,7 +453,7 @@ export class Renderer {
 
     // 重力子砲の演出: ライトの「上」に描いて発光体として読ませる。
     // ただし post(グレイン+ビネット)の「前」に描くことで画面全体の質感と馴染ませる。
-    drawGravitonEffects(ctx, visualAnchors.muzzle, fx, w, h, ppt);
+    drawGravitonEffects(ctx, visualAnchors.muzzle, fx, w, h, ppt, timeSec);
 
     // 破片: 同じ fx 相乗りで、決定論配置の小矩形だけを描く(新規パスなし)
     if (fx.debris && fx.debris.length > 0) {
@@ -425,45 +470,22 @@ export class Renderer {
       ctx.globalAlpha = 1;
     }
 
-    // パルスの弾: 同じ fx 相乗りで、ビームと同じ文法の 2 層(外帯=鋼、芯=白)で描く(新規パスなし)
+    // パルスの弾: 同じ fx 相乗りで、ビームと同じ文法の 2 層(外帯=鋼、芯=白)を速度の向きに
+    // 回転させて描く(段階1 エフェクト設計 §1。新規パスなし)
     if (fx.pulses && fx.pulses.length > 0) {
-      const oLong = Math.max(2, Math.round(0.62 * ppt));
-      const oShort = Math.max(1, Math.round(0.26 * ppt));
-      const cLong = Math.max(2, Math.round(0.44 * ppt));
-      const cShort = Math.max(1, Math.round(0.13 * ppt));
       for (const p of fx.pulses) {
         const sx = Math.round((p.x - renderCam.x) * ppt + w / 2);
         const sy = Math.round((p.y - renderCam.y) * ppt + h / 2);
-        const horiz = Math.abs(p.dx) >= Math.abs(p.dy);
-        ctx.fillStyle = '#51728d';
-        const ow = horiz ? oLong : oShort;
-        const oh = horiz ? oShort : oLong;
-        ctx.fillRect(Math.round(sx - ow / 2), Math.round(sy - oh / 2), ow, oh);
-        ctx.fillStyle = '#c7d0ce';
-        const cw = horiz ? cLong : cShort;
-        const ch = horiz ? cShort : cLong;
-        ctx.fillRect(Math.round(sx - cw / 2), Math.round(sy - ch / 2), cw, ch);
+        drawShot(ctx, sx, sy, shotShape(p.dx, p.dy, ppt), '#51728d', '#c7d0ce');
       }
     }
 
     // 敵弾(固定砲台): パルスと同じ描き方の相乗りで、色だけ熱色系(外帯=錆、芯=金)に変える
     if (fx.shots && fx.shots.length > 0) {
-      const oLong = Math.max(2, Math.round(0.62 * ppt));
-      const oShort = Math.max(1, Math.round(0.26 * ppt));
-      const cLong = Math.max(2, Math.round(0.44 * ppt));
-      const cShort = Math.max(1, Math.round(0.13 * ppt));
       for (const p of fx.shots) {
         const sx = Math.round((p.x - renderCam.x) * ppt + w / 2);
         const sy = Math.round((p.y - renderCam.y) * ppt + h / 2);
-        const horiz = Math.abs(p.dx) >= Math.abs(p.dy);
-        ctx.fillStyle = '#9a6d32';
-        const ow = horiz ? oLong : oShort;
-        const oh = horiz ? oShort : oLong;
-        ctx.fillRect(Math.round(sx - ow / 2), Math.round(sy - oh / 2), ow, oh);
-        ctx.fillStyle = '#caa64a';
-        const cw = horiz ? cLong : cShort;
-        const ch = horiz ? cShort : cLong;
-        ctx.fillRect(Math.round(sx - cw / 2), Math.round(sy - ch / 2), cw, ch);
+        drawShot(ctx, sx, sy, shotShape(p.dx, p.dy, ppt), '#9a6d32', '#caa64a');
       }
     }
 
@@ -647,6 +669,16 @@ export class Renderer {
     const tPresent = performance.now();
     this.pipeline.present(this.screenCtx, this.canvas.width, this.canvas.height);
     this.lastPresentMs = performance.now() - tPresent;
+
+    // 溜めのグロー(設計 §2-5): 量子化の外側、表示解像度で銃口に放射グラデーションを lighter で 1 枚重ねる。
+    // 銃口の表示座標は内部バッファ座標(押しのずれ込み)に present の整数倍率と余白を掛け足して求める
+    // (新しい座標系は作らない)。画素中心に合わせるため +0.5 px してから拡大する
+    if (CHARGE_GLOW_OVERLAY && fx.chargeRatio > 0) {
+      const s = this.pipeline.scale;
+      const gx = presentX + (visualAnchors.muzzle.x + pushX + 0.5) * s;
+      const gy = presentY + (visualAnchors.muzzle.y + pushY + 0.5) * s;
+      drawChargeGlow(this.screenCtx, gx, gy, s, fx.chargeRatio, fx.chargeFullT ?? 0);
+    }
 
     // 同期焼き込みのなかったフレームだけ、先読み/再焼き込みを1仕事進める
     if (!this.baker.takeBakedThisFrame()) {
