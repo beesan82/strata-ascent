@@ -25,7 +25,7 @@ import { restWarmthAt } from '../world/restpoint';
 import { HIGH_FIDELITY_TILE_PX, PixelPipeline } from './pixel';
 import { paletteRgb } from './palette';
 import { nextBakeTask } from './bakeSchedule';
-import type { Vec2 } from './playerPose';
+import { poseMotionOf, type Vec2 } from './playerPose';
 
 /** 画面の横幅に収めるタイル数(スケール感の基準) */
 const VIEW_TILES_X = 34;
@@ -431,6 +431,7 @@ export class Renderer {
       bb.ambientColor,
       timeSec,
       player.ledge !== null, // 崖つかみ中はぶら下がりポーズ(ポーズ決定に相乗り。パスは増えない)
+      poseMotionOf(player), // 梯子・空中・着地・よじ登り復帰(設計 2026-11-09-anim-polish)
     );
     if (invulnDim) ctx.globalAlpha = 1;
     this.mark('player');

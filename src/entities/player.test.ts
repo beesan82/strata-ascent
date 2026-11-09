@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { TILE, type Tile } from '../world/tiles';
-import { JUMP_VELOCITY, Player, type PlayerInput } from './player';
+import {
+  CLIMB_RUNG_TILES,
+  CLIMB_UP_POSE_TIME,
+  JUMP_VELOCITY,
+  LAND_POSE_TIME,
+  Player,
+  type PlayerInput,
+} from './player';
 
 const noInput: PlayerInput = { left: false, right: false, jump: false, up: false, down: false };
 const emptyTiles = (): Tile => TILE.AIR;
@@ -391,5 +398,126 @@ describe('Player 向きと歩行位相', () => {
     const distance = p.body.x - x0;
     expect(distance).toBeGreaterThan(3);
     expect((p.walkPhase - phase0) / distance).toBeCloseTo(Math.PI, 1);
+  });
+});
+
+describe('Player 描画専用の位相とタイマ(アニメーション作り込み)', () => {
+  const settle = (p: Player, tiles = floorTiles) => {
+    for (let i = 0; i < 120; i++) p.update(noInput, 1 / 60, tiles);
+  };
+
+  it('梯子を昇っている間だけ climbPhase が縦移動距離に比例して進み、離れると 0 に戻る', () => {
+    const p = new Player(2.8, 5); // 中心 x が梯子列(x=3)、床(行 10)より上の空中
+    const y0 = p.body.y;
+    expect(p.climbPhase).toBe(0);
+    for (let i = 0; i < 30; i++) p.update({ ...noInput, up: true }, 1 / 60, ladderTiles);
+    const distance = y0 - p.body.y;
+    expect(distance).toBeGreaterThan(1);
+    expect(p.onLadderNow).toBe(true);
+    expect(p.climbPhase / distance).toBeCloseTo(Math.PI / CLIMB_RUNG_TILES, 1);
+    // 止まると位相は進まないが梯子ポーズのまま
+    const held = p.climbPhase;
+    p.update(noInput, 1 / 60, ladderTiles);
+    expect(p.climbPhase).toBe(held);
+    expect(p.onLadderNow).toBe(true);
+    // 梯子の外(空中)へ置き直すと離脱し、位相は保持しない
+    p.body.x = 6;
+    p.update(noInput, 1 / 60, ladderTiles);
+    expect(p.onLadderNow).toBe(false);
+    expect(p.climbPhase).toBe(0);
+  });
+
+  it('床面で梯子の列に立っている(昇降していない)ときは梯子ポーズ扱いにしない', () => {
+    // 梯子列(x=3)の底: 足元が床(行 10)に接している。梯子上では vy=0 で onGround が立たない
+    const p = new Player(2.8, 10 - 1.75);
+    p.update(noInput, 1 / 60, ladderTiles);
+    expect(p.body.onGround).toBe(false);
+    expect(p.onLadderNow).toBe(false);
+    // 歩いて横切っても同じ
+    p.update({ ...noInput, right: true }, 1 / 60, ladderTiles);
+    expect(p.onLadderNow).toBe(false);
+    // 上へ昇り始めれば梯子ポーズ
+    p.body.x = 2.8;
+    p.update({ ...noInput, up: true }, 1 / 60, ladderTiles);
+    expect(p.onLadderNow).toBe(true);
+  });
+
+  it('着地の瞬間に landT と落下速度が記録され、LAND_POSE_TIME で減衰して 0 に戻る', () => {
+    const p = new Player(0, 5); // 空中から床(行 10)へ落ちる
+    let landedAt = -1;
+    let vyBeforeLanding = 0;
+    for (let i = 0; i < 240 && landedAt < 0; i++) {
+      const vyBefore = p.body.vy;
+      p.update(noInput, 1 / 60, floorTiles);
+      if (p.body.onGround) {
+        landedAt = i;
+        vyBeforeLanding = vyBefore;
+      }
+    }
+    expect(landedAt).toBeGreaterThan(0);
+    expect(p.landT).toBeCloseTo(LAND_POSE_TIME);
+    // 記録される落下速度は、着地フレームで重力を足した直後の vy(前フレームの vy より大きい)
+    expect(p.landVy).toBeGreaterThanOrEqual(vyBeforeLanding);
+    expect(p.landVy).toBeGreaterThan(5);
+    // 接地し続けても再トリガしない。残り時間は毎フレーム dt ずつ減る
+    p.update(noInput, 1 / 60, floorTiles);
+    expect(p.landT).toBeCloseTo(LAND_POSE_TIME - 1 / 60);
+    for (let i = 0; i < 10; i++) p.update(noInput, 1 / 60, floorTiles);
+    expect(p.landT).toBe(0);
+    expect(p.body.onGround).toBe(true);
+  });
+
+  it('ジャンプの踏み切りでは landT が立たない(接地への遷移のみ)', () => {
+    const p = new Player(0, 8);
+    settle(p);
+    for (let i = 0; i < 10; i++) p.update(noInput, 1 / 60, floorTiles);
+    expect(p.landT).toBe(0);
+    p.update({ ...noInput, jump: true }, 1 / 60, floorTiles);
+    expect(p.body.onGround).toBe(false);
+    expect(p.landT).toBe(0);
+  });
+
+  it('着地の記録はゲームプレイの数値(位置・速度)を変えない', () => {
+    const run = () => {
+      const p = new Player(0, 5);
+      const trace: number[] = [];
+      for (let i = 0; i < 90; i++) {
+        p.update(i % 2 === 0 ? { ...noInput, right: true } : noInput, 1 / 60, floorTiles);
+        trace.push(p.body.x, p.body.y, p.body.vx, p.body.vy);
+      }
+      return trace;
+    };
+    // 同じ入力列は同じ軌跡を描く(描画専用タイマの有無に依存しない決定論の確認)
+    expect(run()).toEqual(run());
+  });
+
+  it('よじ登りの成立で climbUpT が立ち、経過で減る', () => {
+    /** x>=5 かつ y>=10 が固体の塊。縁は (5, 10) */
+    const blockTiles = (tx: number, ty: number): Tile =>
+      tx >= 5 && ty >= 10 ? TILE.SOLID : TILE.AIR;
+    const p = new Player(4.25, 9.3);
+    for (let i = 0; i < 10 && !p.ledge; i++) p.update({ ...noInput, right: true }, 1 / 60, blockTiles);
+    expect(p.ledge).not.toBeNull();
+    expect(p.climbUpT).toBe(0);
+    p.update({ ...noInput, up: true }, 1 / 60, blockTiles);
+    expect(p.ledge).toBeNull();
+    expect(p.climbUpT).toBeCloseTo(CLIMB_UP_POSE_TIME);
+    // よじ登りは即時移動なので着地扱いにはならない
+    expect(p.landT).toBe(0);
+    p.update(noInput, 1 / 60, blockTiles);
+    expect(p.climbUpT).toBeCloseTo(CLIMB_UP_POSE_TIME - 1 / 60);
+    for (let i = 0; i < 12; i++) p.update(noInput, 1 / 60, blockTiles);
+    expect(p.climbUpT).toBe(0);
+  });
+
+  it('登り先が塞がれて登れないときは climbUpT が立たない', () => {
+    const lowCeiling = (tx: number, ty: number): Tile =>
+      (tx >= 5 && ty >= 10) || (tx === 5 && ty === 8) ? TILE.SOLID : TILE.AIR;
+    const p = new Player(4.25, 9.3);
+    for (let i = 0; i < 10 && !p.ledge; i++) p.update({ ...noInput, right: true }, 1 / 60, lowCeiling);
+    expect(p.ledge).not.toBeNull();
+    p.update({ ...noInput, up: true }, 1 / 60, lowCeiling);
+    expect(p.ledge).not.toBeNull();
+    expect(p.climbUpT).toBe(0);
   });
 });

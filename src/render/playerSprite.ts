@@ -1,8 +1,10 @@
 import { mixHex } from './biome';
 import {
   calculatePlayerPose,
+  GROUNDED_MOTION,
   PLAYER_FEET_OFFSET_TILES,
   type PlayerPose,
+  type PoseMotion,
   type Vec2,
 } from './playerPose';
 
@@ -365,7 +367,9 @@ export function drawPlayer(
   ambientColor: string,
   timeSec: number,
   hanging = false,
+  motion: PoseMotion = GROUNDED_MOTION,
 ): PlayerVisualAnchors {
+  // 梯子・空中・着地・よじ登り復帰はすべてポーズ決定に相乗りする(描画パスは増えない)
   const pose = calculatePlayerPose(
     facing,
     walkPhase,
@@ -373,6 +377,7 @@ export function drawPlayer(
     aimAngle,
     timeSec,
     hanging,
+    motion,
   );
   const palette = tintPalette(ambientColor);
   const supportContact = supportContactOnWeapon(pose);
