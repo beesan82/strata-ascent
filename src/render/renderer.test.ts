@@ -36,15 +36,26 @@ class FakeCanvas {
 
 class EffectRecordingContext {
   fillStyle: string | CanvasGradient = '';
+  strokeStyle: string | CanvasGradient = '';
+  lineWidth = 1;
   globalAlpha = 1;
   globalCompositeOperation: GlobalCompositeOperation = 'source-over';
   radialGradients = 0;
+  strokes = 0;
   translates: number[][] = [];
   fillRects: number[][] = [];
 
   save(): void {}
   restore(): void {}
   rotate(): void {}
+  beginPath(): void {}
+  moveTo(): void {}
+  lineTo(): void {}
+  arc(): void {}
+
+  stroke(): void {
+    this.strokes++;
+  }
 
   translate(x: number, y: number): void {
     this.translates.push([x, y]);
@@ -84,7 +95,7 @@ describe('Renderer pixel pipeline', () => {
     ).toContainEqual({ width: 427, height: 240 });
   });
 
-  it('starts charge and beam at one supplied visual muzzle, with flat bands only', () => {
+  it('starts charge and beam at one supplied visual muzzle, with one gradient core and no additive blend', () => {
     const context = new EffectRecordingContext();
     const muzzle = { x: 41, y: 29 };
 
@@ -93,19 +104,38 @@ describe('Renderer pixel pipeline', () => {
       muzzle,
       {
         chargeRatio: 0.6,
+        chargeFullT: 0,
         beam: { angle: -Math.PI / 4, alpha: 0.8 },
       },
       320,
       180,
       12,
+      1.5,
     );
 
     // 溜めもビームも銃口を原点に描く(translate の最初は必ず銃口)
     expect(context.translates[0]).toEqual([muzzle.x, muzzle.y]);
     expect(context.translates).toContainEqual([muzzle.x, muzzle.y]);
     expect(context.fillRects.length).toBeGreaterThan(0);
-    // 段階 3: 放射グラデーションと加算合成は使わない
-    expect(context.radialGradients).toBe(0);
+    // 段階1 エフェクト: 放射グラデーションは球コアの 1 枚だけ。ratio 0.6 では電弧も出る。
+    // 加算合成は内部バッファでは使わない(グローは present 後の overlay)
+    expect(context.radialGradients).toBe(1);
+    expect(context.strokes).toBeGreaterThan(0);
     expect(context.globalCompositeOperation).toBe('source-over');
+  });
+
+  it('draws nothing for the charge when the ratio is zero', () => {
+    const context = new EffectRecordingContext();
+    drawGravitonEffects(
+      context as unknown as CanvasRenderingContext2D,
+      { x: 10, y: 10 },
+      { chargeRatio: 0, beam: null },
+      320,
+      180,
+      12,
+      0,
+    );
+    expect(context.radialGradients).toBe(0);
+    expect(context.fillRects).toEqual([]);
   });
 });

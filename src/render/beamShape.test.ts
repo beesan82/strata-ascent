@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  beamBands, chargeColor, chargeSegment, CHARGE_SEGMENTS,
-  debrisFragments, muzzleFlash, DEBRIS_COUNT, DEBRIS_TTL,
+  beamBands, chargeArcs, chargeColor, chargeCore, chargeGlow, chargeParticles, chargeRing,
+  CHARGE_ARC_FROM, CHARGE_ARC_HZ, CHARGE_ARC_JITTER, CHARGE_ARC_REACH,
+  CHARGE_ARC_SEG_MAX, CHARGE_ARC_SEG_MIN, CHARGE_ARC_STEP_MAX,
+  CHARGE_PARTICLE_MAX, CHARGE_RING_R_MAX, CHARGE_RING_R_MIN, CHARGE_RING_TTL,
+  debrisFragments, hexWithAlpha, muzzleFlash, DEBRIS_COUNT, DEBRIS_TTL,
 } from './beamShape';
 import { PIXEL_PALETTE } from './palette';
 
@@ -86,17 +89,242 @@ describe('chargeColor', () => {
   });
 });
 
-describe('chargeSegment', () => {
-  it('6 本すべて異なる角度で、溜めるほど銃口へ寄って伸びる', () => {
-    const angles = new Set<number>();
-    for (let i = 0; i < CHARGE_SEGMENTS; i++) {
-      const s0 = chargeSegment(0, i);
-      const s1 = chargeSegment(1, i);
-      angles.add(s0.angle);
-      expect(s1.dist).toBeLessThan(s0.dist);
-      expect(s1.len).toBeGreaterThan(s0.len);
+describe('hexWithAlpha', () => {
+  it('#rrggbb を rgba に変換する', () => {
+    expect(hexWithAlpha('#caa64a', 0)).toBe('rgba(202,166,74,0)');
+    expect(hexWithAlpha('#c7d0ce', 0.5)).toBe('rgba(199,208,206,0.5)');
+  });
+});
+
+describe('chargeParticles', () => {
+  const dist = (p: { dx: number; dy: number }) => Math.hypot(p.dx, p.dy);
+
+  it('決定的: 同じ (ratio, timeSec) で同じ配置', () => {
+    expect(chargeParticles(0.7, 1.23)).toEqual(chargeParticles(0.7, 1.23));
+  });
+
+  it('ratio 0 以下では出ず、満タンで CHARGE_PARTICLE_MAX 個、個数は ratio に対して単調', () => {
+    expect(chargeParticles(0, 1)).toEqual([]);
+    expect(chargeParticles(-1, 1)).toEqual([]);
+    expect(chargeParticles(1, 1)).toHaveLength(CHARGE_PARTICLE_MAX);
+    let prev = 0;
+    for (const r of [0.05, 0.2, 0.4, 0.6, 0.8, 1]) {
+      const n = chargeParticles(r, 1).length;
+      expect(n).toBeGreaterThanOrEqual(prev);
+      prev = n;
     }
-    expect(angles.size).toBe(CHARGE_SEGMENTS);
+  });
+
+  it('時間が進むと各火花は銃口へ近づく(進みが巻き戻らない限り距離が縮む)', () => {
+    const a = chargeParticles(0.5, 2.0);
+    const b = chargeParticles(0.5, 2.02);
+    let compared = 0;
+    for (let i = 0; i < a.length; i++) {
+      if (b[i].progress > a[i].progress) {
+        expect(dist(b[i])).toBeLessThan(dist(a[i]));
+        compared++;
+      }
+    }
+    expect(compared).toBeGreaterThan(0);
+  });
+
+  it('火花は出発半径の範囲内にあり、銃口に着く直前が最も明るい', () => {
+    for (const p of chargeParticles(1, 0.37)) {
+      expect(dist(p)).toBeLessThanOrEqual(32 + 1e-9);
+      expect(dist(p)).toBeGreaterThanOrEqual(2 - 1e-9);
+      expect(p.alpha).toBeGreaterThan(0);
+      expect(p.alpha).toBeLessThanOrEqual(1);
+    }
+    const near = chargeParticles(1, 0).map((p) => ({ p: p.progress, a: p.alpha }));
+    near.sort((x, y) => x.p - y.p);
+    for (let i = 1; i < near.length; i++) expect(near[i].a).toBeGreaterThanOrEqual(near[i - 1].a);
+  });
+
+  it('色はすべてパレット実在色で、終盤は銃口近くが白くなる', () => {
+    for (const r of [0.2, 0.5, 0.9, 1]) {
+      for (const p of chargeParticles(r, 0.9)) expect(PIXEL_PALETTE).toContain(p.color);
+    }
+    const nearWhite = (r: number) =>
+      chargeParticles(r, 0.9).some((p) => p.progress > 0.75 && p.color === '#c7d0ce');
+    expect(nearWhite(1)).toBe(true);
+    expect(nearWhite(0.2)).toBe(false);
+  });
+
+  it('溜めるほど速い(同じ時間差で進みが大きい。巻き戻りは 1 周として数える)', () => {
+    const adv = (r: number) => {
+      const a = chargeParticles(r, 0);
+      const b = chargeParticles(r, 0.05);
+      const d = b[0].progress - a[0].progress;
+      return d < 0 ? d + 1 : d;
+    };
+    expect(adv(1)).toBeGreaterThan(adv(0.3));
+  });
+});
+
+describe('chargeCore', () => {
+  it('中心は白で、色止めは 0 から 1 へ昇順、端は透明', () => {
+    for (const r of [0, 0.5, 1]) {
+      const c = chargeCore(r);
+      expect(c.stops[0].offset).toBe(0);
+      expect(c.stops[0].color).toBe('#c7d0ce');
+      for (let i = 1; i < c.stops.length; i++) {
+        expect(c.stops[i].offset).toBeGreaterThan(c.stops[i - 1].offset);
+      }
+      expect(c.stops[c.stops.length - 1].offset).toBe(1);
+      expect(c.stops[c.stops.length - 1].color).toMatch(/,0\)$/);
+    }
+  });
+
+  it('溜めるほど半径・白芯・明るさが増す', () => {
+    const c0 = chargeCore(0);
+    const c1 = chargeCore(1);
+    expect(c1.radius).toBeGreaterThan(c0.radius);
+    expect(c1.stops[1].offset).toBeGreaterThan(c0.stops[1].offset);
+    expect(c1.alpha).toBeGreaterThan(c0.alpha);
+    expect(c1.alpha).toBeLessThanOrEqual(1);
+  });
+
+  it('中間色は溜め段の色(chargeColor)に揃う', () => {
+    expect(chargeCore(0.3).stops[1].color).toBe(chargeColor(0.3));
+    expect(chargeCore(0.9).stops[1].color).toBe(chargeColor(0.9));
+  });
+});
+
+describe('chargeArcs', () => {
+  it('CHARGE_ARC_FROM 未満では出ず、以降は本数が増える', () => {
+    expect(chargeArcs(CHARGE_ARC_FROM - 0.01, 1)).toEqual([]);
+    expect(chargeArcs(0, 1)).toEqual([]);
+    const n0 = chargeArcs(CHARGE_ARC_FROM, 1).length;
+    const n1 = chargeArcs(1, 1).length;
+    expect(n0).toBeGreaterThanOrEqual(2);
+    expect(n1).toBeGreaterThan(n0);
+  });
+
+  it('同じ tick では同じ形、tick が進むと形が変わる', () => {
+    const tick0a = chargeArcs(1, 0.01);
+    const tick0b = chargeArcs(1, 0.5 / CHARGE_ARC_HZ);
+    expect(tick0a).toEqual(tick0b);
+    expect(chargeArcs(1, 0)).not.toEqual(chargeArcs(1, 1));
+  });
+
+  it('各電弧はコア表面から始まり外へ向かって伸び、色はパレット実在色', () => {
+    const coreR = chargeCore(1).radius;
+    for (const arc of chargeArcs(1, 0.7)) {
+      expect(arc.points.length).toBeGreaterThanOrEqual(CHARGE_ARC_SEG_MIN + 1);
+      expect(arc.points.length).toBeLessThanOrEqual(CHARGE_ARC_SEG_MAX + 1);
+      const d = arc.points.map((p) => Math.hypot(p.x, p.y));
+      expect(d[0]).toBeLessThan(coreR);
+      for (let i = 1; i < d.length; i++) expect(d[i]).toBeGreaterThan(d[i - 1]);
+      expect(PIXEL_PALETTE).toContain(arc.color);
+      expect(arc.alpha).toBeGreaterThan(0);
+      expect(arc.alpha).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('稲妻型: 主方向へ 1 セグメント最大 4px ずつ進み、垂直方向のジッターは ±2.5px 以内', () => {
+    for (const [ratio, time] of [[1, 0.7], [1, 2.3], [0.8, 0.1], [CHARGE_ARC_FROM, 5.5]] as const) {
+      for (const arc of chargeArcs(ratio, time)) {
+        const p0 = arc.points[0];
+        const len0 = Math.hypot(p0.x, p0.y);
+        const ux = p0.x / len0;
+        const uy = p0.y / len0;
+        let prevAlong = len0;
+        for (let i = 1; i < arc.points.length; i++) {
+          const p = arc.points[i];
+          const along = p.x * ux + p.y * uy;
+          const perp = -p.x * uy + p.y * ux;
+          expect(along - prevAlong).toBeGreaterThan(0);
+          expect(along - prevAlong).toBeLessThanOrEqual(CHARGE_ARC_STEP_MAX + 1e-9);
+          expect(Math.abs(perp)).toBeLessThanOrEqual(CHARGE_ARC_JITTER + 1e-9);
+          prevAlong = along;
+        }
+      }
+    }
+  });
+
+  it('全長はコア半径 + CHARGE_ARC_REACH 以内に収まる(地面まで垂れない)', () => {
+    for (const ratio of [CHARGE_ARC_FROM, 0.8, 1]) {
+      const limit = chargeCore(ratio).radius + CHARGE_ARC_REACH;
+      for (let k = 0; k < 40; k++) {
+        for (const arc of chargeArcs(ratio, k / CHARGE_ARC_HZ)) {
+          for (const p of arc.points) expect(Math.hypot(p.x, p.y)).toBeLessThanOrEqual(limit + 1e-9);
+        }
+      }
+    }
+  });
+
+  it('決定的: 同じ (ratio, timeSec) で同じ形', () => {
+    expect(chargeArcs(1, 0.37)).toEqual(chargeArcs(1, 0.37));
+  });
+});
+
+describe('chargeRing', () => {
+  it('満タン未満・寿命外では出ない', () => {
+    expect(chargeRing(0.99, 0.1)).toBeNull();
+    expect(chargeRing(1, -0.01)).toBeNull();
+    expect(chargeRing(1, CHARGE_RING_TTL + 0.01)).toBeNull();
+  });
+
+  it('経過で半径が広がり、線幅と明るさが痩せる', () => {
+    const a = chargeRing(1, 0.02)!;
+    const b = chargeRing(1, CHARGE_RING_TTL * 0.8)!;
+    expect(b.radius).toBeGreaterThan(a.radius);
+    expect(b.width).toBeLessThan(a.width);
+    expect(b.width).toBeGreaterThanOrEqual(1);
+    expect(b.alpha).toBeLessThan(a.alpha);
+    expect(b.alpha).toBeGreaterThan(0);
+  });
+
+  it('半径は CHARGE_RING_R_MIN から CHARGE_RING_R_MAX(13px)までで、プレイヤーを囲む大きさにならない', () => {
+    expect(CHARGE_RING_R_MAX).toBe(13);
+    expect(CHARGE_RING_TTL).toBeCloseTo(0.18);
+    expect(chargeRing(1, 0)!.radius).toBeCloseTo(CHARGE_RING_R_MIN);
+    expect(chargeRing(1, CHARGE_RING_TTL)!.radius).toBeCloseTo(CHARGE_RING_R_MAX);
+    for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+      expect(chargeRing(1, CHARGE_RING_TTL * f)!.radius).toBeLessThanOrEqual(CHARGE_RING_R_MAX);
+    }
+  });
+
+  it('明るさは (1-p) の冪で線形より速く消える', () => {
+    const half = chargeRing(1, CHARGE_RING_TTL * 0.5)!;
+    expect(half.alpha).toBeLessThan(0.5);
+    expect(half.alpha).toBeGreaterThan(0);
+    expect(chargeRing(1, 0)!.alpha).toBeCloseTo(1);
+    expect(chargeRing(1, CHARGE_RING_TTL)!.alpha).toBeCloseTo(0);
+  });
+});
+
+describe('chargeGlow', () => {
+  it('ratio 0 以下では出ず、溜めるほど大きく明るい', () => {
+    expect(chargeGlow(0, 0)).toBeNull();
+    const g1 = chargeGlow(0.3, 0)!;
+    const g2 = chargeGlow(0.9, 0)!;
+    expect(g2.radius).toBeGreaterThan(g1.radius);
+    expect(g2.alpha).toBeGreaterThan(g1.alpha);
+  });
+
+  it('満タン直後は完了リングと同期して一瞬強まり、その後は定常値に戻る', () => {
+    const burst = chargeGlow(1, 0.01)!;
+    const steady = chargeGlow(1, CHARGE_RING_TTL + 1)!;
+    expect(burst.alpha).toBeGreaterThan(steady.alpha);
+    expect(steady.alpha).toBeLessThanOrEqual(1);
+  });
+
+  it('リング連動の半径増分はリングの広がりに追随し、基本半径(10 + 24t)は変わらない', () => {
+    const steady = chargeGlow(1, CHARGE_RING_TTL + 1)!;
+    expect(steady.radius).toBeCloseTo(34);
+    const start = chargeGlow(1, 0)!;
+    const mid = chargeGlow(1, CHARGE_RING_TTL * 0.5)!;
+    const end = chargeGlow(1, CHARGE_RING_TTL)!;
+    expect(start.radius).toBeCloseTo(steady.radius);
+    expect(mid.radius).toBeGreaterThan(start.radius);
+    expect(end.radius).toBeGreaterThan(mid.radius);
+    expect(end.radius - steady.radius).toBeLessThanOrEqual(6 + 1e-9);
+    // リングが最大半径に達した時点で増分も最大
+    const ringEnd = chargeRing(1, CHARGE_RING_TTL)!;
+    expect(end.radius - steady.radius).toBeCloseTo(
+      6 * (ringEnd.radius - CHARGE_RING_R_MIN) / (CHARGE_RING_R_MAX - CHARGE_RING_R_MIN),
+    );
   });
 });
 
