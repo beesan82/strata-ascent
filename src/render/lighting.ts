@@ -1,3 +1,5 @@
+import type { ConeParams } from './depthLight';
+
 /**
  * バイオーム環境光+プレイヤー補助光。
  * 旧「闇を敷いて光で切り抜く」方式を廃止し、全体が見える明るい画面にする。
@@ -23,11 +25,13 @@ export class Lighting {
    * 3) overlay があれば暗幕の「上」に加算する光(光柱など)を半解像度のこのキャンバスへ描かせる。
    *    暗幕と一緒に 1 回で主バッファへ乗るので、全画面の lighter パスを 1 つ節約できる
    *    (主バッファの拡大は最近傍なので縁は硬いまま)。overlay は (ctx, scale=0.5) を受け取る。
+   * cone: 補助光のコーンの係数(depthLight.coneParams。懐中電灯モードで半径と中心の明るさが上がる)。
    */
   render(
     mainCtx: CanvasRenderingContext2D,
     px: number, py: number, angle: number, ppt: number, timeSec: number,
     ambientColor: string, ambientLevel: number,
+    cone: ConeParams,
     overlay?: (ctx: CanvasRenderingContext2D, scale: number) => void,
   ): void {
     const w = this.canvas.width;
@@ -53,13 +57,13 @@ export class Lighting {
     ctx.fillStyle = amb;
     ctx.beginPath(); ctx.arc(hx, hy, ambientR, 0, Math.PI * 2); ctx.fill();
 
-    const coneR = 22 * hp * flicker;
+    const coneR = 22 * hp * flicker * cone.radiusMult;
     const half = 0.34;
-    const cone = ctx.createRadialGradient(hx, hy, 0, hx, hy, coneR);
-    cone.addColorStop(0, 'rgba(0,0,0,0.8)');
-    cone.addColorStop(0.7, 'rgba(0,0,0,0.35)');
-    cone.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = cone;
+    const coneGrad = ctx.createRadialGradient(hx, hy, 0, hx, hy, coneR);
+    coneGrad.addColorStop(0, `rgba(0,0,0,${cone.centerAlpha})`);
+    coneGrad.addColorStop(0.7, `rgba(0,0,0,${cone.midAlpha})`);
+    coneGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = coneGrad;
     ctx.beginPath(); ctx.moveTo(hx, hy);
     ctx.arc(hx, hy, coneR, angle - half, angle + half); ctx.closePath(); ctx.fill();
 

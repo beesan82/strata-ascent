@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TILE, type Tile } from '../world/tiles';
-import { findLedge, LEDGE_HANG_DEPTH, moveBody, type Body } from './physics';
+import { findLedge, LEDGE_HANG_DEPTH, moveBody, type Body, type TileLookup } from './physics';
 
 /** y=5行だけが床、x=10列だけが壁のテストワールド */
 const testTiles = (tx: number, ty: number): Tile => {
@@ -95,6 +95,132 @@ describe('moveBody', () => {
     expect(b.y).toBeGreaterThanOrEqual(6 - 1e-6);
     expect(b.y).toBeLessThan(6.2);
     expect(b.vy).toBe(0);
+    expect(b.onGround).toBe(false);
+  });
+});
+
+describe('moveBody 段差アシスト(steps-and-light §1)', () => {
+  const ASSIST = { stepAssist: true };
+  const DT = 1 / 60;
+  /**
+   * 床は行 10 以下(上面 y=10)。x>=5 に高さ h の段(行 10-h..9 が固体)。
+   * ceilingRow を渡すとその行の全列が天井になる
+   */
+  const stepTiles = (h: number, ceilingRow?: number): TileLookup => (tx, ty) => {
+    if (ty >= 10) return TILE.SOLID;
+    if (tx >= 5 && ty >= 10 - h) return TILE.SOLID;
+    if (ceilingRow !== undefined && ty === ceilingRow) return TILE.SOLID;
+    return TILE.AIR;
+  };
+  /** 床面 floorTop のすぐ上(0.05)から重力で落として接地させた体(アシストなしで落ち着かせる) */
+  const grounded = (tiles: TileLookup, x: number, floorTop = 10): Body => {
+    const b = makeBody(x, floorTop - 1.75 - 0.05);
+    for (let i = 0; i < 60; i++) {
+      b.vy = Math.min(b.vy + 30 * DT, 25);
+      moveBody(b, DT, tiles);
+    }
+    expect(b.onGround).toBe(true);
+    return b;
+  };
+  /** 毎フレーム重力を足して横へ歩かせる(段差アシストあり)。接地が切れたフレーム数を返す */
+  const walk = (b: Body, tiles: TileLookup, vx: number, frames: number): number => {
+    let airborne = 0;
+    for (let i = 0; i < frames; i++) {
+      b.vx = vx;
+      b.vy = Math.min(b.vy + 30 * DT, 25);
+      moveBody(b, DT, tiles, ASSIST);
+      if (!b.onGround) airborne++;
+    }
+    return airborne;
+  };
+
+  it('1 タイルの段差は歩いて越え、その間ずっと接地している', () => {
+    const tiles = stepTiles(1);
+    const b = grounded(tiles, 3);
+    expect(walk(b, tiles, 6, 60)).toBe(0);
+    expect(b.x).toBeGreaterThan(6);
+    expect(b.y + b.h).toBeLessThanOrEqual(9 + 1e-6);
+    expect(b.y + b.h).toBeGreaterThan(9 - 1 / 16 - 1e-6);
+  });
+
+  it('左向きでも 1 タイルの段差を越える', () => {
+    const tiles: TileLookup = (tx, ty) => (ty >= 10 || (tx <= 4 && ty >= 9) ? TILE.SOLID : TILE.AIR);
+    const b = grounded(tiles, 7);
+    expect(walk(b, tiles, -6, 60)).toBe(0);
+    expect(b.x).toBeLessThan(4);
+    expect(b.y + b.h).toBeLessThanOrEqual(9 + 1e-6);
+  });
+
+  it('2 タイルの段差は越えられない(壁の手前で止まる)', () => {
+    const tiles = stepTiles(2);
+    const b = grounded(tiles, 3);
+    walk(b, tiles, 6, 60);
+    expect(b.x + b.w).toBeLessThanOrEqual(5 + 1e-6);
+    expect(b.y + b.h).toBeGreaterThan(10 - 1 / 16 - 1e-6);
+  });
+
+  it('頭上が塞がっていると 1 タイルの段差でも越えられない', () => {
+    // 天井(行 7)の下面は y=8。床の上には立てる(体の上端 8.22)が、持ち上げると天井に当たる
+    const tiles = stepTiles(1, 7);
+    const b = grounded(tiles, 3);
+    walk(b, tiles, 6, 60);
+    expect(b.x + b.w).toBeLessThanOrEqual(5 + 1e-6);
+    expect(b.y + b.h).toBeGreaterThan(10 - 1 / 16 - 1e-6);
+  });
+
+  it('空中では登らない(接地していない体は段に阻まれる)', () => {
+    const tiles = stepTiles(1);
+    const b = makeBody(4.2, 7.75); // 体の底 9.5: 段(行 9)の側面に当たる高さ、onGround=false
+    b.vx = 6;
+    moveBody(b, DT, tiles, ASSIST);
+    expect(b.x + b.w).toBeLessThanOrEqual(5 + 1e-6);
+    expect(b.vx).toBe(0);
+    expect(b.y).toBeGreaterThanOrEqual(7.75);
+  });
+
+  it('上昇中(ジャンプの踏み切りのフレーム)は登らない', () => {
+    const tiles = stepTiles(1);
+    const b = grounded(tiles, 4.2);
+    b.vx = 6;
+    b.vy = -13;
+    const y0 = b.y;
+    moveBody(b, DT, tiles, ASSIST);
+    expect(b.x + b.w).toBeLessThanOrEqual(5 + 1e-6);
+    expect(b.y).toBeGreaterThan(y0 - 0.5); // 段の上に持ち上げられていない(上昇分だけ)
+  });
+
+  it('既定(オプションなし)では段差アシストしない', () => {
+    const tiles = stepTiles(1);
+    const b = grounded(tiles, 3);
+    for (let i = 0; i < 60; i++) {
+      b.vx = 6;
+      b.vy = Math.min(b.vy + 30 * DT, 25);
+      moveBody(b, DT, tiles);
+    }
+    expect(b.x + b.w).toBeLessThanOrEqual(5 + 1e-6);
+  });
+
+  it('1 段降りても接地が切れない(真下 1 タイル以内の床に吸着する)', () => {
+    // x<5 は行 9 も固体(上面 y=9)、x>=5 は床(上面 y=10)
+    const tiles: TileLookup = (tx, ty) => (ty >= 10 || (tx < 5 && ty >= 9) ? TILE.SOLID : TILE.AIR);
+    const b = grounded(tiles, 3, 9);
+    expect(walk(b, tiles, 6, 60)).toBe(0);
+    expect(b.x).toBeGreaterThan(6);
+    expect(b.y + b.h).toBeLessThanOrEqual(10 + 1e-6);
+    expect(b.y + b.h).toBeGreaterThan(10 - 1 / 16 - 1e-6);
+  });
+
+  it('2 タイルの落差では吸着せず、従来どおり落ちる', () => {
+    const tiles: TileLookup = (tx, ty) => (ty >= 10 || (tx < 5 && ty >= 8) ? TILE.SOLID : TILE.AIR);
+    const b = grounded(tiles, 3, 8);
+    expect(walk(b, tiles, 6, 30)).toBeGreaterThan(0);
+  });
+
+  it('止まっている体は吸着の対象にならない(横へ動いたときだけ)', () => {
+    const b = makeBody(2, 3); // 床(行 5)の上 0.25 浮いている
+    b.onGround = true;
+    moveBody(b, DT, testTiles, ASSIST);
+    expect(b.y).toBe(3);
     expect(b.onGround).toBe(false);
   });
 });

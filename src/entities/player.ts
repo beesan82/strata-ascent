@@ -1,6 +1,6 @@
 import { TILE } from '../world/tiles';
 import { walkPhaseAdvance } from '../core/gait';
-import { bodyOverlapsSolid, findLedge, moveBody, type Body, type Ledge, type TileLookup } from './physics';
+import { bodyOverlapsSolid, findLedge, moveBody, type Body, type Ledge, type MoveOptions, type TileLookup } from './physics';
 
 export interface PlayerInput {
   left: boolean;
@@ -50,6 +50,8 @@ export const LAND_MIN_VY = 3;
 export const CLIMB_UP_POSE_TIME = 0.16;
 /** 梯子上で足元の床を探るときの下方向の試し量(タイル)。moveBody の探索刻み(1/16)と同じ */
 const LADDER_FLOOR_PROBE = 1 / 16;
+/** moveBody へ渡す段差アシストの指定(毎フレームの割り当てを避けるため共有する) */
+const STEP_ASSIST: MoveOptions = { stepAssist: true };
 
 /** 掴まり中の状態。縁の位置(縁タイルの列・行)と側だけを持つ */
 export interface LedgeHold {
@@ -212,7 +214,8 @@ export class Player {
     // 着地直後の沈み込み区間の小さな再接地は数えない(LAND_MIN_VY のコメント参照)
     const wasGrounded = b.onGround;
     const fallVy = b.vy;
-    moveBody(b, dt, tiles);
+    // 段差アシスト(設計 2026-11-09-steps-and-light §1)はプレイヤーだけ。梯子の上では梯子の操作を優先して切る
+    moveBody(b, dt, tiles, onLadder ? undefined : STEP_ASSIST);
     if (!wasGrounded && b.onGround && fallVy >= LAND_MIN_VY) {
       this.landT = LAND_POSE_TIME;
       this.landVy = fallVy;

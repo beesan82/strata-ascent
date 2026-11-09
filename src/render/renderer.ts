@@ -8,6 +8,9 @@ import { Background } from './background';
 import { ChunkBaker, REBAKE_DILATE } from './chunkbake';
 import { rebakeTargets } from './dirtyBounds';
 import { Lighting } from './lighting';
+import { coneParams, depthShade } from './depthLight';
+import { layerNumber } from '../world/interface';
+import { biomeCellAt } from '../world/biomeCells';
 import { biomeBlend, mixHex } from './biome';
 import { STEEL } from './steel';
 import { drawPlayer } from './playerSprite';
@@ -82,6 +85,8 @@ export interface GravitonFx {
   chargeRatio: number;
   /** 溜めが満タン(chargeRatio=1)になってからの経過秒。完了リングの拡大に使う。未指定は 0 */
   chargeFullT?: number;
+  /** 懐中電灯モード(眺望ボタンを押している間)。ライトコーンを強める。未指定は false */
+  flashlight?: boolean;
   /** 生存中のビーム。nullなら描かない */
   beam: { angle: number; alpha: number } | null;
   /** 発射直後の単発の押し。null/未指定なら画面は動かない */
@@ -361,7 +366,10 @@ export class Renderer {
     const bb = biomeBlend(this.seed, player.centerX, player.body.y);
     // §6.3 の補正: 前室の光溜まりの中で +0.15、外で −0.1(距離補間)。暗幕・光条・ビネットにだけ掛け、
     // 空のフィルには掛けない(フィルは色キーで作業キャンバスを再生成するため、歩くたびに再描画が走る)。
-    const ambient = clamp01(bb.ambientLevel + ambientDelta(this.seed, player.centerX, player.body.y));
+    // 深さの明るさ(設計 2026-11-09-steps-and-light §3): 地区の明るさ(ambientLevel + ambientDelta)の上に
+    // 層番号の係数を掛ける。深いほど周囲が暗くなり、相対的にライトコーンが効く
+    const layer = layerNumber(this.seed, biomeCellAt(this.seed, Math.floor(player.body.y)));
+    const ambient = clamp01((bb.ambientLevel + ambientDelta(this.seed, player.centerX, player.body.y)) * depthShade(layer));
     // 休憩点(§6.3)の中では暗幕の色を暖色へ寄せる(追加の描画なし。暗幕の 1 回のフィルの色が変わるだけ)
     const warmth = restWarmthAt(this.seed, player.centerX, player.body.y);
     const curtainColor = warmth > 0 ? mixHex(bb.ambientColor, REST_WARM_COLOR, 0.5 * warmth) : bb.ambientColor;
@@ -443,7 +451,8 @@ export class Renderer {
     // 描いて一緒に乗せる(全画面 lighter を 1 パス節約。lighter の矩形は画素数に比例して重い)。
     // 塔の点滅・裂け目の光条・休憩点の暖色(§6.2, §6.3)も同じ overlay へ相乗りする(新しいパスは足さない。
     // 矩形は 1 画面に数枚、1 枚 1 色)。休憩点の灯の明滅と水系の落下粒(§6.6)も同じ overlay(小矩形)。
-    this.lighting.render(ctx, px, py, angle, ppt, timeSec, curtainColor, ambient, (lctx, s) => {
+    // 懐中電灯モード(§4)ではコーンの半径と中心の明るさを上げる(同じグラデーションの係数が変わるだけ)
+    this.lighting.render(ctx, px, py, angle, ppt, timeSec, curtainColor, ambient, coneParams(fx.flashlight ? 1 : 0), (lctx, s) => {
       this.beacons.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
       this.landmarkLights.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
       this.ambientLights.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);

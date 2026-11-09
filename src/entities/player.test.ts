@@ -367,6 +367,77 @@ describe('Player 崖つかみ(段階 2)', () => {
   });
 });
 
+describe('Player 段差アシスト(steps-and-light §1)', () => {
+  const right = { ...noInput, right: true };
+  const left = { ...noInput, left: true };
+  /** 床は行 10(上面 10)。x>=5 は 1 段目(上面 9)、x>=6 は 2 段目(上面 8)の階段 */
+  const stairTiles = (tx: number, ty: number): Tile => {
+    if (ty >= 10) return TILE.SOLID;
+    if (tx >= 6 && ty >= 8) return TILE.SOLID;
+    if (tx >= 5 && ty >= 9) return TILE.SOLID;
+    return TILE.AIR;
+  };
+  const settle = (p: Player, tiles: (tx: number, ty: number) => Tile) => {
+    for (let i = 0; i < 120; i++) p.update(noInput, 1 / 60, tiles);
+    expect(p.body.onGround).toBe(true);
+  };
+
+  it('1 タイルずつの階段をジャンプなしで登り、途中で接地が切れず着地ポーズも出ない', () => {
+    const p = new Player(2, 8);
+    settle(p, stairTiles);
+    let airborne = 0;
+    for (let i = 0; i < 90; i++) {
+      p.update(right, 1 / 60, stairTiles);
+      if (!p.body.onGround) airborne++;
+      expect(p.landT).toBe(0);
+    }
+    expect(airborne).toBe(0);
+    expect(p.body.x).toBeGreaterThan(7);
+    expect(p.body.y + p.body.h).toBeLessThanOrEqual(8 + 1e-6);
+    expect(p.body.y + p.body.h).toBeGreaterThan(8 - 1 / 16 - 1e-6);
+  });
+
+  it('階段を歩いて降りても接地が切れず、着地ポーズも出ない', () => {
+    const p = new Player(8, 5);
+    settle(p, stairTiles);
+    let airborne = 0;
+    for (let i = 0; i < 90; i++) {
+      p.update(left, 1 / 60, stairTiles);
+      if (!p.body.onGround) airborne++;
+      expect(p.landT).toBe(0);
+    }
+    expect(airborne).toBe(0);
+    expect(p.body.x).toBeLessThan(4);
+    expect(p.body.y + p.body.h).toBeLessThanOrEqual(10 + 1e-6);
+    expect(p.body.y + p.body.h).toBeGreaterThan(10 - 1 / 16 - 1e-6);
+  });
+
+  it('2 タイルの段差は歩きでは越えられない(ジャンプが要る)', () => {
+    const wall = (tx: number, ty: number): Tile => (ty >= 10 || (tx >= 5 && ty >= 8) ? TILE.SOLID : TILE.AIR);
+    const p = new Player(2, 8);
+    settle(p, wall);
+    for (let i = 0; i < 90; i++) p.update(right, 1 / 60, wall);
+    expect(p.body.x + p.body.w).toBeLessThanOrEqual(5 + 1e-6);
+    expect(p.body.y + p.body.h).toBeGreaterThan(10 - 1 / 16 - 1e-6);
+  });
+
+  it('ジャンプ中は段差アシストが働かない(空中で段に当たっても持ち上がらない)', () => {
+    // 1 段の段差(x>=5 の行 9)。段の側面に接した状態でジャンプし、頂点付近まで右へ押す
+    const step = (tx: number, ty: number): Tile => (ty >= 10 || (tx >= 5 && ty >= 9) ? TILE.SOLID : TILE.AIR);
+    const p = new Player(4.2, 8);
+    settle(p, step);
+    p.update({ ...noInput, jump: true }, 1 / 60, step);
+    expect(p.body.onGround).toBe(false);
+    // 上昇中のフレームでは段の上へ瞬間移動しない(上昇は重力に従う連続な動きだけ)
+    let prevY = p.body.y;
+    for (let i = 0; i < 5; i++) {
+      p.update({ ...right, jump: true }, 1 / 60, step);
+      expect(prevY - p.body.y).toBeLessThan(0.3);
+      prevY = p.body.y;
+    }
+  });
+});
+
 describe('Player 向きと歩行位相', () => {
   it('左右入力で向きが変わり、入力がなければ維持される', () => {
     const p = new Player(0, 8);
