@@ -359,12 +359,22 @@ export const BOSS_DOWN_NOISE_HZ = 700;
  * 純粋関数だけで行う。
  */
 
-/** マスター段のコンプレッサ: 全音を master → compressor → destination に通してピークを揃える */
-export const COMP_THRESHOLD_DB = -18;
-export const COMP_KNEE_DB = 18;
-export const COMP_RATIO = 4;
-export const COMP_ATTACK = 0.004;
-export const COMP_RELEASE = 0.18;
+/** マスター段のコンプレッサ: 全音を master → compressor → destination に通す。第 3 ラウンドでリミッター的な天井に寄せた(同時発音でもクリップさせない) */
+export const COMP_THRESHOLD_DB = -8;
+export const COMP_KNEE_DB = 4;
+export const COMP_RATIO = 12;
+export const COMP_ATTACK = 0.002;
+export const COMP_RELEASE = 0.24;
+
+/**
+ * リバーブの送り先(第 3 ラウンドで 2 系統化)。room は固定の短い部屋系で UI・合図の
+ * 近い小音用、hall は従来の開放度連動(0.15〜1.6 秒)で砲・ボス・爆発と世界の音用。
+ */
+export type ReverbSpace = 'room' | 'hall';
+/** 部屋系インパルス応答の長さ(秒)。短く、音の輪郭を崩さない範囲 */
+export const ROOM_IR_SECONDS = 0.35;
+/** 部屋系の wet ゲイン。ホール系(0.35)より控えめにして「近い音」に寄せる */
+export const ROOM_WET_GAIN = 0.25;
 
 /**
  * 決定論のバリエーション選択: index を count で割った余り(負数も 0 側へ丸める)。
@@ -393,28 +403,65 @@ export function crushSampleGain(brokenTiles: number): number {
 export const CRUSH_BIG_TILES = 120;
 
 /**
- * ドローンへのエンジン音ループ(spaceEngineLow 由来)の重ね量。機械系の層だけに薄く敷き、
- * 水域・生体系は生成音のみにする。継ぎ目が目立つ場合の切り分けもこの表で行う。
+ * 環境ループ(第 3 ラウンドで実録化)のバイオーム別ゲイン。素材は地区グループごとの
+ * 実録ループ(samples.AMBIENT_LOOPS、ファイル RMS は -26 dB に統一)で、これが環境音の
+ * 主役。合成ドローンは DRONE_SYNTH_MUL で接着剤の量まで下げ、地区の音程の色だけを残す。
  */
-export const ENGINE_LAYER_TABLE: Record<BiomeId, number> = {
-  coldSteel: 0.16,
-  habitation: 0.1,
-  disposal: 0.12,
-  waterVoid: 0,
-  power: 0.2,
-  foundry: 0.18,
-  biomech: 0,
+export const AMBIENT_GAIN_TABLE: Record<BiomeId, number> = {
+  coldSteel: 0.6,
+  habitation: 0.5,
+  disposal: 0.65,
+  waterVoid: 0.55,
+  power: 0.7,
+  foundry: 0.65,
+  biomech: 0.5,
 };
 
-export function engineLayerGain(id: BiomeId): number {
-  return ENGINE_LAYER_TABLE[id];
+export function ambientGain(id: BiomeId): number {
+  return AMBIENT_GAIN_TABLE[id];
 }
 
-/** パルスのサンプル層と合成層の配分(サンプル主体、合成は細い芯) */
-export const PULSE_SAMPLE_GAIN = 0.5;
-export const PULSE_SAMPLE_RATE = 1.15;
+/** 合成ドローンの倍率(第 3 ラウンド)。実録ループを主役にするため 1 未満に絞る */
+export const DRONE_SYNTH_MUL = 0.45;
+
+/** パルスのサンプル層(第 3 ラウンドで実録化)。芯は実録の短機関銃で、自然なレートで鳴らす */
+export const PULSE_SAMPLE_GAIN = 0.95;
+export const PULSE_SAMPLE_RATE = 1.0;
 export const PULSE_SAMPLE_SPREAD = 0.05;
-export const PULSE_SYNTH_GAIN = 0.07;
+/** 実録の芯のローパス(Hz)。甲高い機構音を少しだけ丸める */
+export const PULSE_SAMPLE_CUT = 9000;
+/** 実録の芯のホール送り。短い音なので控えめにし、尾を締める */
+export const PULSE_SAMPLE_WET = 0.3;
+/** パルスのサブサンプ層(胴体の重み): 正弦波の pitch 落下 */
+export const PULSE_SUB_GAIN = 0.5;
+export const PULSE_SUB_START_HZ = 120;
+export const PULSE_SUB_END_HZ = 38;
+export const PULSE_SUB_SECONDS = 0.13;
+
+/** 砲台のサンプル層(第 3 ラウンド)。パルスと同じ銃の中距離テイクを、細く速く鳴らす */
+export const TURRET_SAMPLE_GAIN = 0.6;
+export const TURRET_SAMPLE_RATE = 1.12;
+export const TURRET_SAMPLE_SPREAD = 0.04;
+/** 砲台の芯のローパス(Hz)。パルスより低くして距離感を出す */
+export const TURRET_SAMPLE_CUT = 6500;
+/** 砲台のサブ層はプレイヤー側より浅くする */
+export const TURRET_SUB_GAIN = 0.22;
+
+/** 重粒子砲の実録レイヤー(第 3 ラウンドで追加): 散弾銃の胴体と花火の大砲の尾 */
+export const CANNON_BODY_GAIN = 0.85;
+export const CANNON_BANG_GAIN = 0.5;
+/** 大砲の尾はホールへ厚く送って、撃った空間を鳴らす */
+export const CANNON_BANG_WET = 0.7;
+
+/** 溜めの深サブ層(第 3 ラウンドで追加): 唸りとは別に敷く 30〜55 Hz の重み */
+export const CHARGE_SUB_START = 30;
+export const CHARGE_SUB_END = 55;
+export const CHARGE_SUB_GAIN = 0.1;
+
+/** 溜めの深サブの pitch。比率 0→1 で CHARGE_SUB_START→END へ指数で上がる */
+export function chargeSubFreq(ratio: number): number {
+  return CHARGE_SUB_START * (CHARGE_SUB_END / CHARGE_SUB_START) ** clamp01(ratio);
+}
 
 /** 命中音の FM 金属ティック: キャリア比と変調指数(金属らしさ) */
 export const HIT_FM_RATIO = 3.51;

@@ -28,21 +28,27 @@ import {
   FLYER_FREQ_END, FLYER_FREQ_START, FLYER_GAIN, FLYER_SECONDS,
   TURRET_SECONDS,
   COMP_ATTACK, COMP_KNEE_DB, COMP_RATIO, COMP_RELEASE, COMP_THRESHOLD_DB, SAMPLE_WET,
-  HIT_FM_GAIN, HIT_FM_INDEX, HIT_FM_RATIO, pickVariant, sampleRate, engineLayerGain,
-  CRUSH_BIG_TILES, crushSampleGain, PULSE_SAMPLE_GAIN, PULSE_SAMPLE_RATE, PULSE_SAMPLE_SPREAD, PULSE_SYNTH_GAIN,
+  ROOM_IR_SECONDS, ROOM_WET_GAIN, type ReverbSpace,
+  HIT_FM_GAIN, HIT_FM_INDEX, HIT_FM_RATIO, pickVariant, sampleRate, ambientGain, DRONE_SYNTH_MUL,
+  CRUSH_BIG_TILES, crushSampleGain, PULSE_SAMPLE_GAIN, PULSE_SAMPLE_RATE, PULSE_SAMPLE_SPREAD,
+  PULSE_SAMPLE_CUT, PULSE_SAMPLE_WET, PULSE_SUB_GAIN, PULSE_SUB_START_HZ, PULSE_SUB_END_HZ, PULSE_SUB_SECONDS,
+  TURRET_SAMPLE_GAIN, TURRET_SAMPLE_RATE, TURRET_SAMPLE_SPREAD, TURRET_SAMPLE_CUT, TURRET_SUB_GAIN,
+  CANNON_BODY_GAIN, CANNON_BANG_GAIN, CANNON_BANG_WET,
+  CHARGE_SUB_GAIN, chargeSubFreq,
   reverbBucket, reverbSecondsForBucket,
   STARVE_FREQ_END, STARVE_FREQ_START, STARVE_GAIN, STARVE_SECONDS,
   WARN_FREQ_END, WARN_FREQ_START, WARN_GAIN, WARN_SECONDS,
 } from './params';
 
-import { EAT_SAMPLES, FOOTSTEP_SAMPLES, HIT_SAMPLES, LADDER_SAMPLES, MINING_SAMPLES, PULSE_SAMPLES, SAMPLE_URLS, pickupSampleName, type SampleName } from './samples';
+import { AMBIENT_LOOPS, EAT_SAMPLES, FOOTSTEP_SAMPLES, HIT_SAMPLES, LADDER_SAMPLES, MINING_SAMPLES, PULSE_SAMPLES, SAMPLE_URLS, pickupSampleName, type SampleName } from './samples';
 
 /**
  * WebAudio の薄い層(設計書 §6.7)。パラメータは params.ts の純粋関数で決め、ここはノードの生成と
  * ゲインの追従だけ。テスト対象外。
  *
- * グラフ: master → compressor → destination。dry → master、convolver → wet(0.35) → master。
- * コンプレッサは音質改善(2026-11-08)で追加し、全音のピークを揃える。
+ * グラフ: master → compressor(リミッター寄り) → destination。dry → master、
+ * convolver 2 系統(hall = 開放度連動 / room = 固定の短い部屋系)→ wet → master。
+ * コンプレッサは音質改善(2026-11-08)で追加し、第 3 ラウンドで天井として締めた。
  * - ドローン: 層のバイオームごとに倍音の OscillatorNode の組 1 つ。層が変わればクロスフェード(0.4 秒)。
  *   界面に近づくと基音 + 0.7 Hz の正弦波が足されてうなる(interfaceBeat)。
  * - 足音: 60 ms のノイズバースト(バンドパス 900 Hz)を dry と convolver の両方へ。残響長は開放度(6 段)。
@@ -97,6 +103,9 @@ interface Charge {
   detuned: OscillatorNode;
   /** サブ正弦波(基音の 1/2)。重み付け用に歪ませず直接ゲインへ */
   sub: OscillatorNode;
+  /** 深サブ正弦波(30→55 Hz、第 3 ラウンドで追加)。唸りとは別のゲインで低域の重みだけを足す */
+  deepSub: OscillatorNode;
+  deepSubGain: GainNode;
   /** 帯電ノイズ: バンドパスで基音に追従させ、比率で量を上げる */
   noise: AudioBufferSourceNode;
   noiseFilter: BiquadFilterNode;
@@ -114,8 +123,10 @@ interface Drone {
   /** 音色のうねり用ローパス。update で界面への近さにも連動させる */
   filter: BiquadFilterNode;
   cutoff: number;
-  /** エンジン音ループのサンプル層(無いバイオーム・未ロード時は null) */
+  /** 環境ループのサンプル層(第 3 ラウンドで実録化、全バイオームにある) */
   layer: AudioBufferSourceNode | null;
+  /** 環境ループ専用のゲイン。ドローンとは別系統で dry へ出し、切替時は個別にフェードさせる */
+  layerGain: GainNode | null;
 }
 
 export class AudioEngine {
@@ -124,6 +135,9 @@ export class AudioEngine {
   private dry!: GainNode;
   private convolver!: ConvolverNode;
   private wet!: GainNode;
+  /** 部屋系リバーブ(固定の短い IR)。UI・合図の近い小音用 */
+  private roomConvolver!: ConvolverNode;
+  private roomWet!: GainNode;
   /** CC0 サンプルのデコード済みバッファ(assets/audio、台帳は CREDITS.md)。ロードは非同期で、無い音は合成で鳴らす */
   private samples = new Map<SampleName, AudioBuffer>();
   private noise!: AudioBuffer;
@@ -139,6 +153,8 @@ export class AudioEngine {
   /** 足音・命中の素材ローテーション用カウンタ(決定論のバリエーション選択) */
   private stepCount = 0;
   private hitCount = 0;
+  /** 砲台の発射カウンタ(レートの決定論ばらし用) */
+  private turretShotCount = 0;
 
   get started(): boolean {
     return this.ctx !== null;
@@ -178,6 +194,12 @@ export class AudioEngine {
     this.wet.gain.value = WET_GAIN;
     this.convolver.connect(this.wet);
     this.wet.connect(this.master);
+    this.roomConvolver = ctx.createConvolver();
+    this.roomConvolver.buffer = this.makeImpulse(ROOM_IR_SECONDS);
+    this.roomWet = ctx.createGain();
+    this.roomWet.gain.value = ROOM_WET_GAIN;
+    this.roomConvolver.connect(this.roomWet);
+    this.roomWet.connect(this.master);
     this.noise = this.makeNoise(FOOTSTEP_SECONDS);
     this.noiseLong = this.makeNoise(LONG_NOISE_SECONDS);
     // 光柱のハム: 基音 + 半オクターブ下をローパスで丸め、遅い LFO でうねらせる(音質改善で耳障りさを除去)
@@ -249,14 +271,22 @@ export class AudioEngine {
     }
   }
 
+  /** リバーブの送り先。未指定と hall は開放度連動の従来系、room は固定の短い部屋系 */
+  private convolverFor(space?: ReverbSpace): ConvolverNode {
+    return space === 'room' ? this.roomConvolver : this.convolver;
+  }
+
   /**
    * サンプルのワンショット再生。ロード済みなら true、未ロード/失敗なら false を
    * 返し、呼び出し側が合成フォールバックに倒す。dry は常に送り、wet は残響への
    * 送り量(0 で送らない)。パンは dry 側にだけ付ける(残響は位置を洗うため)。
-   * バッファは鳴らし切りだが、他の音と揃えて明示的に stop を掛ける。
+   * cut はローパスのカットオフ(Hz)で、甲高い素材を個別に暗くする per-sound EQ。
+   * space は残響の送り先(既定 hall)。バッファは鳴らし切りだが、他の音と揃えて
+   * 明示的に stop を掛ける。
    */
   private playSample(name: SampleName, opts: {
     gain?: number; rate?: number; pan?: number; wet?: number; at?: number;
+    cut?: number; space?: ReverbSpace;
   } = {}): boolean {
     const ctx = this.ctx;
     if (!ctx) return false;
@@ -270,19 +300,27 @@ export class AudioEngine {
     const g = ctx.createGain();
     g.gain.value = opts.gain ?? 1;
     src.connect(g);
+    let out: AudioNode = g;
+    if (opts.cut) {
+      const f = ctx.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.value = opts.cut;
+      g.connect(f);
+      out = f;
+    }
     if (opts.pan) {
       const p = ctx.createStereoPanner();
       p.pan.value = opts.pan;
-      g.connect(p);
+      out.connect(p);
       p.connect(this.dry);
     } else {
-      g.connect(this.dry);
+      out.connect(this.dry);
     }
     if (opts.wet) {
       const wg = ctx.createGain();
       wg.gain.value = opts.wet;
-      g.connect(wg);
-      wg.connect(this.convolver);
+      out.connect(wg);
+      wg.connect(this.convolverFor(opts.space));
     }
     src.start(t);
     src.stop(t + buf.duration / rate + 0.1);
@@ -322,6 +360,7 @@ export class AudioEngine {
     drive?: number;
     pan?: number;
     wet?: number;
+    space?: ReverbSpace;
     at?: number;
   }): void {
     const ctx = this.ctx;
@@ -345,7 +384,7 @@ export class AudioEngine {
       const wg = ctx.createGain();
       wg.gain.value = spec.wet;
       out.connect(wg);
-      wg.connect(this.convolver);
+      wg.connect(this.convolverFor(spec.space));
     }
     // 入口: レイヤー → (歪み) → (フィルタ) → out
     let bus: AudioNode = out;
@@ -425,7 +464,7 @@ export class AudioEngine {
     // 界面に近いほどドローンのフィルタを開け、うなりと音色の変化を連動させる
     this.drone!.filter.frequency.setTargetAtTime(
       this.drone!.cutoff * (1 + 0.5 * interfaceBeat(frame.plateDistance)), now, 0.3);
-    this.startEngineLayer(this.drone!);
+    this.startAmbientLayer(this.drone!);
     this.humGain.gain.setTargetAtTime(HUM_GAIN * frame.hum, now, 0.2);
     const bucket = reverbBucket(frame.openness);
     if (bucket !== this.reverbBucketNow) {
@@ -438,9 +477,11 @@ export class AudioEngine {
   }
 
   /**
-   * パルスの発射音: CC0 レーザーのサンプルを主体に、鋸波+ローパスの細い合成芯を
-   * 重ねる(混合)。バリエーションとレートは発射インデックスで決定論にばらす。
-   * サンプルが未ロードなら合成芯だけを厚くして鳴らす。残響には送らず締める。
+   * パルスの発射音(第 3 ラウンドで実録化): 芯は実録の短機関銃(Carl Gustav M45、
+   * 3 テイクを決定論にローテーション)。第 2 ラウンドまでの laserSmall(純合成
+   * ザップ)は「ピンピン」という甲高さの主因だったため廃止した。胴体の重みは
+   * サブサンプ層(正弦波 120→38 Hz)が担う。サンプルが未ロードのときだけ、
+   * ローパスで暗くした鋸波の芯に倒す(甲高い音には戻さない)。
    * 発射間隔(1/6 秒)より詰まった呼び出しは PULSE_MIN_INTERVAL で間引く(保険)。
    */
   pulseFire(shotIndex: number): void {
@@ -449,16 +490,31 @@ export class AudioEngine {
     const now = ctx.currentTime;
     if (now - this.lastPulseAt < PULSE_MIN_INTERVAL) return;
     this.lastPulseAt = now;
-    const mul = pulseDetune(shotIndex);
     const sampled = this.playSample(PULSE_SAMPLES[pickVariant(shotIndex, PULSE_SAMPLES.length)], {
       gain: PULSE_SAMPLE_GAIN,
       rate: sampleRate(PULSE_SAMPLE_RATE, shotIndex, PULSE_SAMPLE_SPREAD),
+      wet: PULSE_SAMPLE_WET,
+      cut: PULSE_SAMPLE_CUT,
     });
+    // サブサンプ層: 実録の有無によらず毎発鳴らし、低域の胴体を一定に保つ
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(PULSE_SUB_START_HZ * pulseDetune(shotIndex), now);
+    sub.frequency.exponentialRampToValueAtTime(PULSE_SUB_END_HZ, now + PULSE_SUB_SECONDS);
+    const sg = ctx.createGain();
+    sg.gain.setValueAtTime(sampled ? PULSE_SUB_GAIN : PULSE_SUB_GAIN * 0.6, now);
+    sg.gain.exponentialRampToValueAtTime(0.001, now + PULSE_SUB_SECONDS);
+    sub.connect(sg);
+    sg.connect(this.dry);
+    sub.start(now);
+    sub.stop(now + PULSE_SUB_SECONDS + 0.05);
+    if (sampled) return;
+    const mul = pulseDetune(shotIndex);
     this.voice({
       layers: [{ type: 'sawtooth', from: PULSE_FREQ_START * 1.4 * mul, to: PULSE_FREQ_END * 1.1 * mul, gain: 1 }],
       filter: { type: 'lowpass', from: 3800, to: 900, q: 0.7 },
       seconds: PULSE_SECONDS + 0.02,
-      gain: sampled ? PULSE_SYNTH_GAIN : PULSE_GAIN,
+      gain: PULSE_GAIN,
     });
   }
 
@@ -726,7 +782,7 @@ export class AudioEngine {
   pickup(kind: string): void {
     if (!this.ctx) return;
     const rate = kind === 'charge' ? 1.1 : kind === 'ration' ? 0.85 : 1;
-    if (this.playSample(pickupSampleName(kind), { gain: 0.5, rate, wet: SAMPLE_WET })) return;
+    if (this.playSample(pickupSampleName(kind), { gain: 0.5, rate, wet: SAMPLE_WET, space: 'room' })) return;
     this.noteRun(pickupNotes(kind), PICKUP_GAIN, PICKUP_NOTE_GAP, 0.16);
   }
 
@@ -758,14 +814,14 @@ export class AudioEngine {
   /** 休憩点の初回補給: ピチカートのジングル素材。無いときは従来の温かい上行 2 音 */
   restStock(): void {
     if (!this.ctx) return;
-    if (this.playSample('rest', { gain: 0.55, wet: SAMPLE_WET })) return;
+    if (this.playSample('rest', { gain: 0.55, wet: SAMPLE_WET, space: 'room' })) return;
     this.noteRun(REST_STOCK_NOTES, REST_STOCK_GAIN, 0.08, 0.25);
   }
 
   /** 復活点の更新: 確認音のサンプル。無いときは従来の控えめな単音(移ったときだけ呼ばれる前提) */
   respawnSet(): void {
     if (!this.ctx) return;
-    if (this.playSample('confirm', { gain: 0.5, wet: SAMPLE_WET })) return;
+    if (this.playSample('confirm', { gain: 0.5, wet: SAMPLE_WET, space: 'room' })) return;
     this.noteRun([RESPAWN_FREQ], RESPAWN_GAIN, 0, RESPAWN_SECONDS + 0.05);
   }
 
@@ -773,7 +829,7 @@ export class AudioEngine {
   weaponSwitch(): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    if (this.playSample('switch', { gain: 0.55, wet: 0.25 })) return;
+    if (this.playSample('switch', { gain: 0.55, wet: 0.25, space: 'room' })) return;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     osc.type = 'square';
@@ -790,7 +846,7 @@ export class AudioEngine {
   /** 砲の弾回復の完了: サンプル(tick)が読めていればそれ、無ければ従来の小さな単音 */
   rechargeTick(): void {
     if (!this.ctx) return;
-    if (this.playSample('tick', { gain: 0.5, wet: SAMPLE_WET })) return;
+    if (this.playSample('tick', { gain: 0.5, wet: SAMPLE_WET, space: 'room' })) return;
     this.noteRun([RECHARGE_FREQ], RECHARGE_GAIN, 0, RECHARGE_SECONDS + 0.03);
   }
 
@@ -839,22 +895,47 @@ export class AudioEngine {
   /** 階層の節目到達: 金属ジングルの素材。無いときは従来の 3 音ジングル */
   milestone(): void {
     if (!this.ctx) return;
-    if (this.playSample('jingleMilestone', { gain: 0.6, wet: SAMPLE_WET })) return;
+    if (this.playSample('jingleMilestone', { gain: 0.6, wet: SAMPLE_WET, space: 'room' })) return;
     this.noteRun(MILESTONE_NOTES, JINGLE_GAIN, JINGLE_NOTE_GAP, JINGLE_NOTE_SECONDS);
   }
 
   /** 最深の新記録: 節目より明るい金属ジングルの素材。無いときは従来の 4 音ジングル */
   newRecord(): void {
     if (!this.ctx) return;
-    if (this.playSample('jingleRecord', { gain: 0.6, wet: SAMPLE_WET })) return;
+    if (this.playSample('jingleRecord', { gain: 0.6, wet: SAMPLE_WET, space: 'room' })) return;
     this.noteRun(NEW_RECORD_NOTES, JINGLE_GAIN, JINGLE_NOTE_GAP, JINGLE_NOTE_SECONDS);
   }
 
-  /** 砲台の発射: 大型レーザーのサンプル + 鋸波とサブの合成胴体(混合)。矩形波は廃止 */
+  /**
+   * 砲台の発射(第 3 ラウンドで実録化): laserLarge のザップを廃止し、パルスと
+   * 同じ銃(Carl Gustav M45)の中距離テイクを芯にする。同じ世界の武器としての
+   * 家族感を持たせつつ、プレイヤーのものより細く・遠く聞こえるよう、芯は
+   * 小さく速く(レート 1.12)、ローパスは低め、サブ層は浅くする。未ロード時は
+   * 従来の合成胴体(鋸波+サブ+駆動)に倒す。
+   */
   turretFire(): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    const sampled = this.playSample('laserLarge', { gain: 0.4, rate: 0.95, wet: 0.3 });
+    const idx = this.turretShotCount++;
+    const sampled = this.playSample('turret0', {
+      gain: TURRET_SAMPLE_GAIN,
+      rate: sampleRate(TURRET_SAMPLE_RATE, idx, TURRET_SAMPLE_SPREAD),
+      wet: 0.35,
+      cut: TURRET_SAMPLE_CUT,
+    });
+    const now = ctx.currentTime;
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(100, now);
+    sub.frequency.exponentialRampToValueAtTime(40, now + 0.1);
+    const sg = ctx.createGain();
+    sg.gain.setValueAtTime(sampled ? TURRET_SUB_GAIN : TURRET_SUB_GAIN * 0.6, now);
+    sg.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    sub.connect(sg);
+    sg.connect(this.dry);
+    sub.start(now);
+    sub.stop(now + 0.15);
+    if (sampled) return;
     this.voice({
       layers: [
         { type: 'sawtooth', from: 320, to: 80, gain: 0.8 },
@@ -864,7 +945,7 @@ export class AudioEngine {
       noise: { gain: 0.15, type: 'highpass', from: 1200, seconds: 0.12 },
       drive: 8,
       seconds: TURRET_SECONDS + 0.14,
-      gain: sampled ? 0.3 : 0.38,
+      gain: 0.38,
       wet: 0.3,
     });
   }
@@ -1039,9 +1120,11 @@ export class AudioEngine {
       const c = this.charge;
       this.charge = null;
       c.gain.gain.setTargetAtTime(0, now, CHARGE_RELEASE);
+      c.deepSubGain.gain.setTargetAtTime(0, now, CHARGE_RELEASE);
       c.main.stop(now + 0.3);
       c.detuned.stop(now + 0.3);
       c.sub.stop(now + 0.3);
+      c.deepSub.stop(now + 0.3);
       c.noise.stop(now + 0.3);
       return;
     }
@@ -1070,6 +1153,15 @@ export class AudioEngine {
       sub.type = 'sine';
       sub.connect(gain);
       sub.start(now);
+      // 深サブ(第 3 ラウンド): 唸りの共有ゲインとは別系統で、低域の重みだけを足す
+      const deepSub = ctx.createOscillator();
+      deepSub.type = 'sine';
+      deepSub.frequency.value = chargeSubFreq(0);
+      const deepSubGain = ctx.createGain();
+      deepSubGain.gain.value = 0;
+      deepSub.connect(deepSubGain);
+      deepSubGain.connect(this.dry);
+      deepSub.start(now);
       const noise = ctx.createBufferSource();
       noise.buffer = this.noiseLong;
       noise.loop = true;
@@ -1083,7 +1175,7 @@ export class AudioEngine {
       noiseGain.connect(filter);
       noise.start(now, Math.random());
       // +9 セントの微デチューンでもう 1 本重ね、うなりで「唸り」にする
-      this.charge = { main: mk(0), detuned: mk(9), sub, noise, noiseFilter, noiseGain, filter, gain };
+      this.charge = { main: mk(0), detuned: mk(9), sub, deepSub, deepSubGain, noise, noiseFilter, noiseGain, filter, gain };
     }
     const c = this.charge;
     const f = chargeFreq(ratio);
@@ -1094,6 +1186,8 @@ export class AudioEngine {
     c.noiseGain.gain.setTargetAtTime(0.05 * ratio, now, CHARGE_FOLLOW);
     c.filter.frequency.setTargetAtTime(f * 6, now, CHARGE_FOLLOW);
     c.gain.gain.setTargetAtTime(chargeGain(ratio), now, CHARGE_FOLLOW);
+    c.deepSub.frequency.setTargetAtTime(chargeSubFreq(ratio), now, CHARGE_FOLLOW);
+    c.deepSubGain.gain.setTargetAtTime(CHARGE_SUB_GAIN * ratio, now, CHARGE_FOLLOW);
   }
 
   /**
@@ -1123,12 +1217,16 @@ export class AudioEngine {
   /**
    * 発射音(重粒子砲): サブ正弦波の pitch 落下(重低音の芯)+ ローパスを落とすノイズ
    * (破裂感)に、低音爆発のサンプル層と歪ませた中域の鋸波を重ねて格上げ(混合)。
+   * 第 3 ラウンドで実録レイヤーを 2 枚足した: 散弾銃の胴体(近距離の重い破裂)と
+   * 花火の大砲の尾(ホールへ厚く送り、空間の残響で格を出す)。
    */
   cannonFire(): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const now = ctx.currentTime;
     this.playSample('explosionLow', { gain: 0.35, rate: 0.9, wet: 0.6 });
+    this.playSample('cannonBody', { gain: CANNON_BODY_GAIN, wet: 0.35 });
+    this.playSample('cannonBang', { gain: CANNON_BANG_GAIN, wet: CANNON_BANG_WET });
     this.voice({
       layers: [{ type: 'sawtooth', from: 300, to: 60, gain: 1 }],
       filter: { type: 'lowpass', from: 2000, to: 200, q: 0.8 },
@@ -1240,7 +1338,8 @@ export class AudioEngine {
    * 層のドローンを切り替える。旧組はゲインを 0 へ追従させて 2 秒後に止める。
    * 音質改善で、倍音はローパス(遅い LFO でカットオフがうねる)+ ゲインの微かな
    * うねり + 左右への振り分けを通し、静的なオルガン音から「奥行きのある持続音」に
-   * 作り替えた。機械系の層にはエンジン音ループのサンプルも薄く敷く。
+   * 作り替えた。第 3 ラウンドで環境音の主役は実録ループ(startAmbientLayer)に移し、
+   * この合成ドローンは地区の音程の色を残す接着剤まで下げた。
    */
   private switchDrone(biome: BiomeId): void {
     const ctx = this.ctx!;
@@ -1249,12 +1348,14 @@ export class AudioEngine {
     if (old) {
       old.gain.gain.setTargetAtTime(0, now, DRONE_FADE);
       for (const o of old.oscs) o.stop(now + 2);
+      if (old.layerGain) old.layerGain.gain.setTargetAtTime(0, now, DRONE_FADE);
       if (old.layer) old.layer.stop(now + 2);
     }
     const p = droneParams(biome);
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
-    gain.gain.setTargetAtTime(dbToGain(p.gainDb), now, DRONE_FADE);
+    // 第 3 ラウンド: 実録ループが主役。合成ドローンは DRONE_SYNTH_MUL で接着剤まで下げる
+    gain.gain.setTargetAtTime(dbToGain(p.gainDb) * DRONE_SYNTH_MUL, now, DRONE_FADE);
     gain.connect(this.dry);
     const cutoff = p.freq * 6;
     const filter = ctx.createBiquadFilter();
@@ -1302,30 +1403,33 @@ export class AudioEngine {
     beat.connect(beatGain);
     beat.start(now);
     oscs.push(beat);
-    this.drone = { biome, gain, beatGain, oscs, filter, cutoff, layer: null };
-    this.startEngineLayer(this.drone);
+    this.drone = { biome, gain, beatGain, oscs, filter, cutoff, layer: null, layerGain: null };
+    this.startAmbientLayer(this.drone);
   }
 
   /**
-   * ドローンへのエンジン音ループの重ね(機械系の層のみ、engineLayerGain)。
+   * 環境ループの実録層(第 3 ラウンド)。バイオーム対応の実録ループを専用ゲインで
+   * dry へ直接出し、環境音の主役にする(旧 engineLoop の合成素材は廃止)。
    * サンプルのロードが済んでから呼ばれる場合があるため update からも呼ばれ、
-   * 既に敷いてあれば何もしない。層のゲインはドローン側のゲインに相乗りするので
-   * 層の切替クロスフェードにも追従する。
+   * 既に敷いてあれば何もしない。フェードイン/アウトは DRONE_FADE でドローンと揃える。
    */
-  private startEngineLayer(d: Drone): void {
-    if (d.layer || engineLayerGain(d.biome) <= 0) return;
-    const buf = this.samples.get('engineLoop');
+  private startAmbientLayer(d: Drone): void {
+    if (d.layer) return;
+    const buf = this.samples.get(AMBIENT_LOOPS[d.biome]);
     if (!buf) return;
     const ctx = this.ctx!;
+    const now = ctx.currentTime;
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.loop = true;
     const g = ctx.createGain();
-    g.gain.value = engineLayerGain(d.biome);
+    g.gain.setValueAtTime(0, now);
+    g.gain.setTargetAtTime(ambientGain(d.biome), now, DRONE_FADE);
     src.connect(g);
-    g.connect(d.gain);
+    g.connect(this.dry);
     src.start();
     d.layer = src;
+    d.layerGain = g;
   }
 
   private makeNoise(seconds: number): AudioBuffer {
@@ -1337,18 +1441,23 @@ export class AudioEngine {
     return buf;
   }
 
-  /** 合成インパルス応答(指数減衰ノイズ、ステレオ)。バケットごとに 1 回だけ作る */
-  private impulseFor(bucket: number): AudioBuffer {
-    const cached = this.impulses.get(bucket);
-    if (cached) return cached;
+  /** 合成インパルス応答(指数減衰ノイズ、ステレオ)を指定の長さで作る */
+  private makeImpulse(seconds: number): AudioBuffer {
     const ctx = this.ctx!;
-    const seconds = reverbSecondsForBucket(bucket);
     const n = Math.ceil(ctx.sampleRate * seconds);
     const buf = ctx.createBuffer(2, n, ctx.sampleRate);
     for (let ch = 0; ch < 2; ch++) {
       const d = buf.getChannelData(ch);
       for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-5 * i / n);
     }
+    return buf;
+  }
+
+  /** ホール系のインパルス応答。バケットごとに 1 回だけ作る */
+  private impulseFor(bucket: number): AudioBuffer {
+    const cached = this.impulses.get(bucket);
+    if (cached) return cached;
+    const buf = this.makeImpulse(reverbSecondsForBucket(bucket));
     this.impulses.set(bucket, buf);
     return buf;
   }

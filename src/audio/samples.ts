@@ -7,7 +7,6 @@
 import pulse0 from '../../assets/audio/pulse_0.ogg';
 import pulse1 from '../../assets/audio/pulse_1.ogg';
 import pulse2 from '../../assets/audio/pulse_2.ogg';
-import laserLarge from '../../assets/audio/laser_large.ogg';
 import hit0 from '../../assets/audio/hit_0.ogg';
 import hit1 from '../../assets/audio/hit_1.ogg';
 import downImpact from '../../assets/audio/down_impact.ogg';
@@ -39,17 +38,26 @@ import explosionLow from '../../assets/audio/explosion_low.ogg';
 import mining0 from '../../assets/audio/mining_0.ogg';
 import mining1 from '../../assets/audio/mining_1.ogg';
 import thruster from '../../assets/audio/thruster.ogg';
-import engineLoop from '../../assets/audio/engine_loop.ogg';
+import ambMachine from '../../assets/audio/amb_machine.ogg';
+import ambFoundry from '../../assets/audio/amb_foundry.ogg';
+import ambRoom from '../../assets/audio/amb_room.ogg';
+import ambWater from '../../assets/audio/amb_water.ogg';
+import ambBio from '../../assets/audio/amb_bio.ogg';
+import type { BiomeId } from '../world/biomeCells';
+import turret0 from '../../assets/audio/turret_0.ogg';
+import cannonBody from '../../assets/audio/cannon_body.ogg';
+import cannonBang from '../../assets/audio/cannon_bang.ogg';
 
 export const SAMPLE_URLS = {
-  pulse0, pulse1, pulse2, laserLarge,
+  pulse0, pulse1, pulse2,
   hit0, hit1, downImpact, hurtImpact, land0,
   footstep0, footstep1, footstep2, footstep3, footstep4,
   ladder0, ladder1, switch: switch_, tick, confirm,
   pickupCharge, pickupHeal, pickupRation, cache,
   eat0, eat1, warnError, jingleMilestone, jingleRecord, rest,
   crashMetal, explosionCrunch, explosionLow, mining0, mining1, thruster,
-  engineLoop,
+  ambMachine, ambFoundry, ambRoom, ambWater, ambBio,
+  turret0, cannonBody, cannonBang,
 } as const;
 
 export type SampleName = keyof typeof SAMPLE_URLS;
@@ -71,3 +79,20 @@ export function pickupSampleName(kind: string): SampleName {
   if (kind === 'heal') return 'pickupHeal';
   return 'pickupRation';
 }
+
+/**
+ * 環境ループのバイオーム対応表(第 3 ラウンドで実録化)。いずれも rubberduck の
+ * 実録ループ(CC0)をクロスフェードで継ぎ目なしにしたもの。機械系は共通の機械室
+ * トーン、精錬区だけ活動量の多い別テイクにする。生体系は専用の実録が CC0 で
+ * 見つからなかったため、空気のうねりのあるアンビエント録音で代替する(限界は
+ * 計画書に明記)。
+ */
+export const AMBIENT_LOOPS: Record<BiomeId, SampleName> = {
+  coldSteel: 'ambMachine',
+  habitation: 'ambRoom',
+  disposal: 'ambMachine',
+  waterVoid: 'ambWater',
+  power: 'ambMachine',
+  foundry: 'ambFoundry',
+  biomech: 'ambBio',
+};
