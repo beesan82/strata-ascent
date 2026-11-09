@@ -1,5 +1,5 @@
 import { Camera } from './core/camera';
-import { hapticCannonFire, hapticDamage, hapticEnemyDown, initNativeShell } from './core/haptics';
+import { hapticCannonFire, hapticDamage, hapticEnemyDown, hapticLedgeGrab, initNativeShell } from './core/haptics';
 import { Input, MOVE_KEYS } from './core/input';
 import { installTouchControls } from './core/touch';
 import { MAX_HP, Player } from './entities/player';
@@ -56,7 +56,7 @@ import {
 import { autoViewStarted, initialView, viewState, type ViewState } from './core/view';
 import { Caption, captionText } from './render/caption';
 import { AudioEngine } from './audio/engine';
-import { beaconHum, HUM_RANGE, LADDER_RUNG_STEP, nearestPlateDistance, rungCrossed } from './audio/params';
+import { beaconHum, HUM_RANGE, LADDER_RUNG_STEP, LAND_MIN_VY, nearestPlateDistance, rungCrossed } from './audio/params';
 import { beaconsInView } from './render/beacon';
 import { biomeIdForCell, districtNameForCell } from './world/biomeCells';
 import { terrainProfileFor } from './world/biomeTerrain';
@@ -160,6 +160,8 @@ let satietyPrevLevel = satietyLevel(satiety.value);
 let prevGrounded = true;
 let prevFallVy = 0;
 let ladderTravel = 0;
+/** 崖つかみの遷移検出用(段階 2): 前フレームに掴まっていたか */
+let prevHanging = false;
 
 /** 開封済み補給キャッシュの ID(セッション内のみ。死亡でも戻らない) */
 const claimedSupplyCaches = new Set<string>();
@@ -534,6 +536,14 @@ function update(dt: number): void {
   if (!prevGrounded && groundedNow) audio.land(prevFallVy);
   prevGrounded = groundedNow;
   prevFallVy = player.body.vy;
+  // 崖つかみ(段階 2): 掴まった瞬間にハプティクス Light と、最小音量の着地音を相乗りさせる
+  // (着地音のゲインは落下速度が決めるので、鳴る最小の速度 LAND_MIN_VY を渡す)
+  const hanging = player.ledge !== null;
+  if (!prevHanging && hanging) {
+    hapticLedgeGrab();
+    audio.land(LAND_MIN_VY);
+  }
+  prevHanging = hanging;
   // 梯子: 中心か足元が梯子タイルにあり縦に動いている間、段の刻み(rungCrossed)で鳴らす
   {
     const cxT = Math.floor(player.centerX);
@@ -561,7 +571,8 @@ function update(dt: number): void {
   });
   // 右スティックで狙っている間は、向きも照準の左右へ追従させる(移動方向と独立に狙うため。
   // ほぼ真上の狙いで向きが暴れないよう、横成分が弱いときは変えない)
-  if (input.touchAimActive && Math.abs(input.touchAimX) >= 0.3) {
+  // 崖つかみ中は壁の側を向いたままにする(Player が毎フレーム facing を縁の側へ揃える)
+  if (!hanging && input.touchAimActive && Math.abs(input.touchAimX) >= 0.3) {
     player.facing = input.touchAimX > 0 ? 1 : -1;
   }
   // 眺望(§6.4): 接地・静止で Shift → 手動、見晴らし台に初めて接地 → 自動(通過演出)。
@@ -653,7 +664,8 @@ function update(dt: number): void {
     const sat = stepSatiety(satiety, {
       dt: OPENNESS_SAMPLE_INTERVAL_FRAMES * (STEP_MS / 1000),
       inSafeZone: inRestBox || inSpawnProtection,
-      still: player.body.onGround && player.body.vx === 0,
+      // 崖つかみ中は静止中扱い(設計 2026-11-09-ledge-grab §掴まり中)
+      still: (player.body.onGround || hanging) && player.body.vx === 0,
       // 地区消耗倍率(サバイバル段階 2、設計 §4): プレイヤーのいるセルの地区で引く
       biomeMul: satietyBiomeMulFor(biomeIdForCell(seed, biomeCellAt(seed, Math.floor(player.centerY)))),
     });
@@ -682,7 +694,9 @@ function update(dt: number): void {
   // 満腹度が危険域(critical / starving)では砲の自動回復が半分の速さになる(サバイバル段階 2、設計 §4)
   const satLevelNow = satietyLevel(satiety.value);
   const chargesBefore = graviton.charges;
-  graviton.update(dt, input.fireHeld, fire, rechargeTimeFor(satLevelNow === 'critical' || satLevelNow === 'starving'));
+  // 崖つかみ中は武器を使えない(設計 §掴まり中): 溜めは破棄し、発射・溜め入力を無視する
+  if (hanging) graviton.cancelCharge();
+  graviton.update(dt, input.fireHeld && !hanging, fire, rechargeTimeFor(satLevelNow === 'critical' || satLevelNow === 'starving'));
   // 自動回復で弾が増えたときだけ小さく知らせる(§6.7)。発射で減った分は差し引きで消える
   if (graviton.charges > chargesBefore) audio.rechargeTick();
   // 満タン継続時間(描画専用): 満タンの間だけ積み、離す・発射・キャンセルで ratio が落ちれば 0 に戻る
@@ -706,11 +720,12 @@ function update(dt: number): void {
     player.body.onGround && player.body.vx !== 0,
     Math.atan2(pulseDir.y, pulseDir.x),
     simTime,
+    hanging,
   );
   // 発射音(§6.7): 発射総数の差分で鳴らす。PulseGun 側は音を持たない(検証用カウンタのみ)
   const shotsBefore = pulseGun.shotsFired;
   pulseGun.update(
-    dt, input.pulseHeld, muzzle.x, muzzle.y, pulseDir.x, pulseDir.y, tiles,
+    dt, input.pulseHeld && !hanging, muzzle.x, muzzle.y, pulseDir.x, pulseDir.y, tiles,
     player.centerX, player.centerY,
   );
   for (let i = shotsBefore; i < pulseGun.shotsFired; i++) audio.pulseFire(i);

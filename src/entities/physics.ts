@@ -84,6 +84,50 @@ function collidesSweptY(
   );
 }
 
+// ---- 崖つかみ(設計 2026-11-09-ledge-grab §掴まりの成立) ----
+
+/** 手が届く範囲: 体上端からこの距離だけ下まで(タイル) */
+export const LEDGE_HAND_REACH = 0.7;
+/** 壁面と体の側面の許容隙間(タイル)。moveBody の 1/16 刻み探索が残す隙間より少し広い */
+const LEDGE_WALL_GAP = 0.1;
+/** 掴まり中の体上端が縁の上面より下がる量(タイル)。手が縁にかかる見た目になる */
+export const LEDGE_HANG_DEPTH = 0.25;
+
+export interface Ledge {
+  /** 縁タイルの列(壁側) */
+  tx: number;
+  /** 縁タイルの行(= 縁の上面の y) */
+  ty: number;
+  /** 縁がある側(1=右, -1=左) */
+  side: 1 | -1;
+  /** 掴まり時に置くべき body の左上 */
+  x: number;
+  y: number;
+}
+
+/**
+ * body の side 側に掴まれる縁があるか。純粋関数で、以下をすべて満たすとき縁を返す:
+ * - 壁側に隣接する列(側面から LEDGE_WALL_GAP 以内)に固体タイルがある
+ * - そのタイルの上面 ty が手の届く範囲 [body.y, body.y + LEDGE_HAND_REACH] にある
+ *   (整数行なので候補は高々 1 つ)
+ * - そのタイルの上(ty-1)が固体でない(= 縁である)
+ * - スナップ位置に置いた体が固体と重ならない
+ * 落下中かどうか・入力の向きは呼び出し側(Player)が決める。梯子は固体でないので干渉しない。
+ */
+export function findLedge(body: Body, tiles: TileLookup, side: 1 | -1): Ledge | null {
+  const tx = side === 1
+    ? Math.floor(body.x + body.w + LEDGE_WALL_GAP)
+    : Math.floor(body.x - LEDGE_WALL_GAP);
+  const ty = Math.ceil(body.y);
+  if (ty > body.y + LEDGE_HAND_REACH) return null;
+  if (!isSolid(tiles(tx, ty))) return null;
+  if (isSolid(tiles(tx, ty - 1))) return null;
+  const x = side === 1 ? tx - body.w : tx + 1;
+  const y = ty + LEDGE_HANG_DEPTH;
+  if (collides(tiles, x, y, body.w, body.h)) return null;
+  return { tx, ty, side, x, y };
+}
+
 /**
  * 軸別に移動して衝突解決する。衝突した軸の速度は0になり、下方向の衝突でonGroundが立つ。
  *

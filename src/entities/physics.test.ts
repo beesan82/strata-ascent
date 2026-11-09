@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TILE, type Tile } from '../world/tiles';
-import { moveBody, type Body } from './physics';
+import { findLedge, LEDGE_HANG_DEPTH, moveBody, type Body } from './physics';
 
 /** y=5行だけが床、x=10列だけが壁のテストワールド */
 const testTiles = (tx: number, ty: number): Tile => {
@@ -96,6 +96,73 @@ describe('moveBody', () => {
     expect(b.y).toBeLessThan(6.2);
     expect(b.vy).toBe(0);
     expect(b.onGround).toBe(false);
+  });
+});
+
+describe('findLedge(崖つかみの成立判定)', () => {
+  /** x>=5 かつ y>=10 が固体の塊。縁は (5, 10) */
+  const blockRight = (tx: number, ty: number): Tile =>
+    tx >= 5 && ty >= 10 ? TILE.SOLID : TILE.AIR;
+  /** x<=4 かつ y>=10 が固体の塊。縁は (4, 10) */
+  const blockLeft = (tx: number, ty: number): Tile =>
+    tx <= 4 && ty >= 10 ? TILE.SOLID : TILE.AIR;
+
+  it('右側の縁を掴める: 縁タイルとスナップ位置を返す', () => {
+    const b = makeBody(4.25, 9.5); // 右端 = 5.0 で壁面に接する。上端 9.5、手の範囲は 9.5〜10.2
+    const l = findLedge(b, blockRight, 1);
+    expect(l).not.toBeNull();
+    expect(l!.tx).toBe(5);
+    expect(l!.ty).toBe(10);
+    expect(l!.side).toBe(1);
+    expect(l!.x).toBeCloseTo(5 - 0.75); // 側面が縁の側面に接する
+    expect(l!.y).toBeCloseTo(10 + LEDGE_HANG_DEPTH); // 上端は縁の上面より少し下
+  });
+
+  it('左側の縁も掴める', () => {
+    const b = makeBody(5, 9.5); // 左端 = 5.0 で壁(x<=4)の右面に接する
+    const l = findLedge(b, blockLeft, -1);
+    expect(l).not.toBeNull();
+    expect(l!.tx).toBe(4);
+    expect(l!.ty).toBe(10);
+    expect(l!.side).toBe(-1);
+    expect(l!.x).toBeCloseTo(5);
+  });
+
+  it('壁面から離れていれば掴めない(1/16 の衝突隙間は許す)', () => {
+    expect(findLedge(makeBody(4.25 - 1 / 16, 9.5), blockRight, 1)).not.toBeNull();
+    expect(findLedge(makeBody(3.5, 9.5), blockRight, 1)).toBeNull();
+  });
+
+  it('縁の上が塞がっていれば掴めない', () => {
+    const wall = (tx: number, ty: number): Tile => (tx >= 5 && ty >= 9 ? TILE.SOLID : TILE.AIR);
+    expect(findLedge(makeBody(4.25, 9.5), wall, 1)).toBeNull();
+  });
+
+  it('手の範囲(体上端〜+0.7)の外なら掴めない', () => {
+    expect(findLedge(makeBody(4.25, 8.5), blockRight, 1)).toBeNull(); // 範囲 8.5〜9.2: 縁(10)はまだ下
+    expect(findLedge(makeBody(4.25, 9.35), blockRight, 1)).not.toBeNull(); // 範囲 9.35〜10.05: 下端近くで成立
+    expect(findLedge(makeBody(4.25, 10), blockRight, 1)).not.toBeNull(); // 上端が縁の上面と同じ高さ
+    expect(findLedge(makeBody(4.25, 10.5), blockRight, 1)).toBeNull(); // 上端が縁より下: 行 11 の上は固体
+  });
+
+  it('固体でないタイル(梯子)は縁にならない', () => {
+    const ladder = (tx: number, ty: number): Tile => (tx >= 5 && ty >= 10 ? TILE.LADDER : TILE.AIR);
+    expect(findLedge(makeBody(4.25, 9.5), ladder, 1)).toBeNull();
+  });
+
+  it('HARD も縁になる', () => {
+    const hard = (tx: number, ty: number): Tile => (tx >= 5 && ty >= 10 ? TILE.HARD : TILE.AIR);
+    expect(findLedge(makeBody(4.25, 9.5), hard, 1)?.ty).toBe(10);
+  });
+
+  it('スナップ位置が固体と重なるなら掴めない', () => {
+    const withFloor = (tx: number, ty: number): Tile =>
+      blockRight(tx, ty) === TILE.SOLID || (tx === 4 && ty === 11) ? TILE.SOLID : TILE.AIR;
+    expect(findLedge(makeBody(4.25, 9.5), withFloor, 1)).toBeNull();
+  });
+
+  it('反対側を指定すれば掴めない', () => {
+    expect(findLedge(makeBody(4.25, 9.5), blockRight, -1)).toBeNull();
   });
 });
 
