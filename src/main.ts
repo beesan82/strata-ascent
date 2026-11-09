@@ -782,11 +782,19 @@ function update(dt: number): void {
     y: player.body.y,
     dt,
   });
-  // 右スティックで狙っている間は、向きも照準の左右へ追従させる(移動方向と独立に狙うため。
-  // ほぼ真上の狙いで向きが暴れないよう、横成分が弱いときは変えない)
-  // 崖つかみ中は壁の側を向いたままにする(Player が毎フレーム facing を縁の側へ揃える)
-  if (!hanging && input.touchAimActive && Math.abs(input.touchAimX) >= 0.3) {
-    player.facing = input.touchAimX > 0 ? 1 : -1;
+  // 向きは照準に一致させる(体の向き・銃の見た目・発射方向を揃える)。照準の横成分がわずかでも
+  // あればその側を向く。旧閾値 0.3 では背中側への斜め照準で体だけが前を向き、銃口が背中側に
+  // 回って「背中から発射」に見えた。保持照準と、砲モードのマウス照準も同じ扱いにする。
+  // ほぼ真上/真下の照準では向きを保ち、崖つかみ中は壁の側を向いたままにする
+  if (!hanging) {
+    const aimX = input.touchAimActive
+      ? input.touchAimX
+      : input.heldAimActive
+        ? input.heldAimX
+        : input.mouseSeen && input.weaponMode === 'cannon'
+          ? clamp(-1, 1, (input.mouseX * dpr - canvas.width / 2) / (canvas.width / 2))
+          : 0;
+    if (Math.abs(aimX) >= 0.05) player.facing = aimX > 0 ? 1 : -1;
   }
   // 眺望(§6.4): 接地・静止で Shift → 手動、見晴らし台に初めて接地 → 自動(通過演出)。
   // 足元の行は接地時に body の下端がタイル境界に揃うので round で取る。
@@ -1258,12 +1266,19 @@ function updateHud(): void {
       }
     }
   }
-  // ボス HP バー(第2弾 §2): 番人が有効な間だけ出す。それ以外の文字行は出さない(ASCII のゲージで
-  // フォント差異なく確実に表示)。文字列が変わらないフレームでは DOM を触らない
+  // ボス HP バー(第2弾 §2): 番人が有効で、かつプレイヤーが大広間の中にいる間だけ出す(広間のある
+  // セルに入っただけで常時表示にしない)。それ以外の文字行は出さない(ASCII のゲージでフォント
+  // 差異なく確実に表示)。文字列が変わらないフレームでは DOM を触らない
   let bossHud = '';
   if (boss) {
-    const filled = Math.max(0, Math.ceil((boss.boss.hp / BOSS_HP) * 10));
-    bossHud = `広間番人 [${'#'.repeat(filled)}${'-'.repeat(10 - filled)}]`;
+    const hall = boss.spawn.hall;
+    const inHall =
+      player.centerX >= hall.x0 && player.centerX < hall.x1 &&
+      player.centerY >= hall.y0 && player.centerY < hall.y1;
+    if (inHall) {
+      const filled = Math.max(0, Math.ceil((boss.boss.hp / BOSS_HP) * 10));
+      bossHud = `広間番人 [${'#'.repeat(filled)}${'-'.repeat(10 - filled)}]`;
+    }
   }
   if (hud.textContent !== bossHud) hud.textContent = bossHud;
 }

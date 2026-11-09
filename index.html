@@ -83,9 +83,12 @@
     #itembox {
       position: fixed; left: 50%; top: calc(10px + env(safe-area-inset-top)); transform: translateX(-50%);
       width: min(92vw, 430px); z-index: 30;
+      /* 横画面のスマホでは縦が短く、状態セクションを足すと入りきらない。中でスクロールさせる */
+      max-height: calc(100dvh - 20px - env(safe-area-inset-top)); overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
       background: rgba(16, 20, 24, 0.92); border: 1px solid rgba(200, 208, 214, 0.4);
       color: #c8d0d6; font: 13px monospace; letter-spacing: 0.12em;
-      padding: 12px 14px; box-sizing: border-box;
+      padding: 10px 14px; box-sizing: border-box;
     }
     #itembox[hidden] { display: none; }
     .ibox-head {
@@ -96,7 +99,7 @@
       background: none; border: 1px solid rgba(200, 208, 214, 0.4); color: #c8d0d6;
       width: 30px; height: 30px; font: 16px monospace; cursor: pointer;
     }
-    .ibox-label { color: #9aa4ad; font-size: 11px; margin: 8px 0 5px; }
+    .ibox-label { color: #9aa4ad; font-size: 11px; margin: 6px 0 4px; }
     /* 状態セクション: 2 列の行(左 = 項目名、右 = 値)。HUD の文字行の代わり */
     .ibox-status { display: grid; grid-template-columns: auto 1fr; column-gap: 12px; row-gap: 3px; font-size: 12px; }
     .ibox-status .k { color: #9aa4ad; }
