@@ -261,6 +261,7 @@ export const PICKUP_NOTES: Record<string, readonly number[]> = {
   heal: [523.25, 783.99],
   ration: [392, 523.25],
   material: [440, 659.25],
+  pulsecell: [659.25, 1046.5], // パルス弾セル: 砲弾と同じ出だしで上を高く(軽いセルの束)
 };
 /** 素材の取得は砲弾の素材を低めのレートで鳴らす(金属の塊として砲弾より重く) */
 export const PICKUP_MATERIAL_RATE = 0.8;

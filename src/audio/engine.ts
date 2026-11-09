@@ -782,7 +782,8 @@ export class AudioEngine {
   /** ドロップ取得: 種別の素材(pickupSampleName)。無いときは従来の上行 2 音 */
   pickup(kind: string): void {
     if (!this.ctx) return;
-    const rate = kind === 'charge' ? 1.1 : kind === 'ration' ? 0.85 : kind === 'material' ? PICKUP_MATERIAL_RATE : 1;
+    // パルス弾セルは砲弾と同じ素材を少し高いレートで(軽いセルの束として砲弾より軽く)
+    const rate = kind === 'charge' ? 1.1 : kind === 'pulsecell' ? 1.25 : kind === 'ration' ? 0.85 : kind === 'material' ? PICKUP_MATERIAL_RATE : 1;
     if (this.playSample(pickupSampleName(kind), { gain: 0.5, rate, wet: SAMPLE_WET, space: 'room' })) return;
     this.noteRun(pickupNotes(kind), PICKUP_GAIN, PICKUP_NOTE_GAP, 0.16);
   }
@@ -858,7 +859,10 @@ export class AudioEngine {
     osc.stop(now + SWITCH_SECONDS + 0.05);
   }
 
-  /** 砲の弾回復の完了: サンプル(tick)が読めていればそれ、無ければ従来の小さな単音 */
+  /**
+   * パルス弾セルの装填(弾薬設計 §1。砲の自動回復は廃止され、その合図音をそのまま装填に充てる):
+   * サンプル(tick)が読めていればそれ、無ければ従来の小さな単音
+   */
   rechargeTick(): void {
     if (!this.ctx) return;
     if (this.playSample('tick', { gain: 0.5, wet: SAMPLE_WET, space: 'room' })) return;

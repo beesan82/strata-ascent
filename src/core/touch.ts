@@ -9,6 +9,7 @@ import type { WeaponMode } from './weapon';
  * 武器(パルス / 重粒子砲)は切替ボタンで切り替え、右スティックの意味論がモードで変わる
  * (パルス = 倒して連射、砲 = 倒して溜め・離して発射・中心へ戻して離すとキャンセル)。
  * すべて Input のタッチ入口へ流すだけ。スタイルは index.html(pointer: coarse のみ)。
+ * ボタンのラベルは記号(弾薬設計 2026-11-09 §4)。
  */
 
 /** スティックの最大ストローク(px) */
@@ -16,16 +17,35 @@ export const STICK_RADIUS = 56;
 /** スティック土台の直径(px) */
 export const STICK_BASE_SIZE = 112;
 
+/**
+ * ボタンの記号。絵文字表示(Emoji Presentation)を持たない字形だけを使う
+ * (↑ U+2191 / ◎ U+25CE / ▦ U+25A6 / » U+00BB / ● U+25CF。⬆ ⚫ などの絵文字化する字形は避ける)。
+ * 跳 = 上向きの矢印、望 = 照準環、箱 = 格子、武器 = パルスは連射の記号、砲は大きな弾の記号
+ */
+export const BUTTON_GLYPH = {
+  jump: '↑',
+  view: '◎',
+  box: '▦',
+  pulse: '»',
+  cannon: '●',
+} as const;
+
+/** 武器ボタンの記号(現在の武器を表示する。切り替えた先ではない) */
+export function weaponGlyph(mode: WeaponMode): string {
+  return mode === 'cannon' ? BUTTON_GLYPH.cannon : BUTTON_GLYPH.pulse;
+}
+
 type BtnHandlers = {
   onDown: (e: PointerEvent) => void;
   onUp: () => void;
 };
 
-function makeButton(label: string, cls: string, handlers: BtnHandlers): HTMLButtonElement {
+function makeButton(label: string, cls: string, handlers: BtnHandlers, ariaLabel?: string): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = `tbtn ${cls}`;
   btn.textContent = label;
+  if (ariaLabel) btn.setAttribute('aria-label', ariaLabel);
   btn.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     try {
@@ -181,20 +201,20 @@ export function installTouchControls(input: Input, onBoxToggle?: () => void): vo
   );
   root.appendChild(rightStick.el);
 
-  // 切替ボタン(旧「砲」ボタンの位置・サイズをそのまま使う)。ラベルは「切り替えた先」ではなく
+  // 切替ボタン(旧「砲」ボタンの位置・サイズをそのまま使う)。記号は「切り替えた先」ではなく
   // 現在の武器を表示し、モード明示の主担い手にする(設計 §1.1、§2-1)。切り替えは押下エッジのみ。
-  const weaponBtn = makeButton('パルス', 'sz-weapon', {
+  const weaponBtn = makeButton(weaponGlyph(input.weaponMode), 'sz-weapon', {
     onDown: () => {
       input.toggleWeapon(); // 溜め中なら Input 側でキャンセルしてから切り替わる
       hapticWeaponSwitch();
       syncCannonActive(); // キャンセルで溜めが落ちたら左スティックの拘束も解く
     },
     onUp: () => {},
-  });
-  // モード表示の同期: ボタンのラベルと色、#touch の mode-cannon(右スティックの色味、設計 §2-2)。
+  }, '武器切替');
+  // モード表示の同期: ボタンの記号と色、#touch の mode-cannon(右スティックの色味、設計 §2-2)。
   // 切替ボタンの押下だけでなく、発射後の自動復帰(段階1 Task 3)でも同じ経路で同期される
   const syncWeaponUi = (mode: WeaponMode): void => {
-    weaponBtn.textContent = mode === 'cannon' ? '砲' : 'パルス';
+    weaponBtn.textContent = weaponGlyph(mode);
     weaponBtn.classList.toggle('mode-cannon', mode === 'cannon');
     root.classList.toggle('mode-cannon', mode === 'cannon');
   };
@@ -208,18 +228,18 @@ export function installTouchControls(input: Input, onBoxToggle?: () => void): vo
   rightRow.className = 'trow';
   rightRow.appendChild(weaponBtn);
   rightRow.appendChild(
-    makeButton('跳', 'sz-jump', {
+    makeButton(BUTTON_GLYPH.jump, 'sz-jump', {
       onDown: () => input.touchDown('Space'),
       onUp: () => input.touchUp('Space'),
-    }),
+    }, 'ジャンプ'),
   );
   // アイテムボックスの開閉(設計 2026-11-09-item-box)。開閉とポーズの実処理は main 側のコールバック
   if (onBoxToggle) {
     rightRow.appendChild(
-      makeButton('箱', 'sz-box', {
+      makeButton(BUTTON_GLYPH.box, 'sz-box', {
         onDown: () => onBoxToggle(),
         onUp: () => {},
-      }),
+      }, 'アイテムボックス'),
     );
   }
   right.appendChild(rightRow);
@@ -229,10 +249,10 @@ export function installTouchControls(input: Input, onBoxToggle?: () => void): vo
   const viewWrap = document.createElement('div');
   viewWrap.className = 'tview';
   viewWrap.appendChild(
-    makeButton('望', 'sz-view', {
+    makeButton(BUTTON_GLYPH.view, 'sz-view', {
       onDown: () => input.touchDown('ShiftLeft'),
       onUp: () => input.touchUp('ShiftLeft'),
-    }),
+    }, '眺望'),
   );
   root.appendChild(viewWrap);
 

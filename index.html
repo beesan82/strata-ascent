@@ -13,6 +13,7 @@
       -webkit-tap-highlight-color: transparent;
     }
     canvas { display: block; }
+    /* HUD は状態の文字行を持たず(状態はアイテムボックスへ集約、弾薬設計 §4)、ボスの HP バーだけを出す */
     #hud {
       position: fixed; left: 12px; top: 10px;
       color: #9aa4ad; font: 12px monospace; letter-spacing: 0.2em;
@@ -56,11 +57,14 @@
         position: fixed; top: calc(10px + env(safe-area-inset-top)); right: 12px;
         pointer-events: none; z-index: 10;
       }
+      /* ボタンのラベルは記号 1 文字(弾薬設計 §4)。等幅フォントで描ける字形だけを使い、
+         行の高さをボタンの高さに揃えて記号を中央に置く */
       .tbtn {
         pointer-events: auto; border-radius: 50%;
         background: rgba(28, 34, 40, 0.45); color: #c8d0d6;
         border: 1px solid rgba(200, 208, 214, 0.4);
-        font: 24px monospace; touch-action: none;
+        font: 24px monospace; line-height: 1; padding: 0; touch-action: none;
+        display: inline-flex; align-items: center; justify-content: center;
         user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
       }
       .tbtn.on { background: rgba(130, 150, 165, 0.55); }
@@ -68,14 +72,14 @@
       .tbtn.mode-cannon { background: rgba(141, 98, 203, 0.45); border-color: rgba(188, 150, 255, 0.75); }
       #touch.mode-cannon .tstick-base { border-color: rgba(188, 150, 255, 0.55); }
       #touch.mode-cannon .tstick-knob { background: rgba(141, 98, 203, 0.5); border-color: rgba(188, 150, 255, 0.6); }
-      .sz-jump { width: 84px; height: 84px; font-size: 26px; }
-      .sz-box { width: 48px; height: 48px; font-size: 15px; }
-      /* 切替ボタン(旧 .sz-cannon の枠)。ラベル「パルス」が 76px 円に収まるよう font-size を下げる */
-      .sz-weapon { width: 76px; height: 76px; font-size: 16px; }
-      .sz-view { width: 48px; height: 48px; font-size: 16px; }
+      .sz-jump { width: 84px; height: 84px; font-size: 36px; }
+      .sz-box { width: 48px; height: 48px; font-size: 24px; }
+      /* 切替ボタン(旧 .sz-cannon の枠)。記号 1 文字(» / ●)なので大きめに */
+      .sz-weapon { width: 76px; height: 76px; font-size: 34px; }
+      .sz-view { width: 48px; height: 48px; font-size: 24px; }
     }
-    /* アイテムボックス(設計 2026-11-09-item-box)。DOM のパネルで、ゲーム内描画(量子化)の対象外。
-       開いている間は main がゲーム更新を止める */
+    /* アイテムボックス(設計 2026-11-09-item-box、状態セクションは弾薬設計 §4)。DOM のパネルで、
+       ゲーム内描画(量子化)の対象外。開いている間は main がゲーム更新を止める */
     #itembox {
       position: fixed; left: 50%; top: calc(10px + env(safe-area-inset-top)); transform: translateX(-50%);
       width: min(92vw, 430px); z-index: 30;
@@ -93,6 +97,12 @@
       width: 30px; height: 30px; font: 16px monospace; cursor: pointer;
     }
     .ibox-label { color: #9aa4ad; font-size: 11px; margin: 8px 0 5px; }
+    /* 状態セクション: 2 列の行(左 = 項目名、右 = 値)。HUD の文字行の代わり */
+    .ibox-status { display: grid; grid-template-columns: auto 1fr; column-gap: 12px; row-gap: 3px; font-size: 12px; }
+    .ibox-status .k { color: #9aa4ad; }
+    .ibox-status .v { color: #c8d0d6; white-space: nowrap; }
+    .ibox-status .v.warn { color: #caa64a; }
+    .ibox-status .v.crit { color: #d06a5a; }
     .ibox-cells { display: flex; gap: 6px; flex-wrap: wrap; }
     .ibox-cell {
       width: 44px; height: 44px; box-sizing: border-box;
@@ -100,8 +110,17 @@
       padding: 0; cursor: pointer;
     }
     .ibox-cell.empty { cursor: default; opacity: 0.45; }
-    /* 素材セルの見た目(ゲーム内の鋼青+淡色の上端帯を CSS で寄せる) */
+    /* 携行セルの見た目(ゲーム内の色を CSS で寄せる)。素材 = 鋼青+淡色の上端帯、
+       砲弾 = 紫の角型+暗い芯、パルス弾セル = 淡色の束+紫の縦筋 2 本 */
     .ibox-icon { width: 100%; height: 100%; background: linear-gradient(#c7d0ce 0 22%, #3a73a4 22% 100%); }
+    .ibox-icon.shell {
+      background: radial-gradient(circle at 50% 50%, #30254c 0 24%, #8d62cb 24% 100%);
+    }
+    .ibox-icon.pulsecell {
+      background:
+        linear-gradient(90deg, transparent 0 18%, #8d62cb 18% 32%, transparent 32% 68%, #8d62cb 68% 82%, transparent 82% 100%),
+        linear-gradient(#c7d0ce, #c7d0ce);
+    }
     .ibox-chips { display: flex; gap: 6px; flex-wrap: wrap; min-height: 30px; }
     .ibox-chip {
       display: inline-flex; align-items: center; gap: 7px;
@@ -120,7 +139,9 @@
   <div id="caption"></div>
   <div id="itembox" hidden>
     <div class="ibox-head"><span>アイテムボックス</span><button id="itembox-close" type="button">×</button></div>
-    <div class="ibox-label">携行（タップで落とす）</div>
+    <div class="ibox-label">状態</div>
+    <div id="itembox-status" class="ibox-status"></div>
+    <div id="itembox-carry-label" class="ibox-label">携行（タップで落とす）</div>
     <div id="itembox-carry" class="ibox-cells"></div>
     <div class="ibox-label">保管（確保済み）</div>
     <div id="itembox-secured" class="ibox-chips"></div>

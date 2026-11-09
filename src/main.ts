@@ -3,14 +3,21 @@ import { hapticCannonFire, hapticDamage, hapticEnemyDown, hapticLedgeGrab, initN
 import { Input, MOVE_KEYS } from './core/input';
 import { installTouchControls } from './core/touch';
 import { MAX_HP, Player } from './entities/player';
-import { Graviton, MAX_CHARGES, BORE_LENGTH, BORE_RADIUS, rechargeTimeFor } from './entities/graviton';
+import { Graviton, BORE_LENGTH, BORE_RADIUS } from './entities/graviton';
 import { pulseAimDir, PulseGun, PULSE_DAMAGE, PULSE_SIZE, type Pulse } from './entities/pulse';
 import { Boss, BOSS_BEAM_DAMAGE, BOSS_H, BOSS_HP, BOSS_W, Flyer, Walker } from './entities/enemy';
 import { Turret, TurretShot } from './entities/turret';
 import { beamHit } from './entities/beamHit';
-import { canAddSupply, canPickup, DropItem, pushDrop, pushSupply } from './entities/drop';
+import { canAddSupply, canPickup, carryKindFor, DropItem, dropKindFor, pushDrop, pushSupply } from './entities/drop';
 import { dropFor } from './world/drop';
-import { chooseSupplyCaches, restStockSecondFor, supplyFor, type SupplyCache } from './world/supply';
+import {
+  ARMORY_CONTENTS,
+  chooseArmories,
+  chooseSupplyCaches,
+  restStockSecondFor,
+  supplyFor,
+  type SupplyCache,
+} from './world/supply';
 import { chooseFlyerSpawns, chooseSpawns, chooseTurretSpawns, findAirPockets, findFloorRuns, flyerMulFor, turretMulFor } from './world/spawn';
 import { bossRewardFor, bossSpawnFor, type BossSpawn } from './world/boss';
 import { grandHallAt } from './world/grandhall';
@@ -18,7 +25,6 @@ import { nearestRestPoint } from './world/restpoint';
 import { BAKE_KEEP_RADIUS, Renderer } from './render/renderer';
 import { ChunkStore } from './world/chunks';
 import { Destruction } from './world/destruction';
-import { regionAt, type System } from './world/hierarchy';
 import { isGreatInterface, layerNumber, overlookCellAt } from './world/interface';
 import { biomeCellAt } from './world/biomeCells';
 import { towerTopFloorAt } from './world/landmark';
@@ -46,17 +52,25 @@ import {
 } from './core/remains';
 import {
   addCarry,
+  CARRY_KIND_INFO,
   CARRY_KINDS,
   carriedTotal,
-  initialCarry,
-  isCarryKind,
   removeCarry,
   secureCaptionText,
   secureCarry,
   securedTotal,
+  storeCarry,
   withdrawCarry,
   type CarryState,
 } from './core/carry';
+import {
+  canFireCannon,
+  canFirePulse,
+  fireCannon,
+  firePulse,
+  initialAmmoCarry,
+  pulseShotsTotal,
+} from './core/ammo';
 import { displayAltitude, highestLayer } from './core/coordinate';
 import {
   crossedMilestone,
@@ -168,9 +182,12 @@ let killCount = 0;
 let satiety: SatietyState = initialSatiety();
 /**
  * 携行と確保(エクストラクション段階 A)。素材セルを拾うと携行に入り、休憩点の箱に入ると
- * 確保済みへ移る。状態は core/carry の純関数で進める。段階 A では死亡しても携行は残る
+ * 確保済みへ移る。状態は core/carry の純関数で進める。段階 A では死亡しても携行は残る。
+ * 弾薬(砲弾・パルス弾セル)も同じ携行枠に入る(弾薬設計 §1)。開始時はパルス弾セル 2 個だけ
  */
-let carry: CarryState = initialCarry();
+let carry: CarryState = initialAmmoCarry();
+/** パルスの装填中の残発数(弾薬設計 §1)。尽きると携行のセルを 1 個装填する。死亡で 0 に戻る */
+let pulseLoaded = 0;
 /** 字幕は状態が落ちた瞬間だけ出すための前回レベル */
 let satietyPrevLevel = satietyLevel(satiety.value);
 
@@ -187,6 +204,12 @@ const claimedSupplyCaches = new Set<string>();
 const claimedRestStocks = new Set<string>();
 /** 現在有効な補給キャッシュ(敵スキャンに相乗りして更新する。近傍に最大 1 個) */
 let supplyCache: SupplyCache | null = null;
+/** 開封済み武器庫の ID(セッション内のみ。死亡でも戻らない。弾薬設計 §2) */
+const claimedArmories = new Set<string>();
+/** 現在有効な武器庫(キャッシュと同じスキャンに相乗りする別種のスポット。近傍に最大 1 個) */
+let armory: SupplyCache | null = null;
+/** 前回の判定で休憩点の箱の中にいたか(確保は「入った瞬間」だけ行う。引き出した物を再確保しないため) */
+let prevInRestBox = false;
 
 /**
  * 敵 1 体の撃破処理: 記録保持への登録と、ドロップ抽選を 1 回だけ行う。
@@ -209,7 +232,8 @@ function onEnemyKilled(spawnId: string, centerX: number, centerY: number): void 
  * ボスの撃破処理: 記録保持への登録と、確定ドロップ(回復 1 + 砲弾 1 + 糧食 1、総数 3)。
  * 構成は bossRewardFor(サバイバル段階 2、設計 §5・§10)。抽選(dropFor)は経由せず、
  * 撃破位置から落として広間の床へ散らす(第2弾 §2)。
- * 糧食は敵ドロップと同じく補給品として残す(段階 1 の裁定)。
+ * 糧食は敵ドロップと同じく補給品として残す(段階 1 の裁定)。砲弾は敵ドロップから外した後も
+ * 場所性のある報酬として残す(弾薬設計 §3)。
  */
 function onBossKilled(spawnId: string, b: Boss): void {
   audio.bossDown(); // ボス撃破音(§6.7): 通常の撃破音より長く重い
@@ -225,7 +249,7 @@ function onBossKilled(spawnId: string, b: Boss): void {
 
 /**
  * 死亡時の遺留品(サバイバル段階 3、設計 §8): 所持糧食を最後の安定接地点へ落とす。
- * 対象は糧食だけ(砲弾は自動回復するため回収価値が薄く、回復セルは所持品として存在しない)。
+ * 対象は糧食だけ(弾薬は携行枠にあり死亡しても残る(段階 A の決定)。回復セルは所持品として存在しない)。
  * 遺留品は補給品(寿命なし)として出し、箇所は最大 2 つまで(3 つ目で最も古い箇所が消える)。
  * 復活処理(テレポートと糧食リセット)より前に呼ぶこと。
  */
@@ -326,6 +350,13 @@ function refreshEnemies(): void {
   // 開封済みは選定後の減算で差し引く(開封した候補の代わりは繰り上がらない)
   const caches = chooseSupplyCaches(seed, runs, protectedPoints, halls, claimedSupplyCaches);
   supplyCache = caches[0] ?? null;
+  // 武器庫(弾薬設計 §2): キャッシュと同じ床ラン・保護点・広間除外に相乗りする別種の選定。
+  // 密度は地区倍率で変わる。キャッシュと同じ場所に重ならないよう、キャッシュの位置も保護点に加える
+  const armoryGuard = supplyCache
+    ? [...protectedPoints, { x: supplyCache.x, y: supplyCache.floorY, r: 2 }]
+    : protectedPoints;
+  const armories = chooseArmories(seed, runs, armoryGuard, halls, biomeId, claimedArmories);
+  armory = armories[0] ?? null;
 }
 // デバッグ/スクリーンショット用: ?x=&y= でスポーン位置を上書き(埋まり座標は自己責任)
 const qx = params.get('x');
@@ -351,11 +382,14 @@ input.onInput(() => {
 });
 input.onWeaponChange(() => audio.weaponSwitch()); // 切替音(§6.7)。砲の自動復帰でも鳴る
 
-// ---- アイテムボックス(設計 2026-11-09-item-box) ----
-// DOM のパネルで、いつでも開ける(タッチは「箱」ボタン、PC は KeyB、Esc で閉じる)。
-// 開いている間は frame がゲーム更新を止める(ポーズ)。携行のタップ = その場に 1 個落とす、
-// 保管のタップ = 休憩点にいる間だけ携行へ 1 個戻す(戻すと未確保に戻る)。
+// ---- アイテムボックス(設計 2026-11-09-item-box、状態セクションは弾薬設計 §4) ----
+// DOM のパネルで、いつでも開ける(タッチは箱ボタン、PC は KeyB、Esc で閉じる)。
+// 開いている間は frame がゲーム更新を止める(ポーズ)。携行のタップ = その場に 1 個落とす
+// (休憩点にいる間は保管へ入れる)、保管のタップ = 休憩点にいる間だけ携行へ 1 個戻す(戻すと未確保に戻る)。
+// 状態セクションは旧 HUD の文字行の移転先(HP、満腹度と糧食、弾薬、階層、最深記録、確保済み)。
 const itemBoxEl = document.getElementById('itembox')!;
+const itemBoxStatusEl = document.getElementById('itembox-status')!;
+const itemBoxCarryLabelEl = document.getElementById('itembox-carry-label')!;
 const itemBoxCarryEl = document.getElementById('itembox-carry')!;
 const itemBoxSecuredEl = document.getElementById('itembox-secured')!;
 const itemBoxNoteEl = document.getElementById('itembox-note')!;
@@ -371,34 +405,89 @@ function isInRestBoxNow(): boolean {
   );
 }
 
+/** 状態セクションの 1 行(項目名と値)。cls は値の強調(warn / crit) */
+function appendStatusRow(label: string, value: string, cls = ''): void {
+  const k = document.createElement('span');
+  k.className = 'k';
+  k.textContent = label;
+  const v = document.createElement('span');
+  v.className = cls ? `v ${cls}` : 'v';
+  v.textContent = value;
+  itemBoxStatusEl.appendChild(k);
+  itemBoxStatusEl.appendChild(v);
+}
+
+/** 状態セクション(弾薬設計 §4)。旧 HUD の文字行の内容をここへ移した。表示だけで副作用は無い */
+function renderItemBoxStatus(): void {
+  itemBoxStatusEl.textContent = '';
+  appendStatusRow('HP', '♥'.repeat(player.hp) + '♡'.repeat(Math.max(0, MAX_HP - player.hp)));
+  const satLevel = satietyLevel(satiety.value);
+  const satBars = Math.max(0, Math.min(10, Math.round(satiety.value / 10)));
+  appendStatusRow(
+    '満腹度',
+    `[${'#'.repeat(satBars)}${'-'.repeat(10 - satBars)}] ${Math.floor(satiety.value)}`,
+    satLevel === 'ok' ? '' : satLevel === 'low' ? 'warn' : 'crit',
+  );
+  appendStatusRow('糧食', `${satiety.rations} / ${MAX_RATIONS}`);
+  appendStatusRow('武器', input.weaponMode === 'cannon' ? '重粒子砲' : 'パルス');
+  const pulseTotal = pulseShotsTotal(pulseLoaded, carry);
+  appendStatusRow(
+    'パルス',
+    `${pulseTotal} 発（装填 ${pulseLoaded} ＋ セル ${carry.carried.pulsecell}）`,
+    pulseTotal === 0 ? 'crit' : pulseTotal <= 10 ? 'warn' : '',
+  );
+  appendStatusRow('砲弾', `${carry.carried.shell} 発`, carry.carried.shell === 0 ? 'warn' : '');
+  appendStatusRow('階層', `第 ${maxLayer} 階層 / 高度 ${displayAltitude(player.body.y, player.body.h)}`);
+  appendStatusRow('最深記録', bestLayer > 0 ? `第 ${bestLayer} 階層` : 'なし');
+  appendStatusRow('確保済み', `${securedTotal(carry)} 個`);
+}
+
 function renderItemBox(): void {
+  renderItemBoxStatus();
+  const atRest = isInRestBoxNow();
+  itemBoxCarryLabelEl.textContent = atRest ? '携行（タップで保管へ）' : '携行（タップで落とす）';
   itemBoxCarryEl.textContent = '';
-  const total = carriedTotal(carry);
-  for (let i = 0; i < carry.cap; i++) {
-    const cell = document.createElement('button');
-    cell.type = 'button';
-    if (i < total) {
+  let placed = 0;
+  for (const kind of CARRY_KINDS) {
+    for (let i = 0; i < carry.carried[kind]; i++) {
+      const cell = document.createElement('button');
+      cell.type = 'button';
       cell.className = 'ibox-cell';
+      cell.title = CARRY_KIND_INFO[kind].label;
       const icon = document.createElement('div');
-      icon.className = 'ibox-icon';
+      icon.className = kind === 'material' ? 'ibox-icon' : `ibox-icon ${kind}`;
       cell.appendChild(icon);
       cell.addEventListener('click', () => {
+        if (atRest) {
+          // 休憩点では保管へ入れる(弾薬を保管に置く唯一の経路。素材は入った瞬間に自動確保されるが、
+          // 引き出した後にまた仕舞うのもここ)
+          const next = storeCarry(carry, kind);
+          if (next === carry) return;
+          carry = next;
+          audio.secure();
+          renderItemBox();
+          return;
+        }
         // 携行から 1 個をその場に落とす(補給品として置かれ、また拾える)。
         // 地面の補給品プールに空きが無いときは落とさない(アイテムが消えてしまうため)
         if (!canAddSupply(drops, 1)) return;
-        const next = removeCarry(carry, 'material');
+        const next = removeCarry(carry, kind);
         if (next === carry) return;
         carry = next;
-        pushSupply(drops, new DropItem('material', player.centerX, player.centerY, true));
+        pushSupply(drops, new DropItem(dropKindFor(kind), player.centerX, player.centerY, true));
         renderItemBox();
       });
-    } else {
-      cell.className = 'ibox-cell empty';
+      itemBoxCarryEl.appendChild(cell);
+      placed++;
     }
+  }
+  for (let i = placed; i < carry.cap; i++) {
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.className = 'ibox-cell empty';
     itemBoxCarryEl.appendChild(cell);
   }
   itemBoxSecuredEl.textContent = '';
-  const atRest = isInRestBoxNow();
   if (securedTotal(carry) === 0) {
     const span = document.createElement('span');
     span.className = 'ibox-empty-note';
@@ -412,10 +501,10 @@ function renderItemBox(): void {
       chip.type = 'button';
       chip.className = atRest ? 'ibox-chip' : 'ibox-chip locked';
       const icon = document.createElement('div');
-      icon.className = 'ibox-icon';
+      icon.className = kind === 'material' ? 'ibox-icon' : `ibox-icon ${kind}`;
       chip.appendChild(icon);
       const label = document.createElement('span');
-      label.textContent = `素材 ×${n}`;
+      label.textContent = `${CARRY_KIND_INFO[kind].label} ×${n}`;
       chip.appendChild(label);
       if (atRest) {
         chip.addEventListener('click', () => {
@@ -547,6 +636,8 @@ function firstContact(ox: number, oy: number, angle: number): { x: number; y: nu
 
 /** チャージ完了→離した瞬間: エイム方向へ地形を貫通破壊し、タイルへ反映して焼き込みを無効化する */
 function fire(): void {
+  // 砲弾を 1 個消費する(弾薬設計 §1)。可否は graviton.update へ渡した canFireCannon で先に止めている
+  carry = fireCannon(carry);
   hapticCannonFire();
   audio.cannonFire(); // 発射音(§6.7): サブの pitch 落下 + ノイズの破裂
   // 砲の発射が成立したら、武器モードをパルスへ自動復帰させる(設計 §3-3)。
@@ -767,16 +858,20 @@ function update(dt: number): void {
         respawnPoint = nextRespawn;
         audio.respawnSet(); // 復活点が移ったときだけ鳴らす(§6.7)
       }
-      // 確保(エクストラクション段階 A): どの休憩点でも、箱に入れば携行中の素材を全て確保済みへ移す。
-      // 合図は専用の短い音と字幕(既存の音系・字幕系に相乗り)。携行が 0 のときは何も起きない
-      const secured = secureCarry(carry);
-      if (secured.moved > 0) {
-        carry = secured.state;
-        audio.secure();
-        caption.show(secureCaptionText(secured.moved), simTime);
+      // 確保(エクストラクション段階 A): どの休憩点でも、箱に入った瞬間に携行中の素材を全て確保済みへ移す。
+      // 弾薬は対象外で携行に残る(弾薬設計 §1 の裁定: 休憩点で武器が空にならない)。
+      // 「入った瞬間」だけにするのは、箱で引き出した物を次の判定で再確保しないため。
+      // 合図は専用の短い音と字幕(既存の音系・字幕系に相乗り)。移す物が無ければ何も起きない
+      if (!prevInRestBox) {
+        const secured = secureCarry(carry);
+        if (secured.moved > 0) {
+          carry = secured.state;
+          audio.secure();
+          caption.show(secureCaptionText(secured.moved), simTime);
+        }
       }
-      // 休憩点の初回補給(サバイバル §7): 初めて入った休憩点だけ備蓄を開ける(セッション内のみ)。
-      // 備蓄は糧食 1 個 + 地区別の 1 個を荷袋(packX)付近へ出す。再訪しても補充されない。
+      // 休憩点の初回補給(サバイバル §7、弾薬設計 §3): 初めて入った休憩点だけ備蓄を開ける(セッション内のみ)。
+      // 備蓄は糧食 1 個 + 弾薬 1 個(砲弾かパルス弾セル)を荷袋(packX)付近へ出す。再訪しても補充されない。
       // 補給品の上限に達している間は開けず、消費して空きを作れば開けられる
       const restId = `r:${rp.cell},${rp.k}`;
       if (!claimedRestStocks.has(restId) && canAddSupply(drops, 2)) {
@@ -787,6 +882,7 @@ function update(dt: number): void {
         audio.restStock(); // 初回補給の音(§6.7)
       }
     }
+    prevInRestBox = inRestBox;
     // 満腹度(サバイバル段階 1): 開放度と同じ 6 フレーム間隔で進める(毎フレームの休憩点探索は足さない)。
     // 安全圏は休憩点の箱の中とスポーン保護範囲(敵出現の保護点 r=10 と同じ範囲)
     const inSpawnProtection =
@@ -821,14 +917,11 @@ function update(dt: number): void {
   // (眺望の出入りも開放度の段移動も同じ経路。ジャンプは起きない)
   camera.zoom = advanceZoom(camera.zoom, view.zoom, dt);
   if (input.takeFireCancel()) graviton.cancelCharge(); // タッチ照準のキャンセル(解放より先に破棄)
-  // 満腹度が危険域(critical / starving)では砲の自動回復が半分の速さになる(サバイバル段階 2、設計 §4)
-  const satLevelNow = satietyLevel(satiety.value);
-  const chargesBefore = graviton.charges;
   // 崖つかみ中は武器を使えない(設計 §掴まり中): 溜めは破棄し、発射・溜め入力を無視する
   if (hanging) graviton.cancelCharge();
-  graviton.update(dt, input.fireHeld && !hanging, fire, rechargeTimeFor(satLevelNow === 'critical' || satLevelNow === 'starving'));
-  // 自動回復で弾が増えたときだけ小さく知らせる(§6.7)。発射で減った分は差し引きで消える
-  if (graviton.charges > chargesBefore) audio.rechargeTick();
+  // 砲の発射可否は携行の砲弾で決める(弾薬設計 §1)。残弾が無ければ溜めが始まらず、溜め音・演出も出ない。
+  // 消費は fire() の先頭で行う。自動回復は廃止した(満腹度による回復速度の修飾も無くなった)
+  graviton.update(dt, input.fireHeld && !hanging, canFireCannon(carry), fire);
   // 満タン継続時間(描画専用): 満タンの間だけ積み、離す・発射・キャンセルで ratio が落ちれば 0 に戻る
   chargeFullT = graviton.chargeRatio >= 1 ? chargeFullT + dt : 0;
   input.expireCannonRelease(); // スティック砲の発射候補は、この update で発射しなければ失効する
@@ -853,13 +946,20 @@ function update(dt: number): void {
     hanging,
     poseMotionOf(player), // 空中・梯子などのポーズでも描画の銃口と発射原点を一致させる
   );
-  // 発射音(§6.7): 発射総数の差分で鳴らす。PulseGun 側は音を持たない(検証用カウンタのみ)
+  // 発射音と弾薬(§6.7、弾薬設計 §1): 発射総数の差分で数え、発射ぶんだけ ammo の遷移を適用する。
+  // 残弾(装填中 + 携行セル)が無ければ PulseGun へ渡す発射可否で止める。PulseGun 側は弾薬を知らない
   const shotsBefore = pulseGun.shotsFired;
   pulseGun.update(
-    dt, input.pulseHeld && !hanging, muzzle.x, muzzle.y, pulseDir.x, pulseDir.y, tiles,
+    dt, input.pulseHeld && !hanging && canFirePulse(pulseLoaded, carry), muzzle.x, muzzle.y, pulseDir.x, pulseDir.y, tiles,
     player.centerX, player.centerY,
   );
-  for (let i = shotsBefore; i < pulseGun.shotsFired; i++) audio.pulseFire(i);
+  for (let i = shotsBefore; i < pulseGun.shotsFired; i++) {
+    audio.pulseFire(i);
+    const shot = firePulse(pulseLoaded, carry);
+    pulseLoaded = shot.loaded;
+    carry = shot.carry;
+    if (shot.reloaded) audio.rechargeTick(); // セルの装填を小さく知らせる(旧・砲の回復音を充てる)
+  }
 
   // 歩行敵・飛行敵: 出現集合の更新、巡回/追尾、パルスとの命中判定(接触ダメージは第4段)
   if (frames % ENEMY_SCAN_INTERVAL_FRAMES === 0) refreshEnemies();
@@ -980,11 +1080,11 @@ function update(dt: number): void {
       const b = d.body;
       const overlap = pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y;
       if (!overlap) return true;
-      if (!canPickup(d.kind, graviton.charges, MAX_CHARGES, player.hp, MAX_HP, satiety.rations, MAX_RATIONS, carriedTotal(carry), carry.cap)) return true;
-      if (d.kind === 'charge') graviton.charges++;
+      if (!canPickup(d.kind, player.hp, MAX_HP, satiety.rations, MAX_RATIONS, carriedTotal(carry), carry.cap)) return true;
+      const ck = carryKindFor(d.kind);
+      // 砲弾セル・パルス弾セル(弾薬設計 §1)と素材セル(段階 A)は携行へ入る(満杯なら canPickup で残る)
+      if (ck) carry = addCarry(carry, ck);
       else if (d.kind === 'heal') player.hp++;
-      // 素材セル(段階 A)は携行へ入る(休憩点で確保済みへ移る)
-      else if (isCarryKind(d.kind)) carry = addCarry(carry, d.kind);
       // 糧食は所持数だけが増える(満腹度は即時回復しない。自動摂取で消費される)
       else satiety = { ...satiety, rations: satiety.rations + 1 };
       audio.pickup(d.kind); // 取得音(§6.7): 種別で音色を変える
@@ -1006,6 +1106,24 @@ function update(dt: number): void {
       pushSupply(drops, new DropItem(supplyFor(seed, c.id, cacheBiome), c.x, c.floorY - 0.5, true));
       supplyCache = null;
       audio.cacheOpen(); // 開封音(§6.7)
+    }
+  }
+
+  // 武器庫(弾薬設計 §2): キャッシュと同じ接触判定で開封し、砲弾 1 ＋ パルス弾セル 2 を補給品として
+  // 並べて出す。補給品プールに 3 個ぶんの空きが無い間は開封済みにしない(キャッシュと同じ)
+  if (armory && !player.dead && canAddSupply(drops, ARMORY_CONTENTS.length)) {
+    const a = armory;
+    const pb = player.body;
+    const overlap =
+      pb.x < a.x + 0.55 && pb.x + pb.w > a.x - 0.55 &&
+      pb.y < a.floorY && pb.y + pb.h > a.floorY - 0.6;
+    if (overlap) {
+      claimedArmories.add(a.id);
+      ARMORY_CONTENTS.forEach((kind, i) => {
+        pushSupply(drops, new DropItem(kind, a.x + (i - 1) * 0.7, a.floorY - 0.5, true));
+      });
+      armory = null;
+      audio.cacheOpen(); // 開封音はキャッシュと共用(§6.7)
     }
   }
 
@@ -1045,7 +1163,9 @@ function update(dt: number): void {
     player.revive();
     // 満腹度は 35 に戻し、糧食は 0(遺留品へ移ったぶん。保持はしない)
     satiety = resetSatietyOnDeath(satiety);
-    // 携行素材(エクストラクション段階 A)は死亡しても保持する(ロスト・遺留品化は段階 B)
+    // 携行(素材・弾薬、エクストラクション段階 A)は死亡しても保持する(ロスト・遺留品化は段階 B)。
+    // パルスの装填中の残発数だけは 0 に戻す(弾薬設計: 携行のセルから装填し直す)
+    pulseLoaded = 0;
     satietyPrevLevel = satietyLevel(satiety.value);
     // 復活点が新しい基準になる(次の遺留品の落下先は、ここから先の安定接地で決まる)
     groundAnchor = initialGroundAnchor(respawnPoint.x, respawnPoint.y);
@@ -1104,17 +1224,12 @@ function updateAudio(): void {
   });
 }
 
-/** 系統 → 日本語ラベル(配色と同じ地域系統で表示) */
-const SYSTEM_LABEL: Record<System, string> = {
-  water: '水系',
-  power: '電力系',
-  habitation: '居住区',
-  disposal: '廃棄区',
-  foundry: '精錬区',
-};
-
+/**
+ * 毎フレームの HUD 処理。文字行(階層・高度・武器・HP・満腹度・携行)は撤去し、アイテムボックスの
+ * 状態セクションへ移した(弾薬設計 §4)。残るのは「到達階層の更新と最深記録の保存・字幕」という
+ * 表示以外の副作用と、ボスの HP バーだけ。
+ */
 function updateHud(): void {
-  const altitude = displayAltitude(player.body.y, player.body.h);
   // 接地しているときだけ更新する。孔の梯子は板の上面より 4 タイル上まで延びるので、登って降りただけで
   // 頭の cell が上の層になり n が上がっていた(段階3 の保留)。床に立った層だけを「到達」と数える
   if (player.body.onGround) {
@@ -1143,33 +1258,14 @@ function updateHud(): void {
       }
     }
   }
-  const sys = regionAt(seed, Math.floor(player.centerX), Math.floor(player.body.y)).system;
-  let cannon = `重粒子砲 ${graviton.charges}/3`;
-  const r = graviton.chargeRatio;
-  if (r > 0 && r < 1) {
-    // 溜めゲージ(ASCII固定でフォント差異なく確実に表示)
-    const bars = Math.round(r * 4);
-    cannon += ` [${'#'.repeat(bars)}${'-'.repeat(4 - bars)}]`;
-  }
-  // 武器表示(設計 2026-11-05-weapon-switch §2-3): 現在の武器を角括弧で囲む
-  const weapon = input.weaponMode === 'pulse' ? `武器 [パルス] / ${cannon}` : `武器 パルス / [${cannon}]`;
-  const hearts = '♥'.repeat(player.hp) + '♡'.repeat(Math.max(0, MAX_HP - player.hp));
-  // ボス HP バー(第2弾 §2): 番人が有効な間だけ、プレイヤー HP と同じ HUD 経路に相乗りする
+  // ボス HP バー(第2弾 §2): 番人が有効な間だけ出す。それ以外の文字行は出さない(ASCII のゲージで
+  // フォント差異なく確実に表示)。文字列が変わらないフレームでは DOM を触らない
   let bossHud = '';
   if (boss) {
     const filled = Math.max(0, Math.ceil((boss.boss.hp / BOSS_HP) * 10));
-    bossHud = ` — 広間番人 [${'#'.repeat(filled)}${'-'.repeat(10 - filled)}]`;
+    bossHud = `広間番人 [${'#'.repeat(filled)}${'-'.repeat(10 - filled)}]`;
   }
-  // 満腹度(サバイバル §4): 既存 HUD 文字列へ相乗り。状態は色でなく文字でも分かるようにする
-  const satLevel = satietyLevel(satiety.value);
-  const satLabel = satLevel === 'low' ? '満腹低下' : satLevel === 'ok' ? '満腹' : '満腹危険';
-  const satBars = Math.max(0, Math.min(10, Math.round(satiety.value / 10)));
-  const satietyHud = ` — ${satLabel} [${'#'.repeat(satBars)}${'-'.repeat(10 - satBars)}] ${Math.floor(satiety.value)} / 糧食 ${satiety.rations}`;
-  // 携行と確保の併記(エクストラクション段階 A): 携行 n/枠 と 確保済み m(最深記録の併記と同じ流儀)
-  const carryHud = ` — 携行 ${carriedTotal(carry)}/${carry.cap} / 確保済み ${securedTotal(carry)}`;
-  // 最深記録の併記(v2.0 Task 7)。記録が 0(記録なし)のときは出さない
-  const bestHud = bestLayer > 0 ? ` / 最深記録 第 ${bestLayer} 階層` : '';
-  hud.textContent = `第 ${maxLayer} 階層${bestHud} / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${weapon} — HP ${hearts}${bossHud}${satietyHud}${carryHud}`;
+  if (hud.textContent !== bossHud) hud.textContent = bossHud;
 }
 
 let last = performance.now();
@@ -1264,8 +1360,11 @@ function frame(now: number): void {
       kind: d.kind,
       hidden: d.blinking && Math.floor(simTime * 4) % 2 === 1,
     })),
-    // 補給キャッシュ: 未開封のものだけ。中心は袋の見た目の中心(床の少し上)
-    caches: supplyCache ? [{ x: supplyCache.x, y: supplyCache.floorY - 0.28 }] : [],
+    // 補給キャッシュと武器庫: 未開封のものだけ、同じ配列で渡す(描画パスは 1 つ)。中心は見た目の中心(床の少し上)
+    caches: [
+      ...(supplyCache ? [{ x: supplyCache.x, y: supplyCache.floorY - 0.28 }] : []),
+      ...(armory ? [{ x: armory.x, y: armory.floorY - 0.3, armory: true }] : []),
+    ],
   });
   if (collectStats) {
     // present の getImageData が描画コマンドを同期ラスタ化させるので、ここの時間に描画全体が含まれる
