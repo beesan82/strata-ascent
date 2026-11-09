@@ -27,8 +27,9 @@ export function poseMuzzleWorld(
   isWalking: boolean,
   aimAngle: number,
   timeSec: number,
+  hanging = false,
 ): Vec2 {
-  const pose = calculatePlayerPose(facing, walkPhase, isWalking, aimAngle, timeSec);
+  const pose = calculatePlayerPose(facing, walkPhase, isWalking, aimAngle, timeSec, hanging);
   return {
     x: centerX + pose.muzzle.x,
     y: centerY + PLAYER_FEET_OFFSET_TILES + pose.muzzle.y,
@@ -66,6 +67,54 @@ const WALK_LEAN_TILES = 0.045;
 /** コートの揺れの振幅と、歩容に対する位相の遅れ(着地に反応して遅れて翻る) */
 const COAT_SWING_TILES = 0.14;
 const COAT_LAG_RAD = 1.15;
+/**
+ * 崖つかみ(設計 2026-11-09-ledge-grab)のポーズ原点から見た縁の上面の高さ(タイル、上が負)。
+ * 物理ボディの高さ 1.75 + 掴まり中の体上端の沈み(physics.LEDGE_HANG_DEPTH = 0.25)。
+ * 手はこの高さに置き、頭はこれより下に収める(体が縁からぶら下がる形)
+ */
+const HANG_LEDGE_Y = -2.0;
+
+/**
+ * 掴まり中のポーズ。両腕を縁へ伸ばし、体は縁の下にぶら下がる。脚は軽く曲げて垂らす。
+ * 武器は使えないので銃口は縁の上へ向け(腕の延長)、発射原点との整合は問わない。
+ * 歩行の揺れは乗せず、呼吸の bob だけ共有する(描画パスは増えない)
+ */
+function hangingPose(facing: 1 | -1, timeSec: number): PlayerPose {
+  const idleBob = Math.sin(timeSec * 2.2) * IDLE_BOB_AMPLITUDE;
+  const hip: Vec2 = { x: facing * 0.02, y: -0.62 + idleBob };
+  const neck: Vec2 = { x: facing * 0.1, y: -1.55 + idleBob };
+  const head: Vec2 = { x: facing * 0.12, y: -1.82 + idleBob };
+  // 肩は持ち上がり、手は体の側面(±0.375)を越えて縁の上面にかかる
+  const weaponShoulder: Vec2 = { x: facing * 0.2, y: -1.5 + idleBob };
+  const supportShoulder: Vec2 = { x: facing * 0.06, y: -1.47 + idleBob };
+  const weaponHand: Vec2 = { x: facing * 0.62, y: HANG_LEDGE_Y - 0.03 };
+  const supportHand: Vec2 = { x: facing * 0.48, y: HANG_LEDGE_Y - 0.04 };
+  // 銃口は肩→手の延長(縁の上へ抜ける向き)
+  const armDx = weaponHand.x - weaponShoulder.x;
+  const armDy = weaponHand.y - weaponShoulder.y;
+  const armLen = Math.hypot(armDx, armDy) || 1;
+  const leftFoot: Vec2 = { x: -facing * 0.16, y: 0 };
+  const rightFoot: Vec2 = { x: facing * 0.02, y: -0.06 };
+  return {
+    head,
+    neck,
+    hip,
+    leftKnee: { x: hip.x - facing * 0.04, y: -0.34 + idleBob * 0.5 },
+    rightKnee: { x: hip.x + facing * 0.12, y: -0.36 + idleBob * 0.5 },
+    leftFoot,
+    rightFoot,
+    weaponShoulder,
+    supportShoulder,
+    weaponHand,
+    supportHand,
+    muzzle: {
+      x: weaponHand.x + (armDx / armLen) * 0.3,
+      y: weaponHand.y + (armDy / armLen) * 0.3,
+    },
+    coatSwing: 0,
+    indicator: 0.72 + Math.sin(timeSec * 4.2) * 0.18,
+  };
+}
 
 export function calculatePlayerPose(
   facing: 1 | -1,
@@ -73,7 +122,10 @@ export function calculatePlayerPose(
   isWalking: boolean,
   aimAngle: number,
   timeSec: number,
+  hanging = false,
 ): PlayerPose {
+  // 掴まり中は歩行・照準のポーズ決定に乗らず、固定のぶら下がりポーズにする
+  if (hanging) return hangingPose(facing, timeSec);
   const idleBob = Math.sin(timeSec * 2.2) * IDLE_BOB_AMPLITUDE;
   // 上半身の揺れ(横揺れ・腕の反動)は sin のままでよい(地面に触れないので滑りの問題がない)。
   // 足は core/gait の非対称プロファイル(接地期は対地静止、遊脚期は速く戻る)で決める

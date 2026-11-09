@@ -364,6 +364,7 @@ export function drawPlayer(
   aimAngle: number,
   ambientColor: string,
   timeSec: number,
+  hanging = false,
 ): PlayerVisualAnchors {
   const pose = calculatePlayerPose(
     facing,
@@ -371,6 +372,7 @@ export function drawPlayer(
     isWalking,
     aimAngle,
     timeSec,
+    hanging,
   );
   const palette = tintPalette(ambientColor);
   const supportContact = supportContactOnWeapon(pose);

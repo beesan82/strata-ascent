@@ -173,6 +173,46 @@ describe('calculatePlayerPose', () => {
   });
 });
 
+describe('calculatePlayerPose 崖つかみのポーズ(段階 2)', () => {
+  /** 物理ボディ 1.75 + 掴まり中の沈み 0.25 = 縁の上面はポーズ原点から 2.0 上 */
+  const ledgeY = -2.0;
+
+  it('両手が縁の上面(体の側面より外)にかかり、頭は縁より下に収まる', () => {
+    for (const facing of [1, -1] as const) {
+      const pose = calculatePlayerPose(facing, 1.3, true, 0.5, 0.7, true);
+      for (const hand of [pose.weaponHand, pose.supportHand]) {
+        expect(hand.y).toBeLessThanOrEqual(ledgeY);
+        expect(hand.y).toBeGreaterThan(ledgeY - 0.1);
+        expect(hand.x * facing).toBeGreaterThan(0.375); // 体の側面(w/2)を越えて壁側へ
+      }
+      expect(pose.head.y - 0.15).toBeGreaterThan(ledgeY); // 頭頂が縁の上面より下
+      expect(Math.max(pose.leftFoot.y, pose.rightFoot.y)).toBeLessThanOrEqual(0);
+      expect(pose.coatSwing).toBe(0);
+      for (const value of Object.values(pose).flatMap((part) =>
+        typeof part === 'number' ? [part] : [part.x, part.y],
+      )) {
+        expect(Number.isFinite(value)).toBe(true);
+      }
+    }
+  });
+
+  it('歩行位相と照準に依らず同じポーズになり、左右は鏡像', () => {
+    const a = calculatePlayerPose(1, 0, false, 0, 0.4, true);
+    const b = calculatePlayerPose(1, 2.5, true, -1.2, 0.4, true);
+    expect(a).toEqual(b);
+    const left = calculatePlayerPose(-1, 0, false, 0, 0.4, true);
+    expect(left.head.x).toBeCloseTo(-a.head.x);
+    expect(left.weaponHand.x).toBeCloseTo(-a.weaponHand.x);
+    expect(left.weaponHand.y).toBeCloseTo(a.weaponHand.y);
+    expect(left.leftFoot.x).toBeCloseTo(-a.leftFoot.x);
+  });
+
+  it('hanging を渡さなければ従来のポーズのまま', () => {
+    expect(calculatePlayerPose(1, 0.7, true, 0.3, 0.4)).toEqual(calculatePlayerPose(1, 0.7, true, 0.3, 0.4, false));
+    expect(poseMuzzleWorld(10, 10, 1, 0, false, 0, 0)).toEqual(poseMuzzleWorld(10, 10, 1, 0, false, 0, 0, false));
+  });
+});
+
 describe('poseMuzzleWorld(発射原点用の銃口ワールド座標)', () => {
   it('静止・右向き水平では中心の 1.17 前方・0.745 上方が銃口になる', () => {
     const m = poseMuzzleWorld(10, 10, 1, 0, false, 0, 0);

@@ -213,6 +213,153 @@ describe('Player HP と被弾(アクション化 第4段)', () => {
   });
 });
 
+describe('Player 崖つかみ(段階 2)', () => {
+  /** x>=5 かつ y>=10 が固体の塊。縁は (5, 10)、その上(行 8〜9)は空いている */
+  const blockTiles = (tx: number, ty: number): Tile =>
+    tx >= 5 && ty >= 10 ? TILE.SOLID : TILE.AIR;
+  const rightInput = { ...noInput, right: true };
+  /** 壁面(x=5)に接した位置から右へ押しながら落とし、掴まるまで進める */
+  const fallAndGrab = (tiles = blockTiles): Player => {
+    const p = new Player(4.25, 9.3);
+    for (let i = 0; i < 10 && !p.ledge; i++) p.update(rightInput, 1 / 60, tiles);
+    return p;
+  };
+
+  it('落下中に壁へ押していると自動で掴まり、スナップして静止する', () => {
+    const p = fallAndGrab();
+    expect(p.ledge).toEqual({ side: 1, tx: 5, ty: 10 });
+    expect(p.body.x).toBeCloseTo(4.25);
+    expect(p.body.y).toBeCloseTo(10.25);
+    expect(p.body.vy).toBe(0);
+    expect(p.facing).toBe(1);
+    // 掴まり中は重力を受けず、横入力でも動かない
+    for (let i = 0; i < 30; i++) p.update(rightInput, 1 / 60, blockTiles);
+    expect(p.ledge).not.toBeNull();
+    expect(p.body.y).toBeCloseTo(10.25);
+    expect(p.body.onGround).toBe(false);
+  });
+
+  it('壁へ押していなければ掴まらない(落ちていく)', () => {
+    const p = new Player(4.25, 9.3);
+    for (let i = 0; i < 20; i++) p.update(noInput, 1 / 60, blockTiles);
+    expect(p.ledge).toBeNull();
+    expect(p.body.y).toBeGreaterThan(10.3); // 縁の高さを通り過ぎている
+  });
+
+  it('上昇中(vy < 0)は掴まらない', () => {
+    const p = new Player(4.25, 9.3);
+    p.body.vy = -10;
+    p.update(rightInput, 1 / 60, blockTiles);
+    expect(p.ledge).toBeNull();
+  });
+
+  it('上入力でよじ登り、縁の上に立つ(通常の地上状態)', () => {
+    const p = fallAndGrab();
+    p.update({ ...noInput, up: true }, 1 / 60, blockTiles);
+    expect(p.ledge).toBeNull();
+    expect(p.body.x).toBeCloseTo(5);
+    expect(p.body.y).toBeCloseTo(10 - 1.75);
+    expect(p.body.onGround).toBe(true);
+    for (let i = 0; i < 30; i++) p.update(noInput, 1 / 60, blockTiles);
+    expect(p.body.onGround).toBe(true);
+    expect(p.body.y + p.body.h).toBeLessThanOrEqual(10 + 1e-6);
+  });
+
+  it('ジャンプの押下エッジでもよじ登る。押しっぱなしでは登らない', () => {
+    const held = new Player(4.25, 9.3);
+    for (let i = 0; i < 10 && !held.ledge; i++) held.update({ ...rightInput, jump: true }, 1 / 60, blockTiles);
+    // 掴まる前からジャンプを押し続けていた: 掴まったまま
+    expect(held.ledge).not.toBeNull();
+    held.update({ ...noInput, jump: true }, 1 / 60, blockTiles);
+    expect(held.ledge).not.toBeNull();
+    // 離して押し直すと登る
+    held.update(noInput, 1 / 60, blockTiles);
+    held.update({ ...noInput, jump: true }, 1 / 60, blockTiles);
+    expect(held.ledge).toBeNull();
+    expect(held.body.onGround).toBe(true);
+  });
+
+  it('登り先が固体と重なるなら登らず掴まりを維持する', () => {
+    const lowCeiling = (tx: number, ty: number): Tile =>
+      blockTiles(tx, ty) === TILE.SOLID || (tx === 5 && ty === 8) ? TILE.SOLID : TILE.AIR;
+    const p = fallAndGrab(lowCeiling);
+    expect(p.ledge).not.toBeNull();
+    p.update({ ...noInput, up: true }, 1 / 60, lowCeiling);
+    expect(p.ledge).not.toBeNull();
+    expect(p.body.y).toBeCloseTo(10.25);
+  });
+
+  it('下入力で手を離して落下を再開する(押し出しなし)', () => {
+    const p = fallAndGrab();
+    p.update({ ...noInput, down: true }, 1 / 60, blockTiles);
+    expect(p.ledge).toBeNull();
+    const x0 = p.body.x;
+    for (let i = 0; i < 5; i++) p.update(noInput, 1 / 60, blockTiles);
+    expect(p.body.y).toBeGreaterThan(10.25);
+    expect(p.body.x).toBeCloseTo(x0);
+  });
+
+  it('縁から離れる向きの入力で手を離し、壁から離れる向きへ押し出される', () => {
+    const p = fallAndGrab();
+    p.update({ ...noInput, left: true }, 1 / 60, blockTiles);
+    expect(p.ledge).toBeNull();
+    expect(p.body.vx).toBeLessThan(0);
+    p.update(noInput, 1 / 60, blockTiles);
+    expect(p.body.x).toBeLessThan(4.25);
+  });
+
+  it('被弾すると掴まりが解除され、通常のノックバックを受ける', () => {
+    const p = fallAndGrab();
+    expect(p.damage(10)).toBe(true); // 源は右(壁側) → 左へ跳ねる
+    expect(p.ledge).toBeNull();
+    expect(p.body.vx).toBeLessThan(0);
+    expect(p.body.vy).toBeLessThan(0);
+    // ノックバック中は壁へ押しても掴み直さない
+    for (let i = 0; i < 5; i++) p.update(rightInput, 1 / 60, blockTiles);
+    expect(p.ledge).toBeNull();
+  });
+
+  it('解除から 0.25 秒は再掴まりしない(クールダウン)', () => {
+    const p = fallAndGrab();
+    p.update({ ...noInput, down: true }, 1 / 60, blockTiles);
+    expect(p.ledge).toBeNull();
+    // 毎フレーム掴まれる位置へ戻しながら壁へ押し続け、再び掴まるまでのフレーム数を数える
+    let frames = 0;
+    while (!p.ledge && frames < 60) {
+      p.body.x = 4.25;
+      p.body.y = 9.5;
+      p.body.vy = 0;
+      p.update(rightInput, 1 / 60, blockTiles);
+      frames++;
+    }
+    expect(p.ledge).not.toBeNull();
+    expect(frames).toBeGreaterThanOrEqual(15); // 0.25 秒 = 15 フレーム
+    expect(frames).toBeLessThanOrEqual(17);
+  });
+
+  it('左側の縁にも掴まり、左を向く', () => {
+    const blockLeft = (tx: number, ty: number): Tile =>
+      tx <= 4 && ty >= 10 ? TILE.SOLID : TILE.AIR;
+    const p = new Player(5, 9.3);
+    for (let i = 0; i < 10 && !p.ledge; i++) p.update({ ...noInput, left: true }, 1 / 60, blockLeft);
+    expect(p.ledge).toEqual({ side: -1, tx: 4, ty: 10 });
+    expect(p.facing).toBe(-1);
+    p.update({ ...noInput, up: true }, 1 / 60, blockLeft);
+    expect(p.ledge).toBeNull();
+    expect(p.body.x).toBeCloseTo(5 - 0.75);
+    expect(p.body.onGround).toBe(true);
+  });
+
+  it('梯子の上では掴まらない', () => {
+    // 体の中心列(x=4)が梯子。右の塊は同じ
+    const ladderBeside = (tx: number, ty: number): Tile =>
+      tx === 4 ? TILE.LADDER : blockTiles(tx, ty);
+    const p = new Player(4.25, 9.3);
+    for (let i = 0; i < 10; i++) p.update(rightInput, 1 / 60, ladderBeside);
+    expect(p.ledge).toBeNull();
+  });
+});
+
 describe('Player 向きと歩行位相', () => {
   it('左右入力で向きが変わり、入力がなければ維持される', () => {
     const p = new Player(0, 8);

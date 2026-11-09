@@ -38,6 +38,11 @@ export function hapticWeaponSwitch(): void {
   void impact('light');
 }
 
+/** 崖に掴まったとき(弱。設計 2026-11-09-ledge-grab §描画と手触り) */
+export function hapticLedgeGrab(): void {
+  void impact('light');
+}
+
 /**
  * アプリ起動時のネイティブ初期化: 横向きロックとステータスバー非表示。
  * Web では no-op。main の起動時に 1 回だけ呼ぶ。

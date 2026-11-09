@@ -430,6 +430,7 @@ export class Renderer {
       angle,
       bb.ambientColor,
       timeSec,
+      player.ledge !== null, // 崖つかみ中はぶら下がりポーズ(ポーズ決定に相乗り。パスは増えない)
     );
     if (invulnDim) ctx.globalAlpha = 1;
     this.mark('player');
