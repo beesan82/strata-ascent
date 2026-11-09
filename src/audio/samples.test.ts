@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { BIOME_IDS } from '../world/biomeCells';
 import {
-  EAT_SAMPLES, FOOTSTEP_SAMPLES, HIT_SAMPLES, LADDER_SAMPLES, MINING_SAMPLES,
+  AMBIENT_LOOPS, EAT_SAMPLES, FOOTSTEP_SAMPLES, HIT_SAMPLES, LADDER_SAMPLES, MINING_SAMPLES,
   PULSE_SAMPLES, SAMPLE_URLS, pickupSampleName,
 } from './samples';
 
 describe('audio samples table', () => {
   it('対応表の URL は全て空でなく、名前は一意', () => {
     const names = Object.keys(SAMPLE_URLS);
-    expect(names.length).toBe(36);
+    expect(names.length).toBe(42);
     expect(new Set(names).size).toBe(names.length);
     for (const url of Object.values(SAMPLE_URLS)) {
       expect(typeof url).toBe('string');
@@ -25,5 +26,15 @@ describe('audio samples table', () => {
     expect(pickupSampleName('heal')).toBe('pickupHeal');
     expect(pickupSampleName('ration')).toBe('pickupRation');
     expect(pickupSampleName('unknown')).toBe('pickupRation');
+  });
+  it('環境ループは全バイオームに割り当てがあり、実在する素材を指す', () => {
+    for (const id of BIOME_IDS) {
+      expect(AMBIENT_LOOPS[id]).toBeDefined();
+      expect(SAMPLE_URLS[AMBIENT_LOOPS[id]]).toBeDefined();
+    }
+    // 機械系と水域と標準は別の録音であること(地区の聞き分けの最低条件)
+    expect(AMBIENT_LOOPS.coldSteel).not.toBe(AMBIENT_LOOPS.waterVoid);
+    expect(AMBIENT_LOOPS.coldSteel).not.toBe(AMBIENT_LOOPS.habitation);
+    expect(AMBIENT_LOOPS.waterVoid).not.toBe(AMBIENT_LOOPS.habitation);
   });
 });

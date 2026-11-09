@@ -8,7 +8,10 @@ import {
   MASTER_DB, nearestPlateDistance, PULSE_DETUNE, pulseDetune, REVERB_BUCKETS, REVERB_MAX, REVERB_MIN, reverbBucket, reverbSeconds, reverbSecondsForBucket,
   LAND_GAIN_MAX, LAND_MIN_VY, landGain, LADDER_RUNG_STEP, rungCrossed,
   MILESTONE_NOTES, NEW_RECORD_NOTES, PICKUP_NOTES, pickupNotes,
-  crushSampleGain, engineLayerGain, pickVariant, sampleRate,
+  crushSampleGain, pickVariant, sampleRate,
+  COMP_ATTACK, COMP_RATIO, COMP_THRESHOLD_DB, ROOM_IR_SECONDS, ROOM_WET_GAIN,
+  CHARGE_SUB_END, CHARGE_SUB_START, chargeSubFreq,
+  PULSE_SUB_END_HZ, PULSE_SUB_SECONDS, PULSE_SUB_START_HZ, ambientGain,
 } from './params';
 
 describe('audio params', () => {
@@ -192,14 +195,39 @@ describe('audio params', () => {
     }
     expect(crushSampleGain(-5)).toBeCloseTo(0.25, 10);
   });
-  it('エンジン音の重ね量は機械系の層だけにあり、水域・生体系は 0', () => {
+  it('環境ループのゲインは全バイオームにあり(実録が主役)、0.4〜0.8 の範囲', () => {
     for (const id of BIOME_IDS) {
-      const g = engineLayerGain(id);
-      expect(g).toBeGreaterThanOrEqual(0);
-      expect(g).toBeLessThanOrEqual(0.25);
+      const g = ambientGain(id);
+      expect(g).toBeGreaterThanOrEqual(0.4);
+      expect(g).toBeLessThanOrEqual(0.8);
     }
-    expect(engineLayerGain('waterVoid')).toBe(0);
-    expect(engineLayerGain('biomech')).toBe(0);
-    expect(engineLayerGain('power')).toBeGreaterThan(0);
+    expect(ambientGain('power')).toBeGreaterThan(ambientGain('habitation'));
+  });
+  it('マスターのコンプレッサはリミッター寄り(高い比率・浅い敷居・速いアタック)', () => {
+    expect(COMP_RATIO).toBeGreaterThanOrEqual(10);
+    expect(COMP_THRESHOLD_DB).toBeGreaterThanOrEqual(-12);
+    expect(COMP_THRESHOLD_DB).toBeLessThanOrEqual(-4);
+    expect(COMP_ATTACK).toBeLessThanOrEqual(0.003);
+  });
+  it('部屋系リバーブは短く(0.1〜0.8 秒)、ホール系の最大より短く、wet は控えめ', () => {
+    expect(ROOM_IR_SECONDS).toBeGreaterThan(0.1);
+    expect(ROOM_IR_SECONDS).toBeLessThan(0.8);
+    expect(ROOM_IR_SECONDS).toBeLessThan(REVERB_MAX);
+    expect(ROOM_WET_GAIN).toBeGreaterThan(0);
+    expect(ROOM_WET_GAIN).toBeLessThan(0.35);
+  });
+  it('溜めの深サブは比率で 30→55 Hz へ指数で単調に上がり、範囲外はクランプ', () => {
+    expect(chargeSubFreq(0)).toBe(CHARGE_SUB_START);
+    expect(chargeSubFreq(1)).toBeCloseTo(CHARGE_SUB_END, 10);
+    expect(chargeSubFreq(-1)).toBe(CHARGE_SUB_START);
+    expect(chargeSubFreq(2)).toBeCloseTo(CHARGE_SUB_END, 10);
+    let prev = -Infinity;
+    for (let r = 0; r <= 1.0001; r += 0.1) { const f = chargeSubFreq(r); expect(f).toBeGreaterThan(prev); prev = f; }
+  });
+  it('パルスのサブサンプは低域(200 Hz 未満)へ落ちる短い層で、連射間隔より短い', () => {
+    expect(PULSE_SUB_START_HZ).toBeLessThan(200);
+    expect(PULSE_SUB_END_HZ).toBeLessThan(PULSE_SUB_START_HZ);
+    expect(PULSE_SUB_END_HZ).toBeGreaterThanOrEqual(30);
+    expect(PULSE_SUB_SECONDS).toBeLessThan(1 / 6);
   });
 });
