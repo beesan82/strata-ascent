@@ -185,7 +185,7 @@ describe('player sprite', () => {
       chestLight: '#caa64a',
       visor: '#05090f',
       indicator: '#c7d0ce',
-      weapon: '#192633',
+      weapon: '#2e4256',
     });
   });
 

@@ -18,7 +18,7 @@ export const PLAYER_COLORS = {
   chestLight: '#caa64a',
   visor: '#05090f',
   indicator: '#c7d0ce',
-  weapon: '#192633',
+  weapon: '#2e4256',
 } as const;
 
 type PlayerPalette = { [Key in keyof typeof PLAYER_COLORS]: string };
@@ -290,9 +290,12 @@ const drawWeapon = (
     offsetPoint(pose.weaponHand, direction, -0.04, normal, 0.26),
     offsetPoint(pose.weaponHand, direction, -0.15, normal, 0.22),
   ], palette.weapon);
+  // 銃身の芯線: 手元側から銃口まで 1 本通して向きが読めるようにする(従来は手元 0.06 から
+  // 銃口までの短い線だけだった)。銃口より先へは伸ばさない(可視の銃口 = エフェクトの
+  // 発射原点という不変条件を守る。2.7 の実機フィードバック対応)
   line(
     ctx,
-    pointAlong(pose.weaponHand, direction, 0.06),
+    pointAlong(pose.weaponHand, direction, -0.02),
     pose.muzzle,
     palette.uniformLight,
     0.025,
