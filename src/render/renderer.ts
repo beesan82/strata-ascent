@@ -97,8 +97,8 @@ export interface GravitonFx {
   enemies?: readonly { x: number; y: number; flash: boolean; flyer?: boolean; turret?: boolean; angle?: number; w?: number; h?: number; bossPhase?: BossPhase; bossPhaseT?: number; bossDir?: 1 | -1 }[];
   /** ドロップ(ワールド座標の中心)。hidden は点滅の消灯側フレーム */
   drops?: readonly { x: number; y: number; kind: DropKind; hidden: boolean }[];
-  /** 補給キャッシュ(ワールド座標の中心)。未開封のものだけ渡す */
-  caches?: readonly { x: number; y: number }[];
+  /** 補給キャッシュと武器庫(ワールド座標の中心)。未開封のものだけ渡す。armory は弾薬のクレートとして描く */
+  caches?: readonly { x: number; y: number; armory?: boolean }[];
 }
 
 /**
@@ -632,6 +632,16 @@ export class Renderer {
           const cap = Math.max(1, Math.round(s * 0.3));
           ctx.fillStyle = '#c7d0ce';
           ctx.fillRect(Math.round(sx - wid / 2), Math.round(sy - s / 2), wid, cap);
+        } else if (d.kind === 'pulsecell') {
+          // パルス弾セル(弾薬設計 §1): 淡色の横長の束+紫の縦筋 2 本(小さなセルの束)。
+          // 砲弾(紫の角型)とは地と筋の色が反転した関係で、糧食(金)とは色で分ける
+          const hgt = Math.max(2, Math.round(s * 0.55));
+          ctx.fillStyle = '#c7d0ce';
+          ctx.fillRect(Math.round(sx - s / 2), Math.round(sy - hgt / 2), s, hgt);
+          const stripe = Math.max(1, Math.round(s * 0.2));
+          ctx.fillStyle = '#8d62cb';
+          ctx.fillRect(Math.round(sx - s / 2) + stripe, Math.round(sy - hgt / 2), stripe, hgt);
+          ctx.fillRect(Math.round(sx + s / 2) - stripe * 2, Math.round(sy - hgt / 2), stripe, hgt);
         } else {
           ctx.fillStyle = '#3c755f';
           const t = Math.max(1, Math.round(s * 0.38));
@@ -644,12 +654,26 @@ export class Renderer {
       }
     }
 
-    // 補給キャッシュ(サバイバル §6): 同じ fx 相乗り。茶の荷袋+金の留め具+暗い底帯で、
-    // ドロップ(小さい単体セル)とは体格と色で分ける。色はパレット実在色
+    // 補給キャッシュ(サバイバル §6)と武器庫(弾薬設計 §2): 同じ fx 相乗りで同じパス。
+    // キャッシュは茶の荷袋+金の留め具+暗い底帯。武器庫は鋼灰の角張ったクレート+暗紫の底帯+紫の帯
+    // (砲弾セルの紫で「弾薬の箱」と読ませる)。ドロップ(小さい単体セル)とは体格と色で分ける。色はパレット実在色
     if (fx.caches && fx.caches.length > 0) {
       for (const c of fx.caches) {
         const sx = Math.round((c.x - renderCam.x) * ppt + w / 2);
         const sy = Math.round((c.y - renderCam.y) * ppt + h / 2);
+        if (c.armory) {
+          const bw = Math.max(3, Math.round(1.1 * ppt));
+          const bh = Math.max(2, Math.round(0.6 * ppt));
+          ctx.fillStyle = '#51728d';
+          ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy - bh / 2), bw, bh);
+          const band = Math.max(1, Math.round(bh * 0.25));
+          ctx.fillStyle = '#30254c';
+          ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy + bh / 2) - band, bw, band);
+          const stripe = Math.max(1, Math.round(bh * 0.22));
+          ctx.fillStyle = '#8d62cb';
+          ctx.fillRect(Math.round(sx - bw / 2), Math.round(sy - bh / 2) + stripe, bw, stripe);
+          continue;
+        }
         const bw = Math.max(3, Math.round(0.9 * ppt));
         const bh = Math.max(2, Math.round(0.55 * ppt));
         ctx.fillStyle = '#5a3a24';

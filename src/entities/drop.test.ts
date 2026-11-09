@@ -3,7 +3,9 @@ import { TILE, type Tile } from '../world/tiles';
 import {
   canAddSupply,
   canPickup,
+  carryKindFor,
   DropItem,
+  dropKindFor,
   DROP_LIFETIME,
   DROP_BLINK_TIME,
   MAX_DROPS,
@@ -163,26 +165,48 @@ describe('pushSupply(補給品と糧食の溢れ)', () => {
 });
 
 describe('canPickup(満タン時は拾えない)', () => {
-  it('砲弾: 満タンなら false、空きがあれば true', () => {
-    expect(canPickup('charge', 3, 3, 5, 5, 0, 2, 0, 5)).toBe(false);
-    expect(canPickup('charge', 2, 3, 5, 5, 0, 2, 0, 5)).toBe(true);
-    expect(canPickup('charge', 0, 3, 1, 5, 2, 2, 5, 5)).toBe(true);
+  it('砲弾セル: 携行枠が満杯なら false、空きがあれば true(弾薬設計 §1: 砲弾は携行の弾薬)', () => {
+    expect(canPickup('charge', 5, 5, 0, 2, 5, 5)).toBe(false);
+    expect(canPickup('charge', 5, 5, 0, 2, 4, 5)).toBe(true);
+    expect(canPickup('charge', 1, 5, 2, 2, 0, 5)).toBe(true);
+  });
+
+  it('パルス弾セル: 携行枠だけで判定する', () => {
+    expect(canPickup('pulsecell', 5, 5, 0, 2, 5, 5)).toBe(false);
+    expect(canPickup('pulsecell', 1, 5, 2, 2, 0, 5)).toBe(true);
   });
 
   it('回復: 全快なら false、減っていれば true', () => {
-    expect(canPickup('heal', 0, 3, 5, 5, 0, 2, 0, 5)).toBe(false);
-    expect(canPickup('heal', 3, 3, 4, 5, 0, 2, 5, 5)).toBe(true);
+    expect(canPickup('heal', 5, 5, 0, 2, 0, 5)).toBe(false);
+    expect(canPickup('heal', 4, 5, 0, 2, 5, 5)).toBe(true);
   });
 
   it('糧食: 所持上限 2 なら false、空きがあれば true(満腹度は見ない)', () => {
-    expect(canPickup('ration', 0, 3, 5, 5, 2, 2, 0, 5)).toBe(false);
-    expect(canPickup('ration', 3, 3, 1, 5, 1, 2, 5, 5)).toBe(true);
-    expect(canPickup('ration', 0, 3, 5, 5, 0, 2, 0, 5)).toBe(true);
+    expect(canPickup('ration', 5, 5, 2, 2, 0, 5)).toBe(false);
+    expect(canPickup('ration', 1, 5, 1, 2, 5, 5)).toBe(true);
+    expect(canPickup('ration', 5, 5, 0, 2, 0, 5)).toBe(true);
   });
 
   it('素材: 携行枠が満杯なら false、空きがあれば true(消耗品の状態は見ない)', () => {
-    expect(canPickup('material', 0, 3, 1, 5, 0, 2, 5, 5)).toBe(false);
-    expect(canPickup('material', 3, 3, 5, 5, 2, 2, 4, 5)).toBe(true);
-    expect(canPickup('material', 3, 3, 5, 5, 2, 2, 0, 5)).toBe(true);
+    expect(canPickup('material', 1, 5, 0, 2, 5, 5)).toBe(false);
+    expect(canPickup('material', 5, 5, 2, 2, 4, 5)).toBe(true);
+    expect(canPickup('material', 5, 5, 2, 2, 0, 5)).toBe(true);
+  });
+});
+
+describe('carryKindFor / dropKindFor(地面の種別と携行の種別の対応)', () => {
+  it('砲弾セルは shell、パルス弾セルは pulsecell、素材は material、即時消費は null', () => {
+    expect(carryKindFor('charge')).toBe('shell');
+    expect(carryKindFor('pulsecell')).toBe('pulsecell');
+    expect(carryKindFor('material')).toBe('material');
+    expect(carryKindFor('heal')).toBeNull();
+    expect(carryKindFor('ration')).toBeNull();
+  });
+
+  it('dropKindFor は carryKindFor の逆写像(落として拾うと同じ携行種別に戻る)', () => {
+    for (const k of ['material', 'shell', 'pulsecell'] as const) {
+      expect(carryKindFor(dropKindFor(k))).toBe(k);
+    }
+    expect(dropKindFor('shell')).toBe('charge');
   });
 });

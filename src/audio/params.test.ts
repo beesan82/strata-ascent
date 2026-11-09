@@ -143,7 +143,7 @@ describe('audio params', () => {
     expect(rungCrossed(1, 1)).toBe(false);
   });
   it('取得音は種別ごとに異なる上昇 2 音で、未知の種別は既定に落ちる', () => {
-    for (const kind of ['charge', 'heal', 'ration', 'material'] as const) {
+    for (const kind of ['charge', 'heal', 'ration', 'material', 'pulsecell'] as const) {
       const notes = pickupNotes(kind);
       expect(notes).toBe(PICKUP_NOTES[kind]);
       expect(notes.length).toBe(2);
@@ -153,6 +153,7 @@ describe('audio params', () => {
     expect(pickupNotes('heal')).not.toEqual(pickupNotes('ration'));
     expect(pickupNotes('material')).not.toEqual(pickupNotes('charge'));
     expect(pickupNotes('material')).not.toEqual(pickupNotes('ration'));
+    expect(pickupNotes('pulsecell')).not.toEqual(pickupNotes('charge')); // 弾薬設計: セルの束は砲弾と聞き分ける
     expect(pickupNotes('unknown')).toBe(PICKUP_NOTES.ration);
   });
   it('素材の取得は砲弾の素材を 1 未満のレートで鳴らし、確保の合図は短い上行 3 音(段階 A)', () => {

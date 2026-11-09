@@ -4,8 +4,8 @@ import type { FloorRun, ProtectedPoint, SpawnRect } from './spawn';
 import type { BiomeId } from './biomeCells';
 
 /**
- * 物資漁り(サバイバル設計 §6)と休憩点の備蓄(§7)の決定論。
- * キャッシュは敵スキャンで列挙済みの床ランへ相乗りし、近傍に最大 1 個だけ置く。
+ * 物資漁り(サバイバル設計 §6)、休憩点の備蓄(§7)、武器庫(弾薬設計 2026-11-09 §2)の決定論。
+ * キャッシュと武器庫は敵スキャンで列挙済みの床ランへ相乗りし、それぞれ近傍に最大 1 個だけ置く。
  * 開封の差し引きは第2弾 §4 の裁定どおり「選定後の減算」とし、開封した候補の
  * 代わりに別の候補が繰り上がらないようにする。
  */
@@ -130,21 +130,90 @@ export function supplyFor(seed: number, cacheId: string, biomeId: BiomeId): Drop
 const REST_STOCK_SALT = 4303;
 
 /**
- * 休憩点の備蓄の 2 個目(1 個目は常に糧食)。地区で固定し、寒鋼基層だけ
- * 休憩点 ID のハッシュで回復／砲弾を決める(サバイバル設計 §7)。
+ * 休憩点の備蓄の 2 個目が砲弾になる確率(残りはパルス弾セル)。地区で寄せる:
+ * 電力区・精錬区・水域は砲弾寄り(旧表で砲弾が出ていた地区)、それ以外はパルス弾セル寄り。
+ */
+export const REST_STOCK_SHELL_RATE: Record<BiomeId, number> = {
+  coldSteel: 0.4,
+  habitation: 0.3,
+  disposal: 0.4,
+  waterVoid: 0.6,
+  power: 0.6,
+  foundry: 0.6,
+  biomech: 0.3,
+};
+
+/**
+ * 休憩点の備蓄の 2 個目(1 個目は常に糧食)。弾薬設計 §3 で「糧食 1 ＋ 弾薬 1」に寄せ、
+ * 砲弾かパルス弾セルかを休憩点 ID のハッシュで決める(地区別の砲弾率 REST_STOCK_SHELL_RATE)。
  */
 export function restStockSecondFor(seed: number, restId: string, biomeId: BiomeId): DropKind {
-  switch (biomeId) {
-    case 'habitation':
-    case 'disposal':
-      return 'heal';
-    case 'power':
-    case 'foundry':
-    case 'waterVoid':
-      return 'charge';
-    case 'biomech':
-      return 'ration';
-    case 'coldSteel':
-      return hash2(seed + REST_STOCK_SALT, spawnIdHash(restId), 0) < 0.5 ? 'heal' : 'charge';
+  const roll = hash2(seed + REST_STOCK_SALT, spawnIdHash(restId), 0);
+  return roll < REST_STOCK_SHELL_RATE[biomeId] ? 'charge' : 'pulsecell';
+}
+
+// ---- 武器庫(弾薬設計 §2) ----
+
+const ARMORY_SALT = 4304;
+
+/**
+ * 武器庫の基礎密度。キャッシュと同じ argmin 方式で、最小ハッシュがこの値 × 地区倍率未満のとき置く。
+ * キャッシュ(0.6)より薄く、弾薬は「探しに行く場所」として希少にする。
+ */
+export const ARMORY_THRESHOLD = 0.3;
+
+/**
+ * 武器庫の地区倍率(弾薬設計 §2: 電力区・精錬区は濃く、水域・生体は薄く)。
+ * 電力・精錬 1.6 ≒ 窓の 48%、寒鋼・廃棄 1.0 = 30%、居住 0.8、水域・生体 0.5 = 15%。
+ */
+export const ARMORY_MUL: Record<BiomeId, number> = {
+  coldSteel: 1.0,
+  habitation: 0.8,
+  disposal: 1.0,
+  waterVoid: 0.5,
+  power: 1.6,
+  foundry: 1.6,
+  biomech: 0.5,
+};
+
+/** 武器庫を開封したときに出る物資(砲弾 1 ＋ パルス弾セル 2)。並びは出現位置の割り当て順 */
+export const ARMORY_CONTENTS: readonly DropKind[] = ['pulsecell', 'charge', 'pulsecell'];
+
+/**
+ * 武器庫の選定。補給キャッシュの選定(chooseSupplyCaches)に相乗りする別種のスポットで、
+ * 同じ床ラン・保護点・大広間の除外を使い、ハッシュの塩と密度(地区倍率)だけが違う。
+ * 開封済みの差し引きも同じく「選定後の減算」(繰り上がり防止)。ID は `a:` 接頭辞。
+ * 通常キャッシュと同じ場所に重ならないよう、呼び出し側はキャッシュの位置を保護点に加える。
+ */
+export function chooseArmories(
+  seed: number,
+  runs: readonly FloorRun[],
+  protectedPoints: readonly ProtectedPoint[],
+  halls: readonly SpawnRect[],
+  biomeId: BiomeId,
+  claimed?: ReadonlySet<string>,
+): SupplyCache[] {
+  let best: SupplyCache | null = null;
+  let bestRoll = Infinity;
+  for (const run of runs) {
+    if (run.len < 5) continue;
+    const offset = Math.floor(hash2(seed + ARMORY_SALT + 1, run.x, run.floorY) * Math.max(1, run.len - 1));
+    const x = run.x + offset + 0.5;
+    const inHall = halls.some(
+      (h) => x >= h.x0 && x < h.x1 && run.floorY >= h.y0 && run.floorY < h.y1,
+    );
+    if (inHall) continue;
+    const guarded = protectedPoints.some(
+      (p) => Math.max(Math.abs(x - p.x), Math.abs(run.floorY - p.y)) <= p.r,
+    );
+    if (guarded) continue;
+    const roll = hash2(seed + ARMORY_SALT, run.x, run.floorY);
+    if (roll < bestRoll) {
+      bestRoll = roll;
+      best = { id: `a:${run.x},${run.floorY}`, x, floorY: run.floorY };
+    }
   }
+  if (!best || bestRoll >= Math.min(1, ARMORY_THRESHOLD * ARMORY_MUL[biomeId])) return [];
+  if (claimed && claimed.has(best.id)) return [];
+  return [best];
 }

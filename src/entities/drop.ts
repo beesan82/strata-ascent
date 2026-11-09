@@ -1,5 +1,6 @@
 import { moveBody, type Body, type TileLookup } from './physics';
 import type { DropKind } from '../world/drop';
+import type { CarryKind } from '../core/carry';
 
 export type { DropKind };
 
@@ -8,8 +9,8 @@ export type { DropKind };
  * 吸着(マグネット)は入れない。
  *
  * 寿命は 2 種(サバイバル設計 §5):
- * - 通常ドロップ(敵から落ちた砲弾・回復): 寿命 60 秒、同時上限 16 個。
- * - 補給品(permanent): 糧食・素材セル(発生源によらず)とキャッシュ・休憩点備蓄から出た物資。
+ * - 通常ドロップ(敵から落ちた回復、ボス報酬の砲弾): 寿命 60 秒、同時上限 16 個。
+ * - 補給品(permanent): 糧食・素材セル(発生源によらず)とキャッシュ・休憩点備蓄・武器庫から出た物資。
  *   セッション中は消えない。補給品全体の上限 32 個、うち糧食は 16 個・素材は 8 個までで、
  *   その種別が溢れた場合だけ最も古いものが点滅して消える。
  * 素材セル(エクストラクション段階 A)は補給品区分に寄せる。地面の上限は糧食と同じ仕組みで、
@@ -127,14 +128,42 @@ export function canAddSupply(drops: readonly DropItem[], n: number): boolean {
 }
 
 /**
- * そのドロップを今拾えるか。満タン(砲弾が上限 / HP が全快 / 糧食が所持上限 /
- * 携行枠が満杯)のときは拾えず、ドロップはその場に残る(設計 §3・サバイバル設計 §5・
- * エクストラクション段階 A)。carried / maxCarry は携行中の素材の総個数と携行枠。
+ * 地面の種別 → 携行の種別(弾薬設計 §1)。砲弾セル(charge)は携行の shell、パルス弾セルは
+ * pulsecell、素材セルは material。即時消費の回復・糧食は携行しないので null。
+ */
+export function carryKindFor(kind: DropKind): CarryKind | null {
+  switch (kind) {
+    case 'charge':
+      return 'shell';
+    case 'pulsecell':
+      return 'pulsecell';
+    case 'material':
+      return 'material';
+    default:
+      return null;
+  }
+}
+
+/** 携行の種別 → 地面に置くときの種別(アイテムボックスで落とすとき)。carryKindFor の逆写像 */
+export function dropKindFor(kind: CarryKind): DropKind {
+  switch (kind) {
+    case 'shell':
+      return 'charge';
+    case 'pulsecell':
+      return 'pulsecell';
+    case 'material':
+      return 'material';
+  }
+}
+
+/**
+ * そのドロップを今拾えるか。満タン(HP が全快 / 糧食が所持上限 / 携行枠が満杯)のときは
+ * 拾えず、ドロップはその場に残る(設計 §3・サバイバル設計 §5・エクストラクション段階 A)。
+ * 砲弾セル・パルス弾セル・素材セルは携行へ入るので、まとめて携行枠で判定する(弾薬設計 §1)。
+ * carried / maxCarry は携行中の総個数と携行枠。
  */
 export function canPickup(
   kind: DropKind,
-  charges: number,
-  maxCharges: number,
   hp: number,
   maxHp: number,
   rations: number,
@@ -142,7 +171,6 @@ export function canPickup(
   carried: number,
   maxCarry: number,
 ): boolean {
-  if (kind === 'charge') return charges < maxCharges;
   if (kind === 'heal') return hp < maxHp;
   if (kind === 'ration') return rations < maxRations;
   return carried < maxCarry;

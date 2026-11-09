@@ -76,7 +76,8 @@ export const MINING_SAMPLES: readonly SampleName[] = ['mining0', 'mining1'];
  * 未知の種別は糧食に落とす(params.pickupNotes の既定と同じ考え方で、新種別が増えても無音にしない)。
  */
 export function pickupSampleName(kind: string): SampleName {
-  if (kind === 'charge' || kind === 'material') return 'pickupCharge';
+  // パルス弾セル(弾薬設計)も砲弾の素材を流用する(金属のセルという点で同じ系統)
+  if (kind === 'charge' || kind === 'material' || kind === 'pulsecell') return 'pickupCharge';
   if (kind === 'heal') return 'pickupHeal';
   return 'pickupRation';
 }

@@ -1,24 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import {
   addCarry,
+  CARRY_KIND_INFO,
   CARRY_KINDS,
   carriedTotal,
   INITIAL_CARRY_CAP,
   initialCarry,
+  isAmmoKind,
   isCarryFull,
   isCarryKind,
   removeCarry,
   secureCaptionText,
   secureCarry,
   securedTotal,
+  storeCarry,
   withdrawCarry,
+  type CarryKind,
   type CarryState,
 } from './carry';
 
 /** n 個の素材を携行した状態 */
-function carrying(n: number): CarryState {
+function carrying(n: number, kind: CarryKind = 'material'): CarryState {
   let s = initialCarry();
-  for (let i = 0; i < n; i++) s = addCarry(s, 'material');
+  for (let i = 0; i < n; i++) s = addCarry(s, kind);
   return s;
 }
 
@@ -32,17 +36,26 @@ describe('initialCarry(初期状態)', () => {
     expect(isCarryFull(s)).toBe(false);
   });
 
-  it('段階 A の携行種別は素材 1 種だけで、種別ごとの個数で持つ', () => {
-    expect(CARRY_KINDS).toEqual(['material']);
+  it('携行種別は素材・砲弾・パルス弾セルの 3 種で、種別ごとの個数で持つ(弾薬設計 §1)', () => {
+    expect(CARRY_KINDS).toEqual(['material', 'shell', 'pulsecell']);
     const s = initialCarry();
-    expect(s.carried).toEqual({ material: 0 });
-    expect(s.secured).toEqual({ material: 0 });
+    expect(s.carried).toEqual({ material: 0, shell: 0, pulsecell: 0 });
+    expect(s.secured).toEqual({ material: 0, shell: 0, pulsecell: 0 });
+  });
+
+  it('種別表: 弾薬は shell と pulsecell で、素材は弾薬でない。表示名が全種別にある', () => {
+    expect(isAmmoKind('material')).toBe(false);
+    expect(isAmmoKind('shell')).toBe(true);
+    expect(isAmmoKind('pulsecell')).toBe(true);
+    for (const k of CARRY_KINDS) expect(CARRY_KIND_INFO[k].label.length).toBeGreaterThan(0);
   });
 });
 
 describe('isCarryKind(携行できる種別)', () => {
-  it('素材は携行でき、消耗品は携行の対象でない', () => {
+  it('素材・砲弾・パルス弾セルは携行でき、消耗品や地面の砲弾セル(drop kind)は対象でない', () => {
     expect(isCarryKind('material')).toBe(true);
+    expect(isCarryKind('shell')).toBe(true);
+    expect(isCarryKind('pulsecell')).toBe(true);
     expect(isCarryKind('charge')).toBe(false);
     expect(isCarryKind('heal')).toBe(false);
     expect(isCarryKind('ration')).toBe(false);
@@ -71,10 +84,20 @@ describe('addCarry(取得)', () => {
   it('4 個までは満杯でない', () => {
     expect(isCarryFull(carrying(4))).toBe(false);
   });
+
+  it('枠は種別を問わず共有する(素材 3 + 砲弾 1 + セル 1 で満杯)', () => {
+    let s = carrying(3);
+    s = addCarry(s, 'shell');
+    s = addCarry(s, 'pulsecell');
+    expect(carriedTotal(s)).toBe(5);
+    expect(isCarryFull(s)).toBe(true);
+    expect(addCarry(s, 'shell')).toBe(s);
+    expect(addCarry(s, 'material')).toBe(s);
+  });
 });
 
 describe('secureCarry(確保)', () => {
-  it('携行中の全てが確保済みへ移り、携行は 0 に戻る', () => {
+  it('携行中の素材が全て確保済みへ移り、携行は 0 に戻る', () => {
     const r = secureCarry(carrying(3));
     expect(r.moved).toBe(3);
     expect(carriedTotal(r.state)).toBe(0);
@@ -105,6 +128,23 @@ describe('secureCarry(確保)', () => {
     expect(isCarryFull(s)).toBe(false);
     expect(carriedTotal(addCarry(s, 'material'))).toBe(1);
   });
+
+  it('弾薬は自動確保の対象外で携行に残る(休憩点で武器が空にならない)', () => {
+    let s = carrying(2);
+    s = addCarry(s, 'shell');
+    s = addCarry(s, 'pulsecell');
+    const r = secureCarry(s);
+    expect(r.moved).toBe(2);
+    expect(r.state.carried).toEqual({ material: 0, shell: 1, pulsecell: 1 });
+    expect(r.state.secured).toEqual({ material: 2, shell: 0, pulsecell: 0 });
+  });
+
+  it('弾薬だけを携行しているときは何も移らず state は同じ参照', () => {
+    const s = carrying(2, 'pulsecell');
+    const r = secureCarry(s);
+    expect(r.moved).toBe(0);
+    expect(r.state).toBe(s);
+  });
 });
 
 describe('secureCaptionText(確保の字幕)', () => {
@@ -113,7 +153,7 @@ describe('secureCaptionText(確保の字幕)', () => {
   });
 });
 
-describe('removeCarry(ボックスで落とす)', () => {
+describe('removeCarry(ボックスで落とす・弾薬の消費)', () => {
   it('携行から 1 個減り、元の state は変えない', () => {
     const s0 = carrying(3);
     const s1 = removeCarry(s0, 'material');
@@ -125,6 +165,30 @@ describe('removeCarry(ボックスで落とす)', () => {
   it('持っていなければ同じ state を返す', () => {
     const s = initialCarry();
     expect(removeCarry(s, 'material')).toBe(s);
+    expect(removeCarry(s, 'shell')).toBe(s);
+  });
+
+  it('種別ごとに独立して減る', () => {
+    let s = carrying(1, 'shell');
+    s = addCarry(s, 'pulsecell');
+    const after = removeCarry(s, 'shell');
+    expect(after.carried).toEqual({ material: 0, shell: 0, pulsecell: 1 });
+  });
+});
+
+describe('storeCarry(休憩点で携行から保管へ入れる)', () => {
+  it('携行が 1 減り確保済みが 1 増える(弾薬を保管へ置く経路)', () => {
+    const s0 = carrying(2, 'shell');
+    const s1 = storeCarry(s0, 'shell');
+    expect(s1.carried.shell).toBe(1);
+    expect(s1.secured.shell).toBe(1);
+    expect(s0.carried.shell).toBe(2);
+    expect(s0.secured.shell).toBe(0);
+  });
+
+  it('持っていなければ同じ state を返す', () => {
+    const s = initialCarry();
+    expect(storeCarry(s, 'pulsecell')).toBe(s);
   });
 });
 
@@ -147,5 +211,13 @@ describe('withdrawCarry(保管から引き出す)', () => {
   it('保管が空なら引き出せず同じ state を返す', () => {
     const s = initialCarry();
     expect(withdrawCarry(s, 'material')).toBe(s);
+  });
+
+  it('保管した弾薬も引き出せる(store → withdraw で元に戻る)', () => {
+    const s0 = carrying(1, 'pulsecell');
+    const stored = storeCarry(s0, 'pulsecell');
+    const back = withdrawCarry(stored, 'pulsecell');
+    expect(back.carried).toEqual(s0.carried);
+    expect(back.secured).toEqual(s0.secured);
   });
 });
