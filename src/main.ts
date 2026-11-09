@@ -24,7 +24,7 @@ import { biomeCellAt } from './world/biomeCells';
 import { towerTopFloorAt } from './world/landmark';
 import { CHUNK_SIZE, TILE } from './world/tiles';
 import { DEBRIS_TTL } from './render/beamShape';
-import { poseMuzzleWorld } from './render/playerPose';
+import { poseMotionOf, poseMuzzleWorld } from './render/playerPose';
 import { findSpawn, isHardAt } from './world/worldgen';
 import { sampleOpenness, targetZoomForOpenness, nextZoomStep, advanceZoom } from './core/zoom';
 import { lookahead } from './core/stick';
@@ -721,6 +721,7 @@ function update(dt: number): void {
     Math.atan2(pulseDir.y, pulseDir.x),
     simTime,
     hanging,
+    poseMotionOf(player), // 空中・梯子などのポーズでも描画の銃口と発射原点を一致させる
   );
   // 発射音(§6.7): 発射総数の差分で鳴らす。PulseGun 側は音を持たない(検証用カウンタのみ)
   const shotsBefore = pulseGun.shotsFired;
