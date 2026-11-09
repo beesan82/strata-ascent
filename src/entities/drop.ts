@@ -9,9 +9,11 @@ export type { DropKind };
  *
  * 寿命は 2 種(サバイバル設計 §5):
  * - 通常ドロップ(敵から落ちた砲弾・回復): 寿命 60 秒、同時上限 16 個。
- * - 補給品(permanent): 糧食(発生源によらず)とキャッシュ・休憩点備蓄から出た物資。
- *   セッション中は消えない。補給品全体の上限 32 個、うち糧食は 16 個までで、
- *   糧食が溢れた場合だけ最も古い糧食が点滅して消える。
+ * - 補給品(permanent): 糧食・素材セル(発生源によらず)とキャッシュ・休憩点備蓄から出た物資。
+ *   セッション中は消えない。補給品全体の上限 32 個、うち糧食は 16 個・素材は 8 個までで、
+ *   その種別が溢れた場合だけ最も古いものが点滅して消える。
+ * 素材セル(エクストラクション段階 A)は補給品区分に寄せる。地面の上限は糧食と同じ仕組みで、
+ * 糧食 16 + 素材 8 + 上限判定つきのキャッシュ・備蓄で補給品全体が 32 を超えないようにする。
  */
 export const DROP_SIZE = 0.5; // タイル(一辺)
 export const DROP_LIFETIME = 60; // 秒(通常ドロップ)
@@ -19,6 +21,13 @@ export const DROP_BLINK_TIME = 5; // 寿命の残りこの秒数から点滅す�
 export const MAX_DROPS = 16; // 通常ドロップの同時存在の上限(古いものから消す)
 export const MAX_SUPPLIES = 32; // 補給品全体の同時存在の上限
 export const MAX_GROUND_RATIONS = 16; // 地面の糧食の上限(溢れたら古いものが点滅して消える)
+export const MAX_GROUND_MATERIALS = 8; // 地面の素材セルの上限(溢れたら古いものが点滅して消える)
+
+/** 種別ごとの地面の上限(無い種別は補給品全体の上限だけで抑える) */
+const GROUND_LIMIT: Partial<Record<DropKind, number>> = {
+  ration: MAX_GROUND_RATIONS,
+  material: MAX_GROUND_MATERIALS,
+};
 const GRAVITY = 30;
 const MAX_FALL = 25;
 
@@ -89,15 +98,16 @@ export function pushDrop(drops: DropItem[], item: DropItem): void {
 }
 
 /**
- * 補給品を追加する。糧食が地面上限を超えたら、最も古い糧食から順に
+ * 補給品を追加する。糧食・素材がその種別の地面上限を超えたら、最も古いものから順に
  * 「残り DROP_BLINK_TIME 秒で消える」状態へ落とす(点滅して消える)。
  */
 export function pushSupply(drops: DropItem[], item: DropItem): void {
   drops.push(item);
-  if (item.kind !== 'ration') return;
-  const rations = drops.filter((d) => d.kind === 'ration');
-  let excess = rations.length - MAX_GROUND_RATIONS;
-  for (const r of rations) {
+  const limit = GROUND_LIMIT[item.kind];
+  if (limit === undefined) return;
+  const same = drops.filter((d) => d.kind === item.kind);
+  let excess = same.length - limit;
+  for (const r of same) {
     if (excess <= 0) break;
     if (!Number.isFinite(r.lifetime)) {
       r.lifetime = r.age + DROP_BLINK_TIME;
@@ -117,8 +127,9 @@ export function canAddSupply(drops: readonly DropItem[], n: number): boolean {
 }
 
 /**
- * そのドロップを今拾えるか。満タン(砲弾が上限 / HP が全快 / 糧食が所持上限)のときは
- * 拾えず、ドロップはその場に残る(設計 §3・サバイバル設計 §5)。
+ * そのドロップを今拾えるか。満タン(砲弾が上限 / HP が全快 / 糧食が所持上限 /
+ * 携行枠が満杯)のときは拾えず、ドロップはその場に残る(設計 §3・サバイバル設計 §5・
+ * エクストラクション段階 A)。carried / maxCarry は携行中の素材の総個数と携行枠。
  */
 export function canPickup(
   kind: DropKind,
@@ -128,8 +139,11 @@ export function canPickup(
   maxHp: number,
   rations: number,
   maxRations: number,
+  carried: number,
+  maxCarry: number,
 ): boolean {
   if (kind === 'charge') return charges < maxCharges;
   if (kind === 'heal') return hp < maxHp;
-  return rations < maxRations;
+  if (kind === 'ration') return rations < maxRations;
+  return carried < maxCarry;
 }

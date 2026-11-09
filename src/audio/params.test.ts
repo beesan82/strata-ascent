@@ -8,6 +8,7 @@ import {
   MASTER_DB, nearestPlateDistance, PULSE_DETUNE, pulseDetune, REVERB_BUCKETS, REVERB_MAX, REVERB_MIN, reverbBucket, reverbSeconds, reverbSecondsForBucket,
   LAND_GAIN_MAX, LAND_MIN_VY, landGain, LADDER_RUNG_STEP, rungCrossed,
   MILESTONE_NOTES, NEW_RECORD_NOTES, PICKUP_NOTES, pickupNotes,
+  JINGLE_NOTE_SECONDS, PICKUP_MATERIAL_RATE, RESPAWN_FREQ, SECURE_NOTE_SECONDS, SECURE_NOTES, SECURE_SAMPLE_RATE,
   crushSampleGain, pickVariant, sampleRate,
   COMP_ATTACK, COMP_RATIO, COMP_THRESHOLD_DB, ROOM_IR_SECONDS, ROOM_WET_GAIN,
   CHARGE_SUB_END, CHARGE_SUB_START, chargeSubFreq,
@@ -142,7 +143,7 @@ describe('audio params', () => {
     expect(rungCrossed(1, 1)).toBe(false);
   });
   it('取得音は種別ごとに異なる上昇 2 音で、未知の種別は既定に落ちる', () => {
-    for (const kind of ['charge', 'heal', 'ration'] as const) {
+    for (const kind of ['charge', 'heal', 'ration', 'material'] as const) {
       const notes = pickupNotes(kind);
       expect(notes).toBe(PICKUP_NOTES[kind]);
       expect(notes.length).toBe(2);
@@ -150,7 +151,21 @@ describe('audio params', () => {
     }
     expect(pickupNotes('charge')).not.toEqual(pickupNotes('heal'));
     expect(pickupNotes('heal')).not.toEqual(pickupNotes('ration'));
+    expect(pickupNotes('material')).not.toEqual(pickupNotes('charge'));
+    expect(pickupNotes('material')).not.toEqual(pickupNotes('ration'));
     expect(pickupNotes('unknown')).toBe(PICKUP_NOTES.ration);
+  });
+  it('素材の取得は砲弾の素材を 1 未満のレートで鳴らし、確保の合図は短い上行 3 音(段階 A)', () => {
+    expect(PICKUP_MATERIAL_RATE).toBeGreaterThan(0);
+    expect(PICKUP_MATERIAL_RATE).toBeLessThan(1);
+    expect(SECURE_NOTES.length).toBe(3);
+    for (let i = 1; i < SECURE_NOTES.length; i++) {
+      expect(SECURE_NOTES[i]).toBeGreaterThan(SECURE_NOTES[i - 1]);
+    }
+    // 復活点更新(440 Hz 単発)より高く始まり、節目のジングルより短い
+    expect(SECURE_NOTES[0]).toBeGreaterThan(RESPAWN_FREQ);
+    expect(SECURE_NOTE_SECONDS).toBeLessThan(JINGLE_NOTE_SECONDS);
+    expect(SECURE_SAMPLE_RATE).toBeGreaterThan(1);
   });
   it('ジングルは節目が 3 音の上行、新記録はそれより長く高く終わる', () => {
     expect(MILESTONE_NOTES.length).toBe(3);

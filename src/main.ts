@@ -44,6 +44,16 @@ import {
   stepGroundAnchor,
   type GroundAnchor,
 } from './core/remains';
+import {
+  addCarry,
+  carriedTotal,
+  initialCarry,
+  isCarryKind,
+  secureCaptionText,
+  secureCarry,
+  securedTotal,
+  type CarryState,
+} from './core/carry';
 import { displayAltitude, highestLayer } from './core/coordinate';
 import {
   crossedMilestone,
@@ -153,6 +163,11 @@ let killCount = 0;
 
 /** 満腹度(サバイバル段階 1)。状態は core/satiety の純関数で進める */
 let satiety: SatietyState = initialSatiety();
+/**
+ * 携行と確保(エクストラクション段階 A)。素材セルを拾うと携行に入り、休憩点の箱に入ると
+ * 確保済みへ移る。状態は core/carry の純関数で進める。段階 A では死亡しても携行は残る
+ */
+let carry: CarryState = initialCarry();
 /** 字幕は状態が落ちた瞬間だけ出すための前回レベル */
 let satietyPrevLevel = satietyLevel(satiety.value);
 
@@ -181,8 +196,9 @@ function onEnemyKilled(spawnId: string, centerX: number, centerY: number): void 
   const kind = dropFor(seed, spawnId, killCount, biomeId);
   killCount++;
   if (!kind) return;
-  // 糧食は「後で戻って使う」判断が要るため、発生源によらず補給品として残す(サバイバル設計 §5)
-  if (kind === 'ration') pushSupply(drops, new DropItem('ration', centerX, centerY, true));
+  // 糧食は「後で戻って使う」判断が要るため、発生源によらず補給品として残す(サバイバル設計 §5)。
+  // 素材セル(段階 A)も同じく補給品(寿命なし)。地面の上限は pushSupply の種別上限で抑える
+  if (kind === 'ration' || kind === 'material') pushSupply(drops, new DropItem(kind, centerX, centerY, true));
   else pushDrop(drops, new DropItem(kind, centerX, centerY));
 }
 
@@ -645,6 +661,14 @@ function update(dt: number): void {
         respawnPoint = nextRespawn;
         audio.respawnSet(); // 復活点が移ったときだけ鳴らす(§6.7)
       }
+      // 確保(エクストラクション段階 A): どの休憩点でも、箱に入れば携行中の素材を全て確保済みへ移す。
+      // 合図は専用の短い音と字幕(既存の音系・字幕系に相乗り)。携行が 0 のときは何も起きない
+      const secured = secureCarry(carry);
+      if (secured.moved > 0) {
+        carry = secured.state;
+        audio.secure();
+        caption.show(secureCaptionText(secured.moved), simTime);
+      }
       // 休憩点の初回補給(サバイバル §7): 初めて入った休憩点だけ備蓄を開ける(セッション内のみ)。
       // 備蓄は糧食 1 個 + 地区別の 1 個を荷袋(packX)付近へ出す。再訪しても補充されない。
       // 補給品の上限に達している間は開けず、消費して空きを作れば開けられる
@@ -850,9 +874,11 @@ function update(dt: number): void {
       const b = d.body;
       const overlap = pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y;
       if (!overlap) return true;
-      if (!canPickup(d.kind, graviton.charges, MAX_CHARGES, player.hp, MAX_HP, satiety.rations, MAX_RATIONS)) return true;
+      if (!canPickup(d.kind, graviton.charges, MAX_CHARGES, player.hp, MAX_HP, satiety.rations, MAX_RATIONS, carriedTotal(carry), carry.cap)) return true;
       if (d.kind === 'charge') graviton.charges++;
       else if (d.kind === 'heal') player.hp++;
+      // 素材セル(段階 A)は携行へ入る(休憩点で確保済みへ移る)
+      else if (isCarryKind(d.kind)) carry = addCarry(carry, d.kind);
       // 糧食は所持数だけが増える(満腹度は即時回復しない。自動摂取で消費される)
       else satiety = { ...satiety, rations: satiety.rations + 1 };
       audio.pickup(d.kind); // 取得音(§6.7): 種別で音色を変える
@@ -913,6 +939,7 @@ function update(dt: number): void {
     player.revive();
     // 満腹度は 35 に戻し、糧食は 0(遺留品へ移ったぶん。保持はしない)
     satiety = resetSatietyOnDeath(satiety);
+    // 携行素材(エクストラクション段階 A)は死亡しても保持する(ロスト・遺留品化は段階 B)
     satietyPrevLevel = satietyLevel(satiety.value);
     // 復活点が新しい基準になる(次の遺留品の落下先は、ここから先の安定接地で決まる)
     groundAnchor = initialGroundAnchor(respawnPoint.x, respawnPoint.y);
@@ -1032,9 +1059,11 @@ function updateHud(): void {
   const satLabel = satLevel === 'low' ? '満腹低下' : satLevel === 'ok' ? '満腹' : '満腹危険';
   const satBars = Math.max(0, Math.min(10, Math.round(satiety.value / 10)));
   const satietyHud = ` — ${satLabel} [${'#'.repeat(satBars)}${'-'.repeat(10 - satBars)}] ${Math.floor(satiety.value)} / 糧食 ${satiety.rations}`;
+  // 携行と確保の併記(エクストラクション段階 A): 携行 n/枠 と 確保済み m(最深記録の併記と同じ流儀)
+  const carryHud = ` — 携行 ${carriedTotal(carry)}/${carry.cap} / 確保済み ${securedTotal(carry)}`;
   // 最深記録の併記(v2.0 Task 7)。記録が 0(記録なし)のときは出さない
   const bestHud = bestLayer > 0 ? ` / 最深記録 第 ${bestLayer} 階層` : '';
-  hud.textContent = `第 ${maxLayer} 階層${bestHud} / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${weapon} — HP ${hearts}${bossHud}${satietyHud}`;
+  hud.textContent = `第 ${maxLayer} 階層${bestHud} / 高度 ${altitude} — ${SYSTEM_LABEL[sys]} [seed:${seed}] — ${weapon} — HP ${hearts}${bossHud}${satietyHud}${carryHud}`;
 }
 
 let last = performance.now();

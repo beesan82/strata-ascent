@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   chooseSupplyCaches,
   restStockSecondFor,
+  SUPPLY_MATERIAL_RATE,
   supplyFor,
   supplyTableFor,
 } from './supply';
@@ -97,7 +98,7 @@ describe('supplyFor(キャッシュの中身)', () => {
   it('地区表どおりの分布になる(固定 seed・4000 サンプル、±3.5 ポイント)', () => {
     for (const b of BIOME_IDS) {
       const t = supplyTableFor(b);
-      const counts = { ration: 0, heal: 0, charge: 0 };
+      const counts = { ration: 0, heal: 0, charge: 0, material: 0 };
       const n = 4000;
       for (let i = 0; i < n; i++) counts[supplyFor(SEED, `s:${i * 7 + 3},${1000 + i}`, b)]++;
       expect(counts.ration / n).toBeGreaterThan(t.ration - 0.035);
@@ -106,13 +107,44 @@ describe('supplyFor(キャッシュの中身)', () => {
       expect(counts.heal / n).toBeLessThan(t.heal + 0.035);
       expect(counts.charge / n).toBeGreaterThan(t.charge - 0.035);
       expect(counts.charge / n).toBeLessThan(t.charge + 0.035);
+      expect(counts.material / n).toBeGreaterThan(t.material - 0.035);
+      expect(counts.material / n).toBeLessThan(t.material + 0.035);
     }
   });
 
   it('地区表は全地区ぶん合計 1 になる', () => {
     for (const b of BIOME_IDS) {
       const t = supplyTableFor(b);
-      expect(t.ration + t.heal + t.charge).toBeCloseTo(1);
+      expect(t.ration + t.heal + t.charge + t.material).toBeCloseTo(1);
+    }
+  });
+
+  it('素材(段階 A)は全地区 20% で、消耗品 3 種は残り 80% を従来の地区別比率で分け合う', () => {
+    expect(SUPPLY_MATERIAL_RATE).toBe(0.2);
+    for (const b of BIOME_IDS) {
+      const t = supplyTableFor(b);
+      expect(t.material).toBe(SUPPLY_MATERIAL_RATE);
+      expect(t.ration + t.heal + t.charge).toBeCloseTo(1 - SUPPLY_MATERIAL_RATE);
+    }
+    // 寒鋼基層の消耗品比率 0.5 : 0.25 : 0.25 はそのまま(×0.8)
+    const cold = supplyTableFor('coldSteel');
+    expect(cold.ration).toBeCloseTo(0.4);
+    expect(cold.heal).toBeCloseTo(0.2);
+    expect(cold.charge).toBeCloseTo(0.2);
+    // 居住区画は糧食 0.55 → 0.44、回復 0.35 → 0.28、砲弾 0.1 → 0.08
+    const hab = supplyTableFor('habitation');
+    expect(hab.ration).toBeCloseTo(0.44);
+    expect(hab.heal).toBeCloseTo(0.28);
+    expect(hab.charge).toBeCloseTo(0.08);
+  });
+
+  it('素材は全地区のキャッシュから出る(決定的)', () => {
+    for (const b of BIOME_IDS) {
+      let found = false;
+      for (let i = 0; i < 200 && !found; i++) {
+        found = supplyFor(SEED, `s:${i * 7 + 3},${1000 + i}`, b) === 'material';
+      }
+      expect(found).toBe(true);
     }
   });
 });
