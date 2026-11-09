@@ -19,6 +19,13 @@
       color: #9aa4ad; font: 12px monospace; letter-spacing: 0.2em;
       pointer-events: none; user-select: none;
     }
+    /* 取得ログ(何を取ったかを画面端に短く残す)。HUD の下、左端に新しい順で最大 4 行 */
+    #pickuplog {
+      position: fixed; left: 12px; top: 34px;
+      color: #c8d0d6; font: 12px monospace; letter-spacing: 0.15em; line-height: 1.7;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+      pointer-events: none; user-select: none; white-space: pre-line;
+    }
     /* 通過演出の字幕(§6.5)。HUD と同じ等幅、文字間 0.3em。不透明度は src/render/caption.ts が毎フレーム更新 */
     #caption {
       position: fixed; left: 0; right: 0; bottom: 18%; text-align: center;
@@ -135,11 +142,12 @@
     .ibox-empty-note { color: #9aa4ad; font-size: 11px; }
     #itembox-note { color: #9aa4ad; font-size: 11px; margin-top: 9px; min-height: 14px; }
   </style>
-  <script type="module" crossorigin src="/strata-ascent/assets/index-DCHA7NmX.js"></script>
+  <script type="module" crossorigin src="/strata-ascent/assets/index-BAETAvV_.js"></script>
 </head>
 <body>
   <canvas id="game"></canvas>
   <div id="hud"></div>
+  <div id="pickuplog"></div>
   <div id="caption"></div>
   <div id="itembox" hidden>
     <div class="ibox-head"><span>アイテムボックス</span><button id="itembox-close" type="button">×</button></div>
