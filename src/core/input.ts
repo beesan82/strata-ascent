@@ -58,7 +58,11 @@ export class Input {
     window.addEventListener('pointerup', (e) => {
       if (e.pointerType === 'mouse' && e.button === 0) this.releaseMouseLeft();
     });
-    window.addEventListener('mousemove', (e) => {
+    window.addEventListener('pointermove', (e) => {
+      // マウスの移動だけを照準に使う。タッチ由来の移動(スティック操作)と、タップで合成される
+      // 互換マウスイベントは pointerType で弾く。これを素通しすると、アイテムボックス等の
+      // DOM をタップした座標で mouseSeen が立ち、銃の向きがその点へ固着する(2.8 実機バグ)
+      if (e.pointerType !== 'mouse') return;
       this.mouseX = e.clientX;
       this.mouseY = e.clientY;
       this.mouseSeen = true;
