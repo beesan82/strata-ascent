@@ -404,4 +404,24 @@ describe('Input の PC 武器切替(武器切り替え段階 2)', () => {
     expect(input.fireHeld).toBe(false);
     expect(input.pulseHeld).toBe(false);
   });
+
+  it('window リスナ結線: マウス照準は pointermove の mouse だけが立て、タッチ由来では立たない', () => {
+    const handlers = new Map<string, (e: unknown) => void>();
+    vi.stubGlobal('window', {
+      addEventListener: (type: string, fn: (e: unknown) => void) => handlers.set(type, fn),
+    });
+    const input = new Input();
+    expect(handlers.has('pointermove')).toBe(true);
+    expect(handlers.has('mousemove')).toBe(false); // 合成 mousemove は受けない(箱タップで照準が固着するバグの再発防止)
+    const move = (pointerType: string, x: number, y: number): PointerEvent =>
+      ({ pointerType, clientX: x, clientY: y }) as unknown as PointerEvent;
+    handlers.get('pointermove')!(move('touch', 100, 50)); // タッチの移動では立たない
+    expect(input.mouseSeen).toBe(false);
+    handlers.get('pointermove')!(move('pen', 100, 50));
+    expect(input.mouseSeen).toBe(false);
+    handlers.get('pointermove')!(move('mouse', 320, 200)); // 本物のマウスで立つ
+    expect(input.mouseSeen).toBe(true);
+    expect(input.mouseX).toBe(320);
+    expect(input.mouseY).toBe(200);
+  });
 });
