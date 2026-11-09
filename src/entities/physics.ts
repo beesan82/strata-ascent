@@ -128,14 +128,34 @@ export function findLedge(body: Body, tiles: TileLookup, side: 1 | -1): Ledge | 
   return { tx, ty, side, x, y };
 }
 
+// ---- 段差アシスト(設計 2026-11-09-steps-and-light §1) ----
+
+/** ステップアップで乗り越えられる段差の最大高さ(タイル) */
+export const STEP_UP_MAX = 1;
+/**
+ * ステップダウンで吸着する最大の落差(タイル)。接地中の体は衝突解決の 1/16 刻み探索のため
+ * 床面から最大 1/16 浮いているので、1 タイルの段を降りたときの実距離は 1 + 1/16 未満になる
+ */
+export const STEP_DOWN_MAX = 1;
+
+export interface MoveOptions {
+  /**
+   * 段差アシスト(既定オフ。Player だけがオンにする)。前フレームで接地しており上昇中でないときだけ働く:
+   * 横移動が高さ STEP_UP_MAX 以下の段に阻まれたら持ち上げて乗り越え(頭上に空間があるとき)、
+   * 横移動で足場を外れても真下 STEP_DOWN_MAX 以内に床があれば吸着して接地を保つ
+   */
+  stepAssist?: boolean;
+}
+
 /**
  * 軸別に移動して衝突解決する。衝突した軸の速度は0になり、下方向の衝突でonGroundが立つ。
  *
  * onGroundの契約: 接地フラグは「今フレームの下方向衝突」でのみ立つ。呼び出し側は
  * 接地中でも毎フレーム重力を適用すること。さもないとvyが0のままY軸衝突が起きず、
  * onGroundがfalseにフリッカーする。
+ * (段差アシストのステップダウン吸着は例外として、下方向の衝突なしに onGround を立てる)
  */
-export function moveBody(body: Body, dt: number, tiles: TileLookup): void {
+export function moveBody(body: Body, dt: number, tiles: TileLookup, opts?: MoveOptions): void {
   // 埋まり開始ガード: 開始位置が既にSOLIDと重なっている場合は移動せず速度を0にして返す
   // (決定的なフリーズ)。スポーン/テレポートの不具合に対するセーフティネットで、
   // 実運用ではスポーンロジック側が非埋没開始を保証する。ガードなしでは下の
@@ -146,16 +166,34 @@ export function moveBody(body: Body, dt: number, tiles: TileLookup): void {
     return;
   }
 
+  // 段差アシストの条件は移動前の状態で決める: 前フレームで接地しており、上昇中(ジャンプの踏み切り・
+  // ノックバック)でない。空中では崖つかみ・壁の挙動を従来どおりにする
+  const assist = !!opts?.stepAssist && body.onGround && body.vy >= 0;
+  const x0 = body.x;
+
   // X軸
   let nx = body.x + body.vx * dt;
   if (collidesSweptX(tiles, body.x, nx, body.y, body.w, body.h)) {
-    const step = Math.sign(body.vx) * STEP;
-    // 探索は意図した移動量を超えない(暴走防止の上限)
-    const maxSteps = Math.ceil(Math.abs(body.vx * dt) / STEP) + 1;
-    nx = body.x;
-    let i = 0;
-    while (i++ < maxSteps && !collides(tiles, nx + step, body.y, body.w, body.h)) nx += step;
-    body.vx = 0;
+    // ステップアップ: 足元の行(体の底が入っている行)の上面まで持ち上げる。持ち上げ量は高々 1 タイル。
+    // 持ち上げの経路(頭上)と、持ち上げた高さでの横移動の経路が両方空いているときだけ乗り越え、
+    // 横速度は保つ。2 タイル以上の段は持ち上げた高さでもまだ当たるので越えない
+    const liftedY = Math.floor(body.y + body.h - EPS) - body.h;
+    if (
+      assist &&
+      body.y - liftedY <= STEP_UP_MAX + EPS &&
+      !collidesSweptY(tiles, body.x, body.y, liftedY, body.w, body.h) &&
+      !collidesSweptX(tiles, body.x, nx, liftedY, body.w, body.h)
+    ) {
+      body.y = liftedY;
+    } else {
+      const step = Math.sign(body.vx) * STEP;
+      // 探索は意図した移動量を超えない(暴走防止の上限)
+      const maxSteps = Math.ceil(Math.abs(body.vx * dt) / STEP) + 1;
+      nx = body.x;
+      let i = 0;
+      while (i++ < maxSteps && !collides(tiles, nx + step, body.y, body.w, body.h)) nx += step;
+      body.vx = 0;
+    }
   }
   body.x = nx;
 
@@ -172,4 +210,18 @@ export function moveBody(body: Body, dt: number, tiles: TileLookup): void {
     body.vy = 0;
   }
   body.y = ny;
+
+  // ステップダウン: 接地したまま横へ動いて足場を外れたとき、真下 STEP_DOWN_MAX(+ 接地の隙間 1/16)以内に
+  // 床があれば吸着して接地を保つ(1 段降りるたびに落下 → 着地にならない)。それより深ければ従来どおり落ちる
+  if (assist && !body.onGround && body.x !== x0) {
+    const maxSteps = Math.round(STEP_DOWN_MAX / STEP);
+    let dy = 0;
+    let i = 0;
+    while (i++ < maxSteps && !collides(tiles, body.x, body.y + dy + STEP, body.w, body.h)) dy += STEP;
+    if (collides(tiles, body.x, body.y + dy + STEP, body.w, body.h)) {
+      body.y += dy;
+      body.vy = 0;
+      body.onGround = true;
+    }
+  }
 }

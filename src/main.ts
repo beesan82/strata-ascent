@@ -930,9 +930,14 @@ function update(dt: number): void {
   if (input.takeFireCancel()) graviton.cancelCharge(); // タッチ照準のキャンセル(解放より先に破棄)
   // 崖つかみ中は武器を使えない(設計 §掴まり中): 溜めは破棄し、発射・溜め入力を無視する
   if (hanging) graviton.cancelCharge();
+  // 懐中電灯モード(設計 2026-11-09-steps-and-light §4): 眺望ボタン(Shift / ◎)を押している間は照準だけで撃たない。
+  // パルスの連射を止め、砲の溜めも始めない。入った瞬間に溜め中なら破棄する(held=false を渡すと
+  // 「離した」扱いで発射してしまうため、update より先に破棄する)。ライトの強化は renderer へ fx.flashlight で渡す
+  const flashlight = input.shiftHeld;
+  if (flashlight) graviton.cancelCharge();
   // 砲の発射可否は携行の砲弾で決める(弾薬設計 §1)。残弾が無ければ溜めが始まらず、溜め音・演出も出ない。
   // 消費は fire() の先頭で行う。自動回復は廃止した(満腹度による回復速度の修飾も無くなった)
-  graviton.update(dt, input.fireHeld && !hanging, canFireCannon(carry), fire);
+  graviton.update(dt, input.fireHeld && !hanging && !flashlight, canFireCannon(carry), fire);
   // 満タン継続時間(描画専用): 満タンの間だけ積み、離す・発射・キャンセルで ratio が落ちれば 0 に戻る
   chargeFullT = graviton.chargeRatio >= 1 ? chargeFullT + dt : 0;
   input.expireCannonRelease(); // スティック砲の発射候補は、この update で発射しなければ失効する
@@ -961,7 +966,7 @@ function update(dt: number): void {
   // 残弾(装填中 + 携行セル)が無ければ PulseGun へ渡す発射可否で止める。PulseGun 側は弾薬を知らない
   const shotsBefore = pulseGun.shotsFired;
   pulseGun.update(
-    dt, input.pulseHeld && !hanging && canFirePulse(pulseLoaded, carry), muzzle.x, muzzle.y, pulseDir.x, pulseDir.y, tiles,
+    dt, input.pulseHeld && !hanging && !flashlight && canFirePulse(pulseLoaded, carry), muzzle.x, muzzle.y, pulseDir.x, pulseDir.y, tiles,
     player.centerX, player.centerY,
   );
   for (let i = shotsBefore; i < pulseGun.shotsFired; i++) {
@@ -1322,6 +1327,7 @@ function frame(now: number): void {
   renderer.render(store, camera, player, aimMouseX, aimMouseY, simTime, {
     chargeRatio: graviton.chargeRatio,
     chargeFullT,
+    flashlight: input.shiftHeld, // 懐中電灯モード(設計 2026-11-09-steps-and-light §4)
     beam,
     push,
     debris: debrisBursts.map((b) => ({

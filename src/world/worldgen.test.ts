@@ -10,7 +10,18 @@ import {
 import { terrainProfileFor } from './biomeTerrain';
 import { hash2 } from './noise';
 import { CHUNK_SIZE, isSolid, TILE } from './tiles';
-import { SPAWN_OFFSET_FROM_PASSAGE, findSpawn, generateChunk, isHardAt, noiseTileAt, tileAt, tileAtLive } from './worldgen';
+import {
+  SPAWN_OFFSET_FROM_PASSAGE,
+  STAIR_CLAIMED,
+  composedTileAt,
+  findSpawn,
+  generateChunk,
+  isHardAt,
+  noiseTileAt,
+  stairAt,
+  tileAt,
+  tileAtLive,
+} from './worldgen';
 import { girderY, isTowerFamily, landmarkAt, landmarkTileAt, rampTopY, shaftLadderX, towerSpec, type Landmark } from './landmark';
 import { restPointAt, restPointTileAt } from './restpoint';
 import { Destruction } from './destruction';
@@ -509,6 +520,88 @@ describe('段階4: 大構造と休憩点の合成', () => {
     expect(tileAtLive(seed, x, y, d)).toBe(TILE.HARD);
     d.bore(x - 5, y, 0, 10, 1, (ax, ay) => tileAt(seed, ax, ay));
     expect(tileAtLive(seed, x, y, d)).toBe(TILE.HARD);
+  });
+});
+
+describe('中間段(steps-and-light §2)', () => {
+  /** 文字列の格子を stairAt の get にする。'#'=SOLID、'.'=AIR、'C'=保護構造。範囲外は AIR。行の添字が y */
+  const grid = (rows: string[]) => (x: number, y: number): number => {
+    const ch = rows[y]?.[x];
+    return ch === '#' ? TILE.SOLID : ch === 'C' ? STAIR_CLAIMED : TILE.AIR;
+  };
+  // 床の上面は y=4。x>=3 は上面 y=2 の高台(床からちょうど 2 タイル上がる)
+  const rise2 = [
+    '......',
+    '......',
+    '...###',
+    '...###',
+    '######',
+  ];
+
+  it('床が隣の列でちょうど 2 タイル上がる場所の手前に段を置く(左右どちら向きでも)', () => {
+    expect(stairAt(grid(rise2), 2, 3)).toBe(true);
+    expect(stairAt(grid(rise2), 1, 3)).toBe(false); // 隣が高台ではない
+    const mirrored = rise2.map((r) => [...r].reverse().join(''));
+    expect(stairAt(grid(mirrored), 3, 3)).toBe(true);
+  });
+
+  it('段差が 1 タイルや 3 タイルなら置かない', () => {
+    const rise1 = ['......', '......', '......', '...###', '######'];
+    const rise3 = ['......', '...###', '...###', '...###', '######'];
+    expect(stairAt(grid(rise1), 2, 3)).toBe(false);
+    expect(stairAt(grid(rise3), 2, 2)).toBe(false);
+    expect(stairAt(grid(rise3), 2, 3)).toBe(false);
+  });
+
+  it('段の上・高台の上に立つ空間が無ければ置かない', () => {
+    const lowCeilingStep = ['......', '..#...', '...###', '...###', '######'];
+    const lowCeilingTop = ['...#..', '......', '...###', '...###', '######'];
+    expect(stairAt(grid(lowCeilingStep), 2, 3)).toBe(false);
+    // 高台の上 (3, 0) が塞がると高台の上に立てない
+    expect(stairAt(grid(lowCeilingTop), 2, 3)).toBe(false);
+  });
+
+  it('保護構造の中や近傍(隣の列・反対側の列)には置かない', () => {
+    const claimedRise = ['......', '......', '...C##', '...###', '######'];
+    const claimedOpposite = ['......', '......', '...###', '.C.###', '######'];
+    const claimedFloor = ['......', '......', '...###', '...###', '##C###'];
+    expect(stairAt(grid(claimedRise), 2, 3)).toBe(false);
+    expect(stairAt(grid(claimedOpposite), 2, 3)).toBe(false);
+    expect(stairAt(grid(claimedFloor), 2, 3)).toBe(false);
+  });
+
+  it('実ワールドで段が入り、段の位置は tileAt とチャンクで一致し、保護構造の外にだけある', () => {
+    let stairs = 0;
+    for (const seed of [1, 42, 20260711]) {
+      for (let cy = -4; cy <= 1; cy++) for (let cx = -2; cx <= 1; cx++) {
+        const chunk = generateChunk(seed, cx, cy);
+        for (let ty = 0; ty < CHUNK_SIZE; ty++) for (let tx = 0; tx < CHUNK_SIZE; tx++) {
+          const x = cx * CHUNK_SIZE + tx, y = cy * CHUNK_SIZE + ty;
+          const t = chunk[ty * CHUNK_SIZE + tx];
+          if (t === composedTileAt(seed, x, y)) continue;
+          stairs++;
+          // 段は素の空気の位置に足した SOLID だけ
+          expect(composedTileAt(seed, x, y)).toBe(TILE.AIR);
+          expect(t).toBe(TILE.SOLID);
+          // チャンク境界をまたいでも、単体の tileAt と同じ答え
+          expect(tileAt(seed, x, y)).toBe(TILE.SOLID);
+          // 形: 足元が床、段の上 2 タイルが空気、どちらかの隣がちょうど 2 タイル上がる
+          expect(composedTileAt(seed, x, y + 1)).toBe(TILE.SOLID);
+          expect(composedTileAt(seed, x, y - 1)).toBe(TILE.AIR);
+          expect(composedTileAt(seed, x, y - 2)).toBe(TILE.AIR);
+          const riseAt = (n: number) => [1, 0, -1].every((dy) => composedTileAt(seed, n, y + dy) === TILE.SOLID)
+            && composedTileAt(seed, n, y - 2) === TILE.AIR && composedTileAt(seed, n, y - 3) === TILE.AIR;
+          expect(riseAt(x - 1) || riseAt(x + 1)).toBe(true);
+          // 保護構造の外
+          expect(interfaceTileAt(seed, x, y)).toBeNull();
+          expect(landmarkTileAt(seed, x, y)).toBeNull();
+          expect(restPointTileAt(seed, x, y)).toBeNull();
+          expect(groupLadderX(seed, x)).not.toBe(x);
+        }
+      }
+    }
+    // 素の躯体(柱・壁塊と床)の 2 タイル段差は珍しくないので、この範囲で 1 つも無ければ規則が効いていない
+    expect(stairs).toBeGreaterThan(0);
   });
 });
 
