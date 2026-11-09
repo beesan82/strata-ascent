@@ -135,7 +135,7 @@ describe('quantizeRgba', () => {
 
 describe('computePixelLayout', () => {
   it('uses the high-fidelity tile size and softer dither strength', () => {
-    expect(HIGH_FIDELITY_TILE_PX).toBe(12);
+    expect(HIGH_FIDELITY_TILE_PX).toBe(15);
     expect(DITHER_STRENGTH).toBe(8);
   });
 
@@ -144,6 +144,27 @@ describe('computePixelLayout', () => {
       bufW: 427,
       bufH: 240,
       scale: 3,
+    });
+  });
+
+  it('tile size 15 raises the buffer one scale step on wide screens only', () => {
+    // 1280×720(計測基準)では整数 scale が 3 のまま寸法不変 = フレームコスト不変。
+    // 解像度が上がるのは scale に余裕のある広い画面(1920: 384×216 → 480×270、
+    // iPhone 横持ち物理 2556×1179: 426×197 → 511×236)。2026-11-09 のスパイク裁定。
+    expect(computePixelLayout(1280, 720, 34, 15)).toEqual({
+      bufW: 427,
+      bufH: 240,
+      scale: 3,
+    });
+    expect(computePixelLayout(1920, 1080, 34, 15)).toEqual({
+      bufW: 480,
+      bufH: 270,
+      scale: 4,
+    });
+    expect(computePixelLayout(2556, 1179, 34, 15)).toEqual({
+      bufW: 511,
+      bufH: 236,
+      scale: 5,
     });
   });
 

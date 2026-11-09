@@ -352,3 +352,74 @@ export const BOSS_DOWN_GAIN = 0.5;
 export const BOSS_DOWN_NOISE_SECONDS = 0.5;
 export const BOSS_DOWN_NOISE_GAIN = 0.35;
 export const BOSS_DOWN_NOISE_HZ = 700;
+
+/**
+ * 音質改善(ハイブリッド方式、2026-11-08)。CC0 サンプル(assets/audio、CREDITS.md が
+ * 台帳)と多層合成で全音を作り直すための基盤パラメータ。調整はこの節の定数と
+ * 純粋関数だけで行う。
+ */
+
+/** マスター段のコンプレッサ: 全音を master → compressor → destination に通してピークを揃える */
+export const COMP_THRESHOLD_DB = -18;
+export const COMP_KNEE_DB = 18;
+export const COMP_RATIO = 4;
+export const COMP_ATTACK = 0.004;
+export const COMP_RELEASE = 0.18;
+
+/**
+ * 決定論のバリエーション選択: index を count で割った余り(負数も 0 側へ丸める)。
+ * 足音・命中・梯子の素材ローテーションに使う。乱数は使わない。
+ */
+export function pickVariant(index: number, count: number): number {
+  if (count <= 0) return 0;
+  return ((index % count) + count) % count;
+}
+
+/**
+ * サンプル再生レートの決定論ばらし: 発射・歩行などの index から ±spread の倍率を
+ * 返す。pulseDetune と同じ黄金角の sin で、周期が発火間隔と共鳴しないようにする。
+ */
+export function sampleRate(base: number, index: number, spread: number): number {
+  return base * (1 + spread * Math.sin(index * 2.399963229728653));
+}
+
+/** 破砕音のサンプル層(mining)のゲイン: 破壊数への追従は crushParams と同じ対数圧縮を共有する */
+export function crushSampleGain(brokenTiles: number): number {
+  const k = clamp01(Math.log1p(Math.max(0, brokenTiles)) / Math.log1p(CRUSH_MAX_TILES));
+  return 0.25 + 0.55 * k;
+}
+
+/** 破砕が大きいときだけ explosionCrunch の層を足す敷居(タイル数) */
+export const CRUSH_BIG_TILES = 120;
+
+/**
+ * ドローンへのエンジン音ループ(spaceEngineLow 由来)の重ね量。機械系の層だけに薄く敷き、
+ * 水域・生体系は生成音のみにする。継ぎ目が目立つ場合の切り分けもこの表で行う。
+ */
+export const ENGINE_LAYER_TABLE: Record<BiomeId, number> = {
+  coldSteel: 0.16,
+  habitation: 0.1,
+  disposal: 0.12,
+  waterVoid: 0,
+  power: 0.2,
+  foundry: 0.18,
+  biomech: 0,
+};
+
+export function engineLayerGain(id: BiomeId): number {
+  return ENGINE_LAYER_TABLE[id];
+}
+
+/** パルスのサンプル層と合成層の配分(サンプル主体、合成は細い芯) */
+export const PULSE_SAMPLE_GAIN = 0.5;
+export const PULSE_SAMPLE_RATE = 1.15;
+export const PULSE_SAMPLE_SPREAD = 0.05;
+export const PULSE_SYNTH_GAIN = 0.07;
+
+/** 命中音の FM 金属ティック: キャリア比と変調指数(金属らしさ) */
+export const HIT_FM_RATIO = 3.51;
+export const HIT_FM_INDEX = 220;
+export const HIT_FM_GAIN = 0.05;
+
+/** ジングル・取得などサンプル系の残響送り(空間の統一感のため、原則 wet を持たせる) */
+export const SAMPLE_WET = 0.5;

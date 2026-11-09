@@ -8,6 +8,7 @@ import {
   MASTER_DB, nearestPlateDistance, PULSE_DETUNE, pulseDetune, REVERB_BUCKETS, REVERB_MAX, REVERB_MIN, reverbBucket, reverbSeconds, reverbSecondsForBucket,
   LAND_GAIN_MAX, LAND_MIN_VY, landGain, LADDER_RUNG_STEP, rungCrossed,
   MILESTONE_NOTES, NEW_RECORD_NOTES, PICKUP_NOTES, pickupNotes,
+  crushSampleGain, engineLayerGain, pickVariant, sampleRate,
 } from './params';
 
 describe('audio params', () => {
@@ -159,5 +160,46 @@ describe('audio params', () => {
     }
     expect(NEW_RECORD_NOTES[NEW_RECORD_NOTES.length - 1])
       .toBeGreaterThan(MILESTONE_NOTES[MILESTONE_NOTES.length - 1]);
+  });
+  it('バリエーション選択は決定論の剰余で、負数でも範囲内に落ちる', () => {
+    expect(pickVariant(0, 5)).toBe(0);
+    expect(pickVariant(7, 5)).toBe(2);
+    expect(pickVariant(-1, 5)).toBe(4);
+    expect(pickVariant(3, 0)).toBe(0);
+    for (let i = -20; i < 20; i++) {
+      const v = pickVariant(i, 3);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThan(3);
+    }
+  });
+  it('サンプルレートのばらしは ±spread に収まり、index で変わる', () => {
+    for (let i = 0; i < 40; i++) {
+      const r = sampleRate(1.15, i, 0.05);
+      expect(r).toBeGreaterThanOrEqual(1.15 * 0.95);
+      expect(r).toBeLessThanOrEqual(1.15 * 1.05);
+    }
+    expect(sampleRate(1, 1, 0.05)).not.toBe(sampleRate(1, 2, 0.05));
+    expect(sampleRate(2, 0, 0)).toBe(2);
+  });
+  it('破砕のサンプル層ゲインは破壊数で単調に増え、上下限に収まる', () => {
+    expect(crushSampleGain(0)).toBeCloseTo(0.25, 10);
+    expect(crushSampleGain(CRUSH_MAX_TILES)).toBeCloseTo(0.8, 10);
+    let prev = -1;
+    for (const n of [0, 1, 10, 60, 120, 300, 600, 5000]) {
+      const g = crushSampleGain(n);
+      expect(g).toBeGreaterThanOrEqual(prev);
+      prev = g;
+    }
+    expect(crushSampleGain(-5)).toBeCloseTo(0.25, 10);
+  });
+  it('エンジン音の重ね量は機械系の層だけにあり、水域・生体系は 0', () => {
+    for (const id of BIOME_IDS) {
+      const g = engineLayerGain(id);
+      expect(g).toBeGreaterThanOrEqual(0);
+      expect(g).toBeLessThanOrEqual(0.25);
+    }
+    expect(engineLayerGain('waterVoid')).toBe(0);
+    expect(engineLayerGain('biomech')).toBe(0);
+    expect(engineLayerGain('power')).toBeGreaterThan(0);
   });
 });
