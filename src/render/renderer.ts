@@ -34,6 +34,7 @@ import { HIGH_FIDELITY_TILE_PX, PixelPipeline } from './pixel';
 import { paletteRgb } from './palette';
 import { nextBakeTask } from './bakeSchedule';
 import { poseMotionOf, type Vec2 } from './playerPose';
+import { drawInfra, type InfraFx } from './infraSprite';
 
 /** 画面の横幅に収めるタイル数(スケール感の基準) */
 const VIEW_TILES_X = 34;
@@ -116,6 +117,8 @@ export interface GravitonFx {
   drops?: readonly { x: number; y: number; kind: DropKind; hidden: boolean }[];
   /** 補給キャッシュと武器庫(ワールド座標の中心)。未開封のものだけ渡す。armory は弾薬のクレートとして描く */
   caches?: readonly { x: number; y: number; armory?: boolean }[];
+  /** インフラ(設計 2026-11-10-infrastructure): レール・昇降機の足場・トラム・建設者・端末。形は render/infraSprite */
+  infra?: InfraFx;
 }
 
 /**
@@ -568,6 +571,12 @@ export class Renderer {
         const sy = Math.round((p.y - renderCam.y) * ppt + h / 2);
         drawShot(ctx, sx, sy, shotShape(p.dx, p.dy, ppt), '#9a6d32', '#caa64a');
       }
+    }
+
+    // インフラ(設計 2026-11-10-infrastructure): 同じ fx 相乗りで平坦色の矩形だけ(新規パスなし、lighter なし)。
+    // 敵・ドロップより奥に置くため、敵の前に描く
+    if (fx.infra) {
+      drawInfra(ctx, { camX: renderCam.x, camY: renderCam.y, w, h, ppt }, fx.infra, timeSec);
     }
 
     // 敵: 同じ fx 相乗りで、世界の面構成の文法(胴の面・暗い下部・目の灯)に揃える(新規パスなし)。

@@ -6,6 +6,7 @@ import { ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceTileAt, pass
 import { grandHallAt, hallChimneyAt, hallChimneyForHall, type GrandHall } from './grandhall';
 import { landmarkTileAt } from './landmark';
 import { restPointTileAt } from './restpoint';
+import { elevatorTileAt } from './elevator';
 import { terrainProfileFor } from './biomeTerrain';
 import { hash2, valueNoise2 } from './noise';
 import { CHUNK_SIZE, isSolid, TILE, type Tile } from './tiles';
@@ -97,7 +98,8 @@ function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: T
 /**
  * 最終タイル。優先順位(設計書 §5.6):
  *   HARD(界面の板・塔・崩落斜路) > 孔(LADDER/AIR)・見晴らし台・大穴 > 前室の強制空洞 > 休憩点 >
- *   ノイズ LADDER 保持 > メガ施設・施設・幹線オーバーレイ > 躯体(地形変調込みのノイズ)。
+ *   ノイズ LADDER 保持 > 昇降機のシャフト(オーバーレイの梯子は残す) > メガ施設・施設・幹線オーバーレイ >
+ *   躯体(地形変調込みのノイズ)。
  * 大構造は板の HARD にだけ勝つ(塔の縦坑が板を貫き、崩落が板を裂け目と斜路に置き換える)。
  * 孔・見晴らし台・大穴(LADDER/AIR)は大構造に勝つ(塔が板の下の見晴らし台の上に立っても塞がない)。
  * 不変条件: ノイズが LADDER のタイルは施設で上書きしない(上昇路を保持し到達可能性を守る)。
@@ -152,6 +154,11 @@ function composeTile(seed: number, x: number, y: number): Tile {
     ?? facilityTileAt(seed, x, y)
     ?? sectorTrunkTileAt(seed, x, y)
     ?? networkTileAt(seed, x, y);
+  // 昇降機のシャフト(設計 2026-11-10-infrastructure §1)。休憩点と同じく施設・幹線のオーバーレイより優先するが、
+  // オーバーレイの梯子(施設の縦の上昇路)は壁・乗り場の中でも残す。ノイズの梯子列は上で既に返している。
+  // 大広間・大構造・メガ施設・前室とは配置の段階で重ならない
+  const elev = elevatorTileAt(seed, x, y, cell);
+  if (elev !== null) return overlay === TILE.LADDER ? TILE.LADDER : elev;
   if (overlay != null) return overlay;
   composedPlain = !carved;
   return base;

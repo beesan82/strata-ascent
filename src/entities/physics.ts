@@ -84,6 +84,54 @@ function collidesSweptY(
   );
 }
 
+/** tryDisplace の結果。body は書き換えず、移動先の左上と「阻まれたか」だけを返す */
+export interface Displacement {
+  x: number;
+  y: number;
+  /** どちらかの軸で地形に阻まれ、意図した変位の全部は適用できなかった */
+  blocked: boolean;
+}
+
+/**
+ * 外から与える変位 (dx, dy) を、軸別(X → Y)に地形衝突つきで試す(運ぶ物理、設計 2026-11-10-infrastructure
+ * §共通の芯)。阻まれた軸は 1/16 刻みで当たる手前まで進め、意図した変位を超えては進めない。
+ * 開始位置が既に固体と重なっているときは動かさない(moveBody の埋まり開始ガードと同じ扱い)。
+ * 純粋関数で body は書き換えない。速度・接地フラグも触らない(適用は呼び出し側)
+ */
+export function tryDisplace(body: Body, dx: number, dy: number, tiles: TileLookup): Displacement {
+  const { w, h } = body;
+  let x = body.x;
+  let y = body.y;
+  if (dx === 0 && dy === 0) return { x, y, blocked: false };
+  if (collides(tiles, x, y, w, h)) return { x, y, blocked: true };
+  let blocked = false;
+  if (dx !== 0) {
+    const nx = x + dx;
+    if (collidesSweptX(tiles, x, nx, y, w, h)) {
+      const step = Math.sign(dx) * STEP;
+      let px = x;
+      while (Math.abs(px + step - x) <= Math.abs(dx) + EPS && !collides(tiles, px + step, y, w, h)) px += step;
+      x = px;
+      blocked = true;
+    } else {
+      x = nx;
+    }
+  }
+  if (dy !== 0) {
+    const ny = y + dy;
+    if (collidesSweptY(tiles, x, y, ny, w, h)) {
+      const step = Math.sign(dy) * STEP;
+      let py = y;
+      while (Math.abs(py + step - y) <= Math.abs(dy) + EPS && !collides(tiles, x, py + step, w, h)) py += step;
+      y = py;
+      blocked = true;
+    } else {
+      y = ny;
+    }
+  }
+  return { x, y, blocked };
+}
+
 // ---- 崖つかみ(設計 2026-11-09-ledge-grab §掴まりの成立) ----
 
 /** 手が届く範囲: 体上端からこの距離だけ下まで(タイル) */
