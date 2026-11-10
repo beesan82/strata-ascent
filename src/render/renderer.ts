@@ -22,6 +22,7 @@ import { Post } from './post';
 import { drawHierarchyDebug } from './debugHierarchy';
 import { drawBeam, drawCharge, drawChargeGlow } from './beam';
 import { debrisFragments } from './beamShape';
+import { KILL_FLASH_COLOR, killFlash, killFragments, killRing, killShake, type KillBurst } from './killFx';
 import { shotShape, type ShotShape } from './shotShape';
 import { MegaStructure } from './megastructure';
 import { LightShafts } from './lightshaft';
@@ -96,6 +97,8 @@ export interface GravitonFx {
   push?: BeamPush | null;
   /** 破片の発生点(掘削点・命中点)。fx 相乗りで小矩形だけを描く */
   debris?: readonly DebrisFx[];
+  /** 撃破エフェクト(破片バースト・閃光・輪、ボスは画面シェイクも)。形は render/killFx が決める */
+  kills?: readonly KillBurst[];
   /** パルスの弾(ワールド座標の中心と方向)。平坦色の短矩形で描く */
   pulses?: readonly { x: number; y: number; dx: number; dy: number }[];
   /** パルスの敵弾(固定砲台の弾、ワールド座標の中心と単位方向)。熱色系で描く */
@@ -370,6 +373,22 @@ export class Renderer {
         ctx.translate(pushX, pushY);
       }
     }
+    // ボス撃破の画面シェイク(設計 2026-11-10 armory-stability-kill-fx §2): 押しと同じ平行移動へ足す。
+    // 向きは撃破キーと経過秒の決定論ハッシュ(Math.random は使わない)。振幅は押しと合わせても SKY_PAD 以下
+    if (fx.kills && fx.kills.length > 0) {
+      let shakeX = 0;
+      let shakeY = 0;
+      for (const k of fx.kills) {
+        const v = killShake(k.kind, k.key, k.age);
+        shakeX += v.x;
+        shakeY += v.y;
+      }
+      if (shakeX !== 0 || shakeY !== 0) {
+        ctx.translate(shakeX, shakeY);
+        pushX += shakeX;
+        pushY += shakeY;
+      }
+    }
 
     // バイオーム混合(背景・環境光で共有)
     const bb = biomeBlend(this.seed, player.centerX, player.body.y);
@@ -491,6 +510,42 @@ export class Renderer {
           ctx.globalAlpha = f.alpha;
           ctx.fillStyle = f.color;
           ctx.fillRect(Math.round(sx - s / 2), Math.round(sy - s / 2), s, s);
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // 撃破エフェクト(設計 2026-11-10 armory-stability-kill-fx §2): 同じ fx 相乗りで平坦色の小矩形だけ
+    // (新規パスなし、lighter なし)。破片 → 広がる輪 → 中心の閃光(十字)の順に重ねる
+    if (fx.kills && fx.kills.length > 0) {
+      for (const k of fx.kills) {
+        const cx = (k.x - renderCam.x) * ppt + w / 2;
+        const cy = (k.y - renderCam.y) * ppt + h / 2;
+        for (const f of killFragments(k.kind, k.key, k.age)) {
+          const s = Math.max(1, Math.round(f.size * ppt));
+          ctx.globalAlpha = f.alpha;
+          ctx.fillStyle = f.color;
+          ctx.fillRect(Math.round(cx + f.dx * ppt - s / 2), Math.round(cy + f.dy * ppt - s / 2), s, s);
+        }
+        const ring = killRing(k.kind, k.key, k.age);
+        if (ring) {
+          const s = Math.max(1, Math.round(ring.thick * ppt));
+          ctx.globalAlpha = ring.alpha;
+          ctx.fillStyle = ring.color;
+          for (const p of ring.points) {
+            ctx.fillRect(Math.round(cx + p.dx * ppt - s / 2), Math.round(cy + p.dy * ppt - s / 2), s, s);
+          }
+        }
+        const flash = killFlash(k.kind, k.age);
+        if (flash) {
+          const s = Math.max(2, Math.round(flash.size * ppt));
+          const arm = Math.max(s + 2, Math.round(flash.size * 1.8 * ppt));
+          const thin = Math.max(1, Math.round(s * 0.25));
+          ctx.globalAlpha = flash.alpha;
+          ctx.fillStyle = KILL_FLASH_COLOR;
+          ctx.fillRect(Math.round(cx - s / 2), Math.round(cy - s / 2), s, s);
+          ctx.fillRect(Math.round(cx - arm / 2), Math.round(cy - thin / 2), arm, thin);
+          ctx.fillRect(Math.round(cx - thin / 2), Math.round(cy - arm / 2), thin, arm);
         }
       }
       ctx.globalAlpha = 1;

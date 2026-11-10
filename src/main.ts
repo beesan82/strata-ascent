@@ -14,6 +14,7 @@ import {
   ARMORY_CONTENTS,
   chooseArmories,
   chooseSupplyCaches,
+  holdSpot,
   restStockSecondFor,
   supplyFor,
   type SupplyCache,
@@ -30,6 +31,7 @@ import { biomeCellAt } from './world/biomeCells';
 import { towerTopFloorAt } from './world/landmark';
 import { CHUNK_SIZE, TILE } from './world/tiles';
 import { DEBRIS_TTL } from './render/beamShape';
+import { addKillBurst, advanceKillBursts, killKey, type KillBurst, type KillKind } from './render/killFx';
 import { poseMotionOf, poseMuzzleWorld } from './render/playerPose';
 import { findSpawn, isHardAt } from './world/worldgen';
 import { sampleOpenness, targetZoomForOpenness, nextZoomStep, advanceZoom } from './core/zoom';
@@ -221,20 +223,22 @@ let prevInRestBox = false;
 /**
  * 敵 1 体の撃破処理: 記録保持への登録と、ドロップ抽選を 1 回だけ行う。
  * 地区は撃破位置のセルで決める。ドロップは敵の中心から落下する。
+ * 撃破エフェクト(設計 2026-11-10 §2)も種別 kind の色と量でここから出す(演出だけ。数値・ドロップは変えない)。
  */
-function onEnemyKilled(spawnId: string, centerX: number, centerY: number): void {
+function onEnemyKilled(spawnId: string, centerX: number, centerY: number, kind: KillKind): void {
   audio.enemyDown(); // 撃破音(§6.7): パルスでもビームでも撃破処理はここに集約される
+  pushKillFx(kind, spawnId, centerX, centerY);
   recordDefeated(spawnId);
   const biomeId = biomeIdForCell(seed, biomeCellAt(seed, Math.floor(centerY)));
-  const kind = dropFor(seed, spawnId, killCount, biomeId);
+  const dropKind = dropFor(seed, spawnId, killCount, biomeId);
   killCount++;
-  if (!kind) return;
+  if (!dropKind) return;
   // 糧食は「後で戻って使う」判断が要るため、発生源によらず補給品として残す(サバイバル設計 §5)。
   // 素材セル(段階 A)と貴重品(段階 3-B)も同じく補給品(寿命なし)。地面の上限は pushSupply の種別上限で抑える
-  if (kind === 'ration' || kind === 'material' || kind === 'valuable') {
-    pushSupply(drops, new DropItem(kind, centerX, centerY, true));
+  if (dropKind === 'ration' || dropKind === 'material' || dropKind === 'valuable') {
+    pushSupply(drops, new DropItem(dropKind, centerX, centerY, true));
   }
-  else pushDrop(drops, new DropItem(kind, centerX, centerY));
+  else pushDrop(drops, new DropItem(dropKind, centerX, centerY));
 }
 
 /**
@@ -247,6 +251,7 @@ function onEnemyKilled(spawnId: string, centerX: number, centerY: number): void 
  */
 function onBossKilled(spawnId: string, b: Boss): void {
   audio.bossDown(); // ボス撃破音(§6.7): 通常の撃破音より長く重い
+  pushKillFx('boss', spawnId, b.centerX, b.centerY); // 大きめのバースト＋画面シェイク(設計 2026-11-10 §2)
   recordDefeated(spawnId);
   killCount++;
   // 構成の並び順に対応(中心=回復、左=砲弾、右=糧食、中心と右の間=貴重品)
@@ -363,16 +368,21 @@ function refreshEnemies(): void {
     boss = null;
   }
   // 補給キャッシュ(サバイバル §6): 同じ床ラン・保護点へ相乗りし、近傍に最大 1 個。
-  // 開封済みは選定後の減算で差し引く(開封した候補の代わりは繰り上がらない)
+  // 開封済みは選定後の減算で差し引く(開封した候補の代わりは繰り上がらない)。
+  // 選択は粘着(設計 2026-11-10 armory-stability §1): 前回の選択が未開封で保持半径内なら、
+  // 窓の境界をまたいで候補から外れても維持する(箱が跳んだり消えたりして見えるのを防ぐ)
   const caches = chooseSupplyCaches(seed, runs, protectedPoints, halls, claimedSupplyCaches);
-  supplyCache = caches[0] ?? null;
+  supplyCache = holdSpot(supplyCache, caches, player.centerX, player.centerY, claimedSupplyCaches);
   // 武器庫(弾薬設計 §2): キャッシュと同じ床ラン・保護点・広間除外に相乗りする別種の選定。
   // 密度は地区倍率で変わる。キャッシュと同じ場所に重ならないよう、キャッシュの位置も保護点に加える
   const armoryGuard = supplyCache
     ? [...protectedPoints, { x: supplyCache.x, y: supplyCache.floorY, r: 2 }]
     : protectedPoints;
   const armories = chooseArmories(seed, runs, armoryGuard, halls, biomeId, claimedArmories);
-  armory = armories[0] ?? null;
+  // 保持中の武器庫が選び直されたキャッシュと重なる(保護点と同じ r 2 の内側)ときだけは保持しない
+  const armoryOverlapsCache = armory !== null && supplyCache !== null &&
+    Math.max(Math.abs(armory.x - supplyCache.x), Math.abs(armory.floorY - supplyCache.floorY)) <= 2;
+  armory = holdSpot(armoryOverlapsCache ? null : armory, armories, player.centerX, player.centerY, claimedArmories);
 }
 // デバッグ/スクリーンショット用: ?x=&y= でスポーン位置を上書き(埋まり座標は自己責任)
 const qx = params.get('x');
@@ -637,6 +647,14 @@ function pushDebris(x: number, y: number, angle: number): void {
   }
 }
 
+// 撃破エフェクト(演出、設計 2026-11-10 armory-stability-kill-fx §2)。形・色・シェイクは render/killFx が
+// 種別・撃破キー・経過秒から決める。キーは実体のスポーン ID と撃破時刻の決定論ハッシュ
+let killBursts: KillBurst[] = [];
+
+function pushKillFx(kind: KillKind, spawnId: string, x: number, y: number): void {
+  killBursts = addKillBurst(killBursts, { x, y, kind, key: killKey(spawnId, simTime), age: 0 });
+}
+
 /**
  * 発射方向で最初に地形へ触れる点(掘削点)。破壊の適用前に呼ぶこと。
  * 未生成チャンクは生成せず、そこまで届かなければ null(破片は出さない)。
@@ -721,11 +739,11 @@ function applyBeamToEnemies(angle: number): void {
     }
   }
   if (anyKill) hapticEnemyDown();
-  for (const e of enemies) if (e.walker.dead) onEnemyKilled(e.spawnId, e.walker.centerX, e.walker.centerY);
+  for (const e of enemies) if (e.walker.dead) onEnemyKilled(e.spawnId, e.walker.centerX, e.walker.centerY, 'walker');
   enemies = enemies.filter((e) => !e.walker.dead);
-  for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY);
+  for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY, 'flyer');
   flyers = flyers.filter((e) => !e.flyer.dead);
-  for (const e of turrets) if (e.turret.dead) onEnemyKilled(e.spawnId, e.turret.centerX, e.turret.centerY);
+  for (const e of turrets) if (e.turret.dead) onEnemyKilled(e.spawnId, e.turret.centerX, e.turret.centerY, 'turret');
   turrets = turrets.filter((e) => !e.turret.dead);
   if (boss && beamHit(ox, oy, angle, boss.boss.centerX, boss.boss.centerY, halfDiag(BOSS_W, BOSS_H))) {
     pushDebris(boss.boss.centerX, boss.boss.centerY, angle); // 命中点の破片(撃破でなくても出す)
@@ -1094,11 +1112,11 @@ function update(dt: number): void {
     if (spent.size > 0) pulseGun.pulses = pulseGun.pulses.filter((p) => !spent.has(p));
     // 撃破を記録してから実体を捨てる(記録保持 §4: 倒した敵は再出現しない)。
     // 記録と同時にドロップ抽選も 1 回だけ行う(§3)
-    for (const e of enemies) if (e.walker.dead) onEnemyKilled(e.spawnId, e.walker.centerX, e.walker.centerY);
+    for (const e of enemies) if (e.walker.dead) onEnemyKilled(e.spawnId, e.walker.centerX, e.walker.centerY, 'walker');
     enemies = enemies.filter((e) => !e.walker.dead);
-    for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY);
+    for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY, 'flyer');
     flyers = flyers.filter((e) => !e.flyer.dead);
-    for (const e of turrets) if (e.turret.dead) onEnemyKilled(e.spawnId, e.turret.centerX, e.turret.centerY);
+    for (const e of turrets) if (e.turret.dead) onEnemyKilled(e.spawnId, e.turret.centerX, e.turret.centerY, 'turret');
     turrets = turrets.filter((e) => !e.turret.dead);
     if (boss && boss.boss.dead) {
       onBossKilled(boss.spawnId, boss.boss);
@@ -1226,6 +1244,7 @@ function update(dt: number): void {
     for (const b of debrisBursts) b.ttl -= dt;
     debrisBursts = debrisBursts.filter((b) => b.ttl > 0);
   }
+  if (killBursts.length > 0) killBursts = advanceKillBursts(killBursts, dt);
 
   frames++;
   if (frames % EVICT_INTERVAL_FRAMES === 0) {
@@ -1353,6 +1372,7 @@ function frame(now: number): void {
     debris: debrisBursts.map((b) => ({
       x: b.x, y: b.y, angle: b.angle, key: b.key, age: DEBRIS_TTL - b.ttl,
     })),
+    kills: killBursts,
     pulses: pulseGun.pulses.map((p) => ({
       x: p.body.x + PULSE_SIZE / 2,
       y: p.body.y + PULSE_SIZE / 2,
