@@ -66,6 +66,42 @@ export function chooseSupplyCaches(
   return [best];
 }
 
+/**
+ * 選定の粘着の保持半径(タイル、設計 2026-11-10 armory-stability §1)。敵スキャンの窓
+ * (横 ±40・縦 ±24)より広くし、窓の境界をまたいだだけでは手放さないようにする。
+ */
+export const SPOT_HOLD_RADIUS = 48;
+
+/**
+ * キャッシュ・武器庫の粘着選定(設計 2026-11-10 armory-stability §1)。
+ * 前回の選択が未開封で、プレイヤーから保持半径以内にあれば、今回の候補に入っていなくても
+ * レコードごと維持する。維持できないときだけ候補から最寄り(ユークリッド距離)を選ぶ。
+ * 距離が同じなら候補の並び順で先のもの。候補が空なら null。開封済みの候補は選ばない
+ * (候補は選定側で開封済みを差し引いているが、念のためここでも除く)。
+ */
+export function holdSpot(
+  prev: SupplyCache | null,
+  candidates: readonly SupplyCache[],
+  px: number,
+  py: number,
+  claimed?: ReadonlySet<string>,
+  radius: number = SPOT_HOLD_RADIUS,
+): SupplyCache | null {
+  const dist = (s: SupplyCache) => Math.hypot(s.x - px, s.floorY - py);
+  if (prev && !(claimed && claimed.has(prev.id)) && dist(prev) <= radius) return prev;
+  let best: SupplyCache | null = null;
+  let bestD = Infinity;
+  for (const c of candidates) {
+    if (claimed && claimed.has(c.id)) continue;
+    const d = dist(c);
+    if (d < bestD) {
+      bestD = d;
+      best = c;
+    }
+  }
+  return best;
+}
+
 export interface SupplyTable {
   ration: number;
   heal: number;
