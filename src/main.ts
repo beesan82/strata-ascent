@@ -122,8 +122,17 @@ import {
   milestoneCaptionText,
   newRecordCaptionText,
   saveBestLayer,
-  type LayerStorage,
 } from './core/records';
+import {
+  chooseResumePoint,
+  clearSave,
+  loadSave,
+  serializeSave,
+  writeSave,
+  type SaveData,
+  type SavePoint,
+  type SaveStorage,
+} from './core/save';
 import { autoViewStarted, initialView, viewState, type ViewState } from './core/view';
 import { Caption, captionText, TERMINAL_CAPTION_HOLD_SECONDS } from './render/caption';
 import { AudioEngine } from './audio/engine';
@@ -206,7 +215,7 @@ const ENEMY_SCAN_Y = 24;
 /**
  * 撃破済みスポーン ID のセッション内記録(第2弾 §4)。倒した敵は二度と出ない。
  * プレイヤーの死亡でもリセットしない(破壊した地形の保持と揃える)。
- * セッション跨ぎは保持しない(セーブ機構が無い現行の前提)。
+ * 永続化(設計 2026-11-11-persistence)で保存に含め、再開時に戻す(出現集合の再計算で除外される)。
  */
 const defeatedEnemies = new Set<string>();
 /** 記録の安全弁: 数百体規模が前提だが、際限なく伸びないよう古い順に落とす */
@@ -244,13 +253,13 @@ let ladderTravel = 0;
 /** 崖つかみの遷移検出用(段階 2): 前フレームに掴まっていたか */
 let prevHanging = false;
 
-/** 開封済み補給キャッシュの ID(セッション内のみ。死亡でも戻らない) */
+/** 開封済み補給キャッシュの ID(死亡でも戻らない。保存して再開時に戻す) */
 const claimedSupplyCaches = new Set<string>();
-/** 備蓄を開けた休憩点の ID(セッション内のみ) */
+/** 備蓄を開けた休憩点の ID(保存して再開時に戻す) */
 const claimedRestStocks = new Set<string>();
 /** 現在有効な補給キャッシュ(敵スキャンに相乗りして更新する。近傍に最大 1 個) */
 let supplyCache: SupplyCache | null = null;
-/** 開封済み武器庫の ID(セッション内のみ。死亡でも戻らない。弾薬設計 §2) */
+/** 開封済み武器庫の ID(死亡でも戻らない。弾薬設計 §2。保存して再開時に戻す) */
 const claimedArmories = new Set<string>();
 /** 現在有効な武器庫(キャッシュと同じスキャンに相乗りする別種のスポット。近傍に最大 1 個) */
 let armory: SupplyCache | null = null;
@@ -271,7 +280,7 @@ let ridingId: string | null = null;
 let builder: { spawnId: string; builder: Builder } | null = null;
 /** 建設者をそのまま保つ距離(タイル)。これより離れたら選び直す */
 const BUILDER_HOLD_RADIUS = 64;
-/** 近傍の端末(最大 1 基)と、このセッションで読んだ端末の ID(同じ端末は再表示しない。永続化しない) */
+/** 近傍の端末(最大 1 基)と、読んだ端末の ID(同じ端末は再表示しない。保存して再開時に戻す) */
 let terminal: SupplyCache | null = null;
 const readTerminals = new Set<string>();
 
@@ -541,14 +550,119 @@ function resolvePlatforms(prevBottom: number): void {
 // デバッグ/スクリーンショット用: ?x=&y= でスポーン位置を上書き(埋まり座標は自己責任)
 const qx = params.get('x');
 const qy = params.get('y');
-const spawn = qx !== null && qy !== null ? { x: Number(qx), y: Number(qy) } : findSpawn(seed);
+const positionOverride = qx !== null && qy !== null;
+const spawn = positionOverride ? { x: Number(qx), y: Number(qy) } : findSpawn(seed);
+/** localStorage の取得自体が例外になる環境があるため安全に取る(取れなければ記録・保存なしで続行する) */
+function safeLocalStorage(): SaveStorage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+/** 最深記録と永続化の保存先(同じ localStorage。キーは seed ごとに別) */
+const recordStorage = safeLocalStorage();
+/**
+ * 永続化(設計 2026-11-11-persistence)を使うか。?x=&y= の位置上書きと ?freeze=1 はデバッグ・計測用の
+ * セッションなので、保存を読まず書かない(スクリーンショットの再現性を保ち、本来の保存を汚さない)。
+ * 「さいしょから」で読み込み直す直前にも false にする(閉じ際の保存で消した保存を書き戻さないため)
+ */
+let persistenceEnabled = !positionOverride && !freezeSimulation;
 const player = new Player(spawn.x, spawn.y);
 /** 復活点(ボディ左上)。休憩点に触れるたびに更新される */
 let respawnPoint = { x: spawn.x, y: spawn.y };
 /** 最後に安定して接地していた場所(遺留品の落下先、サバイバル段階 3)。初期値はスポーン地点 */
 let groundAnchor: GroundAnchor = initialGroundAnchor(spawn.x, spawn.y);
-/** 遺留品の箇所(セッション内のみ、最大 2 箇所)。実体は drops 内の DropItem への参照で持つ */
+/** 遺留品の箇所(最大 2 箇所)。実体は drops 内の DropItem への参照で持つ。保存して再開時に戻す */
 let remainsSites: DropItem[][] = [];
+/** 再開位置の床の確認: 足元からこの距離だけ下げた体が地形に当たれば、床の上に立てる(接地の隙間は 1/16) */
+const RESUME_FLOOR_PROBE = 0.25;
+
+/**
+ * 保存からの再開(設計 §保存と再開)。位置は安定接地点 → 復活点 → 従来のスポーンの順に、地形と重ならず
+ * 足元に床がある最初の候補を使う(破壊した地形は保存しないので、掘った穴の中の位置は埋まっていることがある。
+ * 昇降機・トラムの上も床が無いので外れる)。保存の各項目は parseSave で検証済み。
+ * ここで例外が出ても起動は止めない(それまでに戻した分のまま続ける)。
+ * `tiles` はこの時点で未初期化(TDZ)なので store を直接引く。
+ */
+function restoreSave(save: SaveData): void {
+  try {
+    const lookup = (tx: number, ty: number) => store.tileAt(tx, ty);
+    const { w, h } = player.body;
+    const usable = (p: SavePoint) =>
+      !bodyOverlapsSolid(lookup, p.x, p.y, w, h) &&
+      bodyOverlapsSolid(lookup, p.x, p.y + RESUME_FLOOR_PROBE, w, h);
+    const start = chooseResumePoint([save.anchor, save.respawn], usable) ?? spawn;
+    player.body.x = start.x;
+    player.body.y = start.y;
+    groundAnchor = initialGroundAnchor(start.x, start.y);
+    // 復活点が使えない(埋まっている)ときは従来どおりスポーンを復活点にする
+    respawnPoint = chooseResumePoint([save.respawn], usable) ?? { x: spawn.x, y: spawn.y };
+    carry = save.carry;
+    pulseLoaded = save.pulseLoaded;
+    satiety = save.satiety;
+    satietyPrevLevel = satietyLevel(satiety.value);
+    for (const id of save.claimedSupplyCaches) claimedSupplyCaches.add(id);
+    for (const id of save.claimedArmories) claimedArmories.add(id);
+    for (const id of save.claimedRestStocks) claimedRestStocks.add(id);
+    for (const id of save.defeated) recordDefeated(id);
+    killCount = save.killCount;
+    for (const id of save.readTerminals) readTerminals.add(id);
+    // 遺留品: 保存した中心位置に補給品として置き直し、箇所の並び(古い順)も戻す
+    for (const site of save.remains) {
+      const items = site.map((it) => new DropItem(it.kind, it.x, it.y, true));
+      for (const item of items) pushSupply(drops, item);
+      remainsSites.push(items);
+    }
+  } catch {
+    // 起動は止めない
+  }
+}
+if (persistenceEnabled) {
+  const saved = loadSave(recordStorage, seed);
+  if (saved) restoreSave(saved);
+}
+
+/** 保存する状態を今の値から組み立てる。遺留品は回収・消滅していない物だけを箇所ごとに持つ */
+function snapshotSave(): SaveData {
+  const present = new Set(drops);
+  return {
+    anchor: { x: groundAnchor.x, y: groundAnchor.y },
+    respawn: { x: respawnPoint.x, y: respawnPoint.y },
+    carry,
+    pulseLoaded,
+    satiety,
+    claimedSupplyCaches: [...claimedSupplyCaches],
+    claimedArmories: [...claimedArmories],
+    claimedRestStocks: [...claimedRestStocks],
+    defeated: [...defeatedEnemies],
+    killCount,
+    remains: remainsSites
+      .map((site) => site.filter((d) => present.has(d)).map((d) => ({ kind: d.kind, x: d.centerX, y: d.centerY })))
+      .filter((site) => site.length > 0),
+    readTerminals: [...readTerminals],
+  };
+}
+
+/** 最後に書いた保存文字列(同じなら書かない。変更の検知はこの比較で行う) */
+let lastSavedText: string | null = null;
+/** 保存の間隔(ミリ秒)。変わっていれば数秒おきにまとめて書く */
+const SAVE_INTERVAL_MS = 3000;
+
+/**
+ * 今の状態を保存する(変わっていなければ何もしない)。数秒おきのタイマー、画面が隠れたとき・ページを
+ * 閉じるとき、確保・開封などの節目から呼ぶ。保存の失敗(容量超過など)はゲームを止めない
+ */
+function saveNow(): void {
+  if (!persistenceEnabled) return;
+  const text = serializeSave(seed, snapshotSave());
+  if (text === lastSavedText) return;
+  if (writeSave(recordStorage, seed, text)) lastSavedText = text;
+}
+if (persistenceEnabled) {
+  window.setInterval(saveNow, SAVE_INTERVAL_MS);
+  window.addEventListener('pagehide', saveNow);
+}
 const camera = new Camera(player.centerX, player.centerY);
 const input = new Input();
 installTouchControls(input, () => toggleItemBox()); // タッチ端末でのみ画面ボタンが出る(それ以外は何もしない)。箱ボタンはアイテムボックスの開閉
@@ -574,7 +688,33 @@ const itemBoxCarryLabelEl = document.getElementById('itembox-carry-label')!;
 const itemBoxCarryEl = document.getElementById('itembox-carry')!;
 const itemBoxSecuredEl = document.getElementById('itembox-secured')!;
 const itemBoxNoteEl = document.getElementById('itembox-note')!;
+const itemBoxResetEl = document.getElementById('itembox-reset')!;
 let boxOpen = false;
+
+// 「さいしょから」(設計 2026-11-11-persistence §最初からやり直す): 1 回目で確認の状態になり、
+// 確認の状態でもう 1 回押すと保存を消して読み込み直す。箱を開け閉めすると確認の状態は解ける
+const RESET_LABEL = 'さいしょから';
+const RESET_CONFIRM_LABEL = 'もう一度押すと最初から（保存を消す）';
+let resetArmed = false;
+
+function setResetArmed(armed: boolean): void {
+  resetArmed = armed;
+  itemBoxResetEl.textContent = armed ? RESET_CONFIRM_LABEL : RESET_LABEL;
+  itemBoxResetEl.classList.toggle('confirm', armed);
+}
+
+itemBoxResetEl.addEventListener('click', () => {
+  // フォーカスを残すと Space(ジャンプ)や Enter で押されてしまうので外す
+  itemBoxResetEl.blur();
+  if (!resetArmed) {
+    setResetArmed(true);
+    return;
+  }
+  // 読み込み直しの pagehide / visibilitychange で今の状態を書き戻さないよう、先に保存を止める
+  persistenceEnabled = false;
+  clearSave(recordStorage, seed);
+  location.reload();
+});
 
 /** プレイヤーが休憩点の箱の中にいるか(update の確保判定と同じ式で、その場で判定する) */
 function isInRestBoxNow(): boolean {
@@ -710,9 +850,12 @@ function renderItemBox(): void {
 function setItemBox(open: boolean): void {
   boxOpen = open;
   itemBoxEl.hidden = !open;
+  setResetArmed(false);
   if (open) {
     graviton.cancelCharge(); // 開いた瞬間に砲の溜めは破棄する(設計 §開閉)
     renderItemBox();
+  } else {
+    saveNow(); // 箱での出し入れ(落とす・保管・引き出し)を閉じた時点で保存する
   }
 }
 
@@ -726,24 +869,21 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyB') toggleItemBox();
   else if (e.code === 'Escape' && boxOpen) setItemBox(false);
 });
-// タブを隠すと rAF が止まり updateAudio が来ないが、AudioContext は進み続けるので context ごと止める
+// タブを隠すと rAF が止まり updateAudio が来ないが、AudioContext は進み続けるので context ごと止める。
+// 隠れたときは保存もする(モバイルでは隠れたまま閉じられ、pagehide が来ないことがある)
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) audio.suspend();
-  else audio.resume();
+  if (document.hidden) {
+    audio.suspend();
+    saveNow();
+  } else {
+    audio.resume();
+  }
 });
 // 眺望(§6.4)の状態。純粋関数 viewState の出力(目標ズーム・中心オフセット)にカメラが追従する
-let view: ViewState = initialView(biomeCellAt(seed, Math.floor(spawn.y)));
-// HUD の階層(§6.5): 到達した最高階層。落下で下がっても減らない
-let maxLayer = layerNumber(seed, biomeCellAt(seed, Math.floor(spawn.y)));
-/** localStorage の取得自体が例外になる環境があるため安全に取る(取れなければ記録なしで続行する) */
-function safeLocalStorage(): LayerStorage | null {
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
-const recordStorage = safeLocalStorage();
+// 開始位置は保存からの再開位置のこともあるので、スポーンでなく今のプレイヤー位置から取る
+let view: ViewState = initialView(biomeCellAt(seed, Math.floor(player.body.y)));
+// HUD の階層(§6.5): 到達した最高階層。落下で下がっても減らない(セッション内。再開時は再開位置の階層から)
+let maxLayer = layerNumber(seed, biomeCellAt(seed, Math.floor(player.body.y)));
 /**
  * 最深到達の記録(v2.0 Task 7)。seed ごとに localStorage へ永続化され、HUD に併記される。
  * ここでの読み込みと updateHud での保存だけが役割で、ゲームの数値・生成・物理には影響しない。
@@ -1061,6 +1201,7 @@ function update(dt: number): void {
       if (nextRespawn.x !== respawnPoint.x || nextRespawn.y !== respawnPoint.y) {
         respawnPoint = nextRespawn;
         audio.respawnSet(); // 復活点が移ったときだけ鳴らす(§6.7)
+        saveNow(); // 節目の保存(設計 2026-11-11-persistence)
       }
       // 確保(エクストラクション段階 A): どの休憩点でも、箱に入った瞬間に携行中の素材と貴重品
       // (段階 3-B)を全て確保済みへ移す。
@@ -1074,6 +1215,7 @@ function update(dt: number): void {
           carry = secured.state;
           audio.secure();
           caption.show(secureCaptionText(secured.moved - secured.valuables, secured.valuables), simTime);
+          saveNow(); // 確保は節目としてその場で保存する
         }
       }
       // 休憩点の初回補給(サバイバル §7、弾薬設計 §3): 初めて入った休憩点だけ備蓄を開ける(セッション内のみ)。
@@ -1086,6 +1228,7 @@ function update(dt: number): void {
         pushSupply(drops, new DropItem('ration', rp.packX + 0.5, rp.floorY - 0.5, true));
         pushSupply(drops, new DropItem(restStockSecondFor(seed, restId, stockBiome), rp.packX - 1, rp.floorY - 0.5, true));
         audio.restStock(); // 初回補給の音(§6.7)
+        saveNow(); // 開封の節目
       }
     }
     prevInRestBox = inRestBox;
@@ -1320,6 +1463,7 @@ function update(dt: number): void {
       pushSupply(drops, new DropItem(supplyFor(seed, c.id, cacheBiome), c.x, c.floorY - 0.5, true));
       supplyCache = null;
       audio.cacheOpen(); // 開封音(§6.7)
+      saveNow(); // 開封の節目
     }
   }
 
@@ -1338,6 +1482,7 @@ function update(dt: number): void {
       });
       armory = null;
       audio.cacheOpen(); // 開封音はキャッシュと共用(§6.7)
+      saveNow(); // 開封の節目
     }
   }
 
@@ -1353,6 +1498,7 @@ function update(dt: number): void {
       readTerminals.add(t.id);
       caption.show(terminalTextFor(seed, t.id), simTime, TERMINAL_CAPTION_HOLD_SECONDS);
       audio.rechargeTick();
+      saveNow(); // 既読の節目
     }
   }
 
@@ -1405,6 +1551,9 @@ function update(dt: number): void {
     turretShots = []; // 砲台の弾も消す
     boss = null; // ボスも実体は捨てる(撃破済みなら記録により再出現しない)
     pulseGun.pulses = [];
+    // 死亡と復活の後の状態(携行のロスト・遺留品・復活点への移動)をその場で保存する。
+    // 遺留品はこの時点では落下中の位置で記録され、静止後の位置は数秒おきの保存で書き直される
+    saveNow();
   }
   updateAudio();
   if (lastBeam) {

@@ -34,6 +34,10 @@ npm run dev   # http://localhost:5173/
 | `?freeze=1` | シミュレーション停止(描画のみ) |
 | `?debug=hierarchy[:タイル数]` | 地域階層の俯瞰表示 |
 
+進行は seed ごとに localStorage へ保存され、次の起動では続きから再開する(最後の安定接地点、使えなければ復活点、それも駄目なら開始地点)。
+最初からやり直すにはアイテムボックスの「さいしょから」を 2 回押す(最深記録は残る)。
+`?x=&y=` と `?freeze=1` のセッションは保存を読まず書かない(スクリーンショット・計測用)。
+
 界面(階層の板)の座標は `src/world/interface.ts` の `passageX` / `interfaceTop` / `interfaceBottom` で求められる。
 開始地点は常に cell 0 の前室(孔の左 12 タイル)。
 
