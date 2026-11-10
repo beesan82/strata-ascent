@@ -149,8 +149,16 @@
     .ibox-chip.locked { cursor: default; opacity: 0.6; }
     .ibox-empty-note { color: #9aa4ad; font-size: 11px; }
     #itembox-note { color: #9aa4ad; font-size: 11px; margin-top: 9px; min-height: 14px; }
+    /* 「さいしょから」(設計 2026-11-11-persistence)。目立たせない控えめな枠で右下に置き、
+       1 回押した確認の状態だけ警告色にする */
+    .ibox-foot { display: flex; justify-content: flex-end; margin-top: 10px; }
+    #itembox-reset {
+      background: none; border: 1px solid rgba(200, 208, 214, 0.3); color: #9aa4ad;
+      font: 11px monospace; letter-spacing: 0.12em; padding: 5px 10px; cursor: pointer;
+    }
+    #itembox-reset.confirm { color: #d06a5a; border-color: rgba(208, 106, 90, 0.8); }
   </style>
-  <script type="module" crossorigin src="/strata-ascent/assets/index-CnH9NOpW.js"></script>
+  <script type="module" crossorigin src="/strata-ascent/assets/index-TOMIDvJq.js"></script>
 </head>
 <body>
   <canvas id="game"></canvas>
@@ -166,6 +174,7 @@
     <div class="ibox-label">保管（確保済み）</div>
     <div id="itembox-secured" class="ibox-chips"></div>
     <div id="itembox-note"></div>
+    <div class="ibox-foot"><button id="itembox-reset" type="button">さいしょから</button></div>
   </div>
 </body>
 </html>
