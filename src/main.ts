@@ -1671,6 +1671,10 @@ function frame(now: number): void {
   }
   const beam = lastBeam ? { angle: lastBeam.angle, alpha: lastBeam.ttl / BEAM_TTL } : null;
   const push = beamPush ? { angle: beamPush.angle, t: beamPush.ttl / PUSH_TTL } : null;
+  // 室内の暗さの入力(設計 2026-11-11 §2)。開放度は update の計測(6 フレームおき)を使う。?freeze=1 や
+  // 最初のフレームでは update が走る前に描くので、未計測のときだけ同じ計測を 1 回して初期値にする
+  // (以後は update の EMA が引き継ぐ。毎フレームの走査は足さない)
+  if (opennessEma === null) opennessEma = sampleOpenness(tiles, player.centerX, player.centerY);
   const t0 = collectStats ? performance.now() : 0;
   // マウスが一度も動いていない(タッチ等)間は、照準用のマウス位置を合成する:
   // スティック照準/保持照準の方向の点、無ければ「プレイヤーの向きの水平」
@@ -1785,6 +1789,8 @@ function frame(now: number): void {
         : [],
       terminals: terminal ? [{ x: terminal.x, floorY: terminal.floorY, read: readTerminals.has(terminal.id) }] : [],
     },
+    // 室内の暗さ(設計 2026-11-11-light-occlusion-ambient §2): ズーム用の開放度(時間平滑済み)をそのまま渡す
+    openness: opennessEma ?? undefined,
   });
   if (collectStats) {
     // present の getImageData が描画コマンドを同期ラスタ化させるので、ここの時間に描画全体が含まれる

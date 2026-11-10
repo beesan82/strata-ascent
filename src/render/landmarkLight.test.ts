@@ -6,6 +6,7 @@ import {
   COOLING_BEAM_HEIGHT, DISCHARGE_DUTY, dischargeOn, landmarkLightsInView, REST_WARM_ALPHA, REST_WARM_COLOR, restLampColor, RIFT_ALPHA,
 } from './landmarkLight';
 import { ambientDelta, REST_AMBIENT } from './beacon';
+import { HALO_RAYS } from './lightRays';
 
 const seeds = [1, 42, 20260711];
 const landmarks = (): { seed: number; lm: Landmark }[] =>
@@ -115,8 +116,40 @@ describe('landmarkLightsInView', () => {
     const color = restLampColor(20260711, rp.cell);
     const warm = landmarkLightsInView(20260711, rp.x, rp.floorY, 60, 40, 0).filter((r) => r.color === color);
     expect(warm.length).toBe(1);
-    expect(warm[0]).toEqual({ x0: rp.left + 1, y0: rp.floorY - 12, x1: rp.right, y1: rp.floorY, alpha: REST_WARM_ALPHA, color });
+    expect(warm[0]).toEqual({
+      x0: rp.left + 1, y0: rp.floorY - 12, x1: rp.right, y1: rp.floorY, alpha: REST_WARM_ALPHA, color,
+      occl: { kind: 'column', dir: 'down' },
+    });
     expect(landmarkLightsInView(20260711, rp.x + 200, rp.floorY, 60, 40, 0).filter((r) => r.color === color).length).toBe(0);
+  });
+  it('壁遮蔽(2.16): 暈は灯の中心からの全周レイ、冷却塔の光柱は上向き・光条は下向きの平行光、灯そのものは遮蔽しない', () => {
+    for (const kind of ['cooling', 'transformer', 'chimney', 'vertebra'] as const) {
+      for (const { seed, lm } of byKind(kind)) {
+        const color = biomeForCell(seed, lm.cell).accent;
+        let t = 0;
+        while (kind === 'transformer' && !dischargeOn(t, lm.k)) t += 1 / 90;
+        // 視野は既存の各テストと同じ(他の大構造の同色の光が混ざらない範囲)
+        const rects = (kind === 'cooling'
+          ? landmarkLightsInView(seed, lm.x, lm.top - 20, 120, 120, t)
+          : landmarkLightsInView(seed, lm.x, lm.top, 60, 40, t)).filter((r) => r.color === color);
+        const lamp = rects.find((r) => r.x1 - r.x0 === 2 && r.y1 - r.y0 === 1);
+        expect(lamp).toBeDefined();
+        expect(lamp!.occl).toBeUndefined();
+        const halo = rects.find((r) => r.occl?.kind === 'point');
+        expect(halo).toBeDefined();
+        expect(halo!.occl).toEqual({ kind: 'point', x: lm.x, y: lm.top - 8.5, rays: HALO_RAYS });
+        if (kind === 'cooling') {
+          const beam = rects.find((r) => r.y0 === lm.top - COOLING_BEAM_HEIGHT);
+          expect(beam!.occl).toEqual({ kind: 'column', dir: 'up' });
+        }
+      }
+    }
+    for (const { seed, lm } of byKind('collapse')) {
+      const color = biomeForCell(seed, lm.cell - 1).accent;
+      for (const r of landmarkLightsInView(seed, lm.x, lm.top + 20, 400, 200, 1).filter((q) => q.color === color)) {
+        expect(r.occl).toEqual({ kind: 'column', dir: 'down' });
+      }
+    }
   });
   it('決定論', () => {
     const { seed, lm } = landmarks()[0];

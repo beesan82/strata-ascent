@@ -43,7 +43,21 @@ describe('lampLightsInView', () => {
     }
     expect(lampLightsInView(seed, rp.x + 2000, rp.floorY - 6, 60, 40, 0.37).some((r) => r.x0 <= rp.right)).toBe(false);
   });
+  it('壁遮蔽(2.16): 暈は灯の中心からの全周レイ(12 本)、灯そのもの(1×1)は遮蔽しない', () => {
+    const seed = 20260711;
+    const rp = restPointAt(seed, 0, 0);
+    const rects = lampLightsInView(seed, rp.x, rp.floorY - 6, 60, 40, 0.37);
+    for (const r of rects) {
+      if (r.x1 - r.x0 === 1) {
+        expect(r.occl).toBeUndefined();
+      } else {
+        expect(r.occl).toEqual({ kind: 'point', x: r.x0 + 1.5, y: rp.floorY - 0.5, rays: LAMP_HALO_RAYS });
+      }
+    }
+  });
 });
+
+import { LAMP_HALO_RAYS } from './lightRays';
 
 import { BUILDER_MAX, BUILDER_SPEED, buildersInSlot, buildersInView } from './ambient';
 import { interfaceBottom, PASSAGE_SLOT } from '../world/interface';
@@ -111,6 +125,8 @@ describe('fallingDropsInView', () => {
       expect(r.y0).toBeGreaterThanOrEqual(bc.top);
       expect(r.y0).toBeLessThan(bc.floor);
       expect(r.color).toBe(bc.color);
+      // 壁遮蔽(2.16): 光柱と同じく板の下面から下向きの平行光で地形に止める
+      expect(r.occl).toEqual({ kind: 'column', dir: 'down', from: bc.top });
     }
   });
   it('水系でない層には粒が無い', () => {

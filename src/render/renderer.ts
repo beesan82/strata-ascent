@@ -11,7 +11,7 @@ import { Lighting } from './lighting';
 import { chunkSolidLookup } from './lightRays';
 import { drawFlyer, drawTurret, drawWalker } from './enemySprite';
 import { flyerPose, turretPose, walkerPose } from './enemyPose';
-import { coneParams, depthShade } from './depthLight';
+import { coneParams, depthShade, enclosureShade } from './depthLight';
 import { layerNumber } from '../world/interface';
 import { biomeCellAt } from '../world/biomeCells';
 import { biomeBlend, mixHex } from './biome';
@@ -119,6 +119,11 @@ export interface GravitonFx {
   caches?: readonly { x: number; y: number; armory?: boolean }[];
   /** インフラ(設計 2026-11-10-infrastructure): レール・昇降機の足場・トラム・建設者・端末。形は render/infraSprite */
   infra?: InfraFx;
+  /**
+   * プレイヤー周りの開放度(0..1。main がズーム用に測っている sampleOpenness の時間平滑値)。
+   * 室内の暗さ(設計 2026-11-11-light-occlusion-ambient §2)に使う。未指定は開けた場所(暗幕は従来どおり)
+   */
+  openness?: number;
 }
 
 /**
@@ -483,13 +488,19 @@ export class Renderer {
     // 塔の点滅・裂け目の光条・休憩点の暖色(§6.2, §6.3)も同じ overlay へ相乗りする(新しいパスは足さない。
     // 矩形は 1 画面に数枚、1 枚 1 色)。休憩点の灯の明滅と水系の落下粒(§6.6)も同じ overlay(小矩形)。
     // 懐中電灯モード(§4)ではコーンの半径と中心の明るさを上げる(同じグラデーションの係数が変わるだけ)
-    this.lighting.render(ctx, px, py, angle, ppt, timeSec, curtainColor, ambient, coneParams(fx.flashlight ? 1 : 0), (lctx, s) => {
-      this.beacons.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
-      this.landmarkLights.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
-      this.ambientLights.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
+    // 壁遮蔽(設計 2026-11-10 §1): 生成済みチャンクだけを引き、未生成は空気として扱う。
+    // 2.16(設計 2026-11-11 §1)で overlay の光(光柱・塔の灯・光条・休憩点の灯と暖色・落下粒)も同じ判定で遮る
+    const solidAt = chunkSolidLookup((x, y) => store.peekChunk(x, y));
+    // 室内の暗さ(設計 2026-11-11 §2): 暗幕の明るさにだけ囲まれ度の係数を掛ける(深さ係数との積)。
+    // 開放度はズーム用の計測の再利用。ビネット(post)と光条(shafts)は従来の ambient のまま
+    // (ビネットは敵・ドロップの上にも掛かるため、その視認性を変えない)
+    const curtainAmbient = ambient * enclosureShade(fx.openness ?? 1);
+    this.lighting.render(ctx, px, py, angle, ppt, timeSec, curtainColor, curtainAmbient, coneParams(fx.flashlight ? 1 : 0), (lctx, s) => {
+      this.beacons.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec, solidAt);
+      this.landmarkLights.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec, solidAt);
+      this.ambientLights.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec, solidAt);
     }, {
-      // 壁遮蔽(設計 2026-11-10 §1): 生成済みチャンクだけを引き、未生成は空気として扱う
-      solidAt: chunkSolidLookup((x, y) => store.peekChunk(x, y)),
+      solidAt,
       wx: player.centerX,
       wy: player.centerY,
     });
