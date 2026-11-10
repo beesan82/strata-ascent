@@ -106,6 +106,8 @@ export class Turret {
   angle = 0;
   /** 次の発射までの残り秒。狙えている間だけ減る */
   cooldown = TURRET_FIRST_DELAY;
+  /** 直近の update で狙えていたか(描画の警告灯が読む。行動には使わない) */
+  aiming = false;
 
   constructor(x: number, y: number) {
     this.body = { x, y, w: TURRET_W, h: TURRET_H, vx: 0, vy: 0, onGround: false };
@@ -143,6 +145,7 @@ export class Turret {
     const canAim =
       dist <= TURRET_RANGE &&
       hasLineOfSight(tiles, this.centerX, this.centerY, playerX, playerY);
+    this.aiming = canAim;
     if (!canAim) return [];
     this.angle = Math.atan2(dy, dx);
     this.cooldown -= dt;

@@ -8,6 +8,9 @@ import { Background } from './background';
 import { ChunkBaker, REBAKE_DILATE } from './chunkbake';
 import { rebakeTargets } from './dirtyBounds';
 import { Lighting } from './lighting';
+import { chunkSolidLookup } from './lightRays';
+import { drawFlyer, drawTurret, drawWalker } from './enemySprite';
+import { flyerPose, turretPose, walkerPose } from './enemyPose';
 import { coneParams, depthShade } from './depthLight';
 import { layerNumber } from '../world/interface';
 import { biomeCellAt } from '../world/biomeCells';
@@ -98,8 +101,14 @@ export interface GravitonFx {
   /** パルスの敵弾(固定砲台の弾、ワールド座標の中心と単位方向)。熱色系で描く */
   shots?: readonly { x: number; y: number; dx: number; dy: number }[];
   /** 敵(ワールド座標の中心と被弾フラッシュ)。平坦色の矩形で描く。flyer は飛行敵、
-   *  turret は固定砲台(angle が照準方向)、w/h と bossPhase がある要素はボス(体格と相で描き分ける) */
-  enemies?: readonly { x: number; y: number; flash: boolean; flyer?: boolean; turret?: boolean; angle?: number; w?: number; h?: number; bossPhase?: BossPhase; bossPhaseT?: number; bossDir?: 1 | -1 }[];
+   *  turret は固定砲台(angle が照準方向)、w/h と bossPhase がある要素はボス(体格と相で描き分ける)。
+   *  ポーズの入力(見た目だけに使う): 歩行敵は dir(進行方向)、飛行敵は vx/vy(速度)・chase(追尾中)・
+   *  phase(個体の位相)、砲台は cooldown(次の発射までの秒)・aiming(狙えているか) */
+  enemies?: readonly {
+    x: number; y: number; flash: boolean; flyer?: boolean; turret?: boolean; angle?: number;
+    dir?: 1 | -1; vx?: number; vy?: number; chase?: boolean; phase?: number; cooldown?: number; aiming?: boolean;
+    w?: number; h?: number; bossPhase?: BossPhase; bossPhaseT?: number; bossDir?: 1 | -1;
+  }[];
   /** ドロップ(ワールド座標の中心)。hidden は点滅の消灯側フレーム */
   drops?: readonly { x: number; y: number; kind: DropKind; hidden: boolean }[];
   /** 補給キャッシュと武器庫(ワールド座標の中心)。未開封のものだけ渡す。armory は弾薬のクレートとして描く */
@@ -456,6 +465,11 @@ export class Renderer {
       this.beacons.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
       this.landmarkLights.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
       this.ambientLights.render(lctx, renderCam, w * s, h * s, ppt * s, timeSec);
+    }, {
+      // 壁遮蔽(設計 2026-11-10 §1): 生成済みチャンクだけを引き、未生成は空気として扱う
+      solidAt: chunkSolidLookup((x, y) => store.peekChunk(x, y)),
+      wx: player.centerX,
+      wy: player.centerY,
     });
     this.mark('lighting');
 
@@ -562,49 +576,23 @@ export class Renderer {
           }
           continue;
         }
+        // 通常敵(設計 2026-11-10 §2): ポーズは実体の状態と時刻から enemyPose が決め、
+        // enemySprite が平坦な矩形とパレット実在色で描く(同じ fx 相乗り、新規パスなし)
         if (e.turret) {
-          // 固定砲台: 鋼色の胴の面 + 暗い台座 + 照準方向へ向く砲身 + 金の目の灯
-          const s = Math.max(2, Math.round(0.9 * ppt));
-          const x0 = Math.round(sx - s / 2);
-          const y0 = Math.round(sy - s / 2);
-          ctx.fillStyle = e.flash ? '#c7d0ce' : '#51728d';
-          ctx.fillRect(x0, y0, s, s);
-          // 暗い台座(下部の帯)
-          ctx.fillStyle = '#16202b';
-          ctx.fillRect(x0, y0 + s - band, s, band);
-          // 砲身: 照準方向へ中心から 3 刻みの小矩形を並べる(平坦色・決定論)
-          const ang = e.angle ?? 0;
-          const bdx = Math.cos(ang);
-          const bdy = Math.sin(ang);
-          const barrel = Math.max(1, Math.round(0.18 * ppt));
-          ctx.fillStyle = '#16202b';
-          for (let i = 1; i <= 3; i++) {
-            const bx = Math.round(sx + bdx * i * s * 0.22 - barrel / 2);
-            const by = Math.round(sy + bdy * i * s * 0.22 - barrel / 2);
-            ctx.fillRect(bx, by, barrel, barrel);
-          }
-          // 目の灯(金)。フラッシュ中は胴が淡色になるので鋼色へ反転して残す
-          const eye = Math.max(1, Math.round(0.16 * ppt));
-          ctx.fillStyle = e.flash ? '#51728d' : '#caa64a';
-          ctx.fillRect(Math.round(sx - eye / 2), Math.round(sy - s * 0.18 - eye / 2), eye, eye);
+          const pose = turretPose(e.cooldown ?? 1, e.aiming ?? false, timeSec);
+          drawTurret(ctx, sx, sy, ppt, e.angle ?? 0, pose, e.flash);
           continue;
         }
-        const s = Math.max(2, Math.round((e.flyer ? 0.8 : 0.9) * ppt));
-        const x0 = Math.round(sx - s / 2);
-        const y0 = Math.round(sy - s / 2);
-        // 胴の面
-        ctx.fillStyle = e.flash ? '#c7d0ce' : e.flyer ? '#51728d' : '#9a6d32';
-        ctx.fillRect(x0, y0, s, s);
-        // 暗い帯: 歩行敵は足元、飛行敵は上部(回転翼の見立て)
-        ctx.fillStyle = e.flyer ? '#16202b' : '#3d2618';
-        const bandY = e.flyer ? y0 : y0 + s - band;
-        ctx.fillRect(x0, bandY, s, band);
-        // 目の灯(1 点)。フラッシュ中は胴が淡色になるので色を反転して残す
-        const eye = Math.max(1, Math.round(0.16 * ppt));
-        ctx.fillStyle = e.flyer
-          ? (e.flash ? '#51728d' : '#c7d0ce')
-          : (e.flash ? '#9a6d32' : '#caa64a');
-        ctx.fillRect(Math.round(sx - eye / 2), Math.round(sy - s * 0.18 - eye / 2), eye, eye);
+        if (e.flyer) {
+          const pose = flyerPose(
+            timeSec, e.phase ?? 0, e.vx ?? 0, e.vy ?? 0, e.chase ?? false,
+            player.centerX - e.x, player.centerY - e.y,
+          );
+          drawFlyer(ctx, sx, sy, ppt, pose, e.flash);
+          continue;
+        }
+        const dir = e.dir ?? 1;
+        drawWalker(ctx, sx, sy, ppt, dir, walkerPose(e.x, dir), e.flash);
       }
     }
 

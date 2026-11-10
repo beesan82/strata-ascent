@@ -1370,12 +1370,18 @@ function frame(now: number): void {
         x: e.walker.centerX,
         y: e.walker.centerY,
         flash: e.walker.flashT > 0,
+        dir: e.walker.dir, // 脚の向きと目の側(設計 2026-11-10 §2)
       })),
       ...flyers.map((e) => ({
         x: e.flyer.centerX,
         y: e.flyer.centerY,
         flash: e.flyer.flashT > 0,
         flyer: true,
+        // スラスター・センサーアイ・ローター/航行灯の位相(見た目だけ)
+        vx: e.flyer.body.vx,
+        vy: e.flyer.body.vy,
+        chase: e.flyer.mode === 'chase',
+        phase: e.flyer.phase,
       })),
       ...turrets.map((e) => ({
         x: e.turret.centerX,
@@ -1383,6 +1389,9 @@ function frame(now: number): void {
         flash: e.turret.flashT > 0,
         turret: true,
         angle: e.turret.angle,
+        // 警告灯と砲身の後退(見た目だけ)
+        cooldown: e.turret.cooldown,
+        aiming: e.turret.aiming,
       })),
       // ボス: 体格(w/h)と相を渡し、renderer 側で相の違い(予備動作の点滅・硬直の晒し)を読む
       ...(boss
