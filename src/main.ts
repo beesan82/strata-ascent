@@ -2,7 +2,33 @@ import { Camera } from './core/camera';
 import { hapticCannonFire, hapticDamage, hapticEnemyDown, hapticLedgeGrab, initNativeShell } from './core/haptics';
 import { Input, MOVE_KEYS } from './core/input';
 import { installTouchControls } from './core/touch';
-import { MAX_HP, Player } from './entities/player';
+import { MAX_HP, Player, type PlayerInput } from './entities/player';
+import { bodyOverlapsSolid } from './entities/physics';
+import { carryRider, isRiding, landOnPlatform, type Platform } from './entities/platform';
+import {
+  advanceElevator,
+  commandElevator,
+  elevatorCallStop,
+  elevatorPlatform,
+  initialElevator,
+  type ElevatorState,
+} from './entities/elevator';
+import { Builder, BUILDER_H, BUILDER_W } from './entities/builder';
+import { elevatorsNear, SHAFT_DOOR_ROWS, SHAFT_WIDTH, shaftBounds } from './world/elevator';
+import {
+  canonicalRun,
+  chooseBuilder,
+  chooseTerminal,
+  chooseTramTrack,
+  distanceToTrack,
+  findTramTracks,
+  terminalTextFor,
+  TRAM_HOLD_RADIUS,
+  TRAM_ROOF,
+  TRAM_W,
+  tramCarX,
+  type TramTrack,
+} from './world/infra';
 import { Graviton, BORE_LENGTH, BORE_RADIUS } from './entities/graviton';
 import { pulseAimDir, PulseGun, PULSE_DAMAGE, PULSE_SIZE, type Pulse } from './entities/pulse';
 import { Boss, BOSS_BEAM_DAMAGE, BOSS_H, BOSS_HP, BOSS_W, Flyer, Walker } from './entities/enemy';
@@ -19,7 +45,18 @@ import {
   supplyFor,
   type SupplyCache,
 } from './world/supply';
-import { chooseFlyerSpawns, chooseSpawns, chooseTurretSpawns, findAirPockets, findFloorRuns, flyerMulFor, turretMulFor } from './world/spawn';
+import {
+  chooseFlyerSpawns,
+  chooseSpawns,
+  chooseTurretSpawns,
+  findAirPockets,
+  findFloorRuns,
+  flyerMulFor,
+  turretMulFor,
+  type FloorRun,
+  type ProtectedPoint,
+  type SpawnRect,
+} from './world/spawn';
 import { bossRewardFor, bossSpawnFor, type BossSpawn } from './world/boss';
 import { grandHallAt } from './world/grandhall';
 import { nearestRestPoint } from './world/restpoint';
@@ -88,7 +125,7 @@ import {
   type LayerStorage,
 } from './core/records';
 import { autoViewStarted, initialView, viewState, type ViewState } from './core/view';
-import { Caption, captionText } from './render/caption';
+import { Caption, captionText, TERMINAL_CAPTION_HOLD_SECONDS } from './render/caption';
 import { AudioEngine } from './audio/engine';
 import { beaconHum, HUM_RANGE, LADDER_RUNG_STEP, LAND_MIN_VY, nearestPlateDistance, rungCrossed } from './audio/params';
 import { beaconsInView } from './render/beacon';
@@ -219,6 +256,24 @@ const claimedArmories = new Set<string>();
 let armory: SupplyCache | null = null;
 /** 前回の判定で休憩点の箱の中にいたか(確保は「入った瞬間」だけ行う。引き出した物を再確保しないため) */
 let prevInRestBox = false;
+
+// ---- インフラ(設計 2026-11-10-infrastructure) ----
+/** 近傍の昇降機の足場。状態はセッション内のみで、範囲を離れると捨てる(再訪すると下の停止階から) */
+let elevators: ElevatorState[] = [];
+const ELEVATOR_SCAN_X = 100;
+const ELEVATOR_SCAN_Y = 64;
+/** 近傍のトラムの軌道(最大 1 本)と、前ステップの車両の左端 X(差分を屋根の乗り手へ運ぶ) */
+let tram: TramTrack | null = null;
+let tramX = 0;
+/** プレイヤーが上面に立っている足場の ID(前ステップの着地解決で決まる。昇降機は shaft.id、トラムは軌道 ID) */
+let ridingId: string | null = null;
+/** 近傍の建設者(最大 1 体)。敵の配列とは別に持ち、命中判定・接触ダメージの対象にしない */
+let builder: { spawnId: string; builder: Builder } | null = null;
+/** 建設者をそのまま保つ距離(タイル)。これより離れたら選び直す */
+const BUILDER_HOLD_RADIUS = 64;
+/** 近傍の端末(最大 1 基)と、このセッションで読んだ端末の ID(同じ端末は再表示しない。永続化しない) */
+let terminal: SupplyCache | null = null;
+const readTerminals = new Set<string>();
 
 /**
  * 敵 1 体の撃破処理: 記録保持への登録と、ドロップ抽選を 1 回だけ行う。
@@ -383,6 +438,105 @@ function refreshEnemies(): void {
   const armoryOverlapsCache = armory !== null && supplyCache !== null &&
     Math.max(Math.abs(armory.x - supplyCache.x), Math.abs(armory.floorY - supplyCache.floorY)) <= 2;
   armory = holdSpot(armoryOverlapsCache ? null : armory, armories, player.centerX, player.centerY, claimedArmories);
+  refreshInfra(runs, halls, cx - ENEMY_SCAN_X, cx + ENEMY_SCAN_X);
+}
+
+/**
+ * インフラの近傍集合を更新する(設計 2026-11-10-infrastructure)。敵スキャンの床ラン・大広間に相乗りする。
+ * 昇降機はシャフトの決定論配置から、トラム・建設者・端末は床ランの決定的な選定(キャッシュと同じ流儀)から。
+ * どれも近傍に保持半径つきで粘着させ、走査窓の端をまたいだだけでは消えたり跳んだりしない
+ */
+function refreshInfra(runs: readonly FloorRun[], halls: readonly SpawnRect[], wx0: number, wx1: number): void {
+  const px = player.centerX;
+  const py = player.centerY;
+  // 昇降機: 既知の足場の状態は ID で引き継ぐ
+  const shafts = elevatorsNear(seed, px, py, ELEVATOR_SCAN_X, ELEVATOR_SCAN_Y);
+  elevators = shafts.map((s) => elevators.find((e) => e.shaft.id === s.id) ?? initialElevator(s));
+  const shaftRects = shafts.map(shaftBounds);
+  const excluded: SpawnRect[] = [...halls, ...shaftRects];
+  const spawnGuard: ProtectedPoint = { x: spawn.x, y: spawn.y, r: 10 };
+  const rp = nearestRestPoint(seed, px, py);
+  // トラム: 保持半径の外へ出たときだけ選び直す(乗っている間・近くにいる間は同じ軌道)。
+  // 軌道の行は床ランの行から引き、スポーンと休憩点の保護範囲・大広間・シャフトに掛かる軌道は使わない
+  if (!tram || distanceToTrack(tram, px, py) > TRAM_HOLD_RADIUS) {
+    const rows = [...new Set(runs.map((r) => r.floorY))];
+    const tracks = findTramTracks(tiles, rows, wx0, wx1);
+    const next = chooseTramTrack(seed, tracks, [spawnGuard, { x: rp.x, y: rp.floorY, r: 20 }], excluded);
+    if (next?.id !== tram?.id) {
+      tram = next;
+      if (tram) tramX = tramCarX(seed, tram, simTime);
+    }
+  }
+  // 建設者と端末は窓の端で切れた床ランを本来の端へ揃えてから選ぶ(ID と位置が窓の位置で揺れない)
+  const canon = runs.map((r) => canonicalRun(tiles, r, wx0, wx1));
+  if (!builder || Math.hypot(builder.builder.centerX - px, builder.builder.centerY - py) > BUILDER_HOLD_RADIUS) {
+    const bs = chooseBuilder(
+      seed, canon, [spawnGuard], excluded, BUILDER_W, BUILDER_H,
+      (x, y) => !bodyOverlapsSolid(tiles, x, y, BUILDER_W, BUILDER_H),
+    );
+    if (!bs) builder = null;
+    else if (!builder || builder.spawnId !== bs.id) builder = { spawnId: bs.id, builder: new Builder(bs.x, bs.y, bs.dir) };
+  }
+  // 端末: 休憩点の近くにも置いてよい(保護はスポーンだけ)。キャッシュ・武器庫とは重ねない
+  const termGuard: ProtectedPoint[] = [spawnGuard];
+  if (supplyCache) termGuard.push({ x: supplyCache.x, y: supplyCache.floorY, r: 2 });
+  if (armory) termGuard.push({ x: armory.x, y: armory.floorY, r: 2 });
+  const term = chooseTerminal(seed, canon, termGuard, excluded);
+  terminal = holdSpot(terminal, term ? [term] : [], px, py);
+}
+
+/** 今の足場の上面の一覧(昇降機の足場とトラムの屋根) */
+function currentPlatforms(): Platform[] {
+  const out = elevators.map(elevatorPlatform);
+  if (tram) out.push({ id: tram.id, x: tramX, y: tram.floorY - TRAM_ROOF, w: TRAM_W });
+  return out;
+}
+
+/**
+ * 足場を 1 ステップ動かし、前ステップで上面に立っていたプレイヤーを先に運ぶ(Player.update の前に呼ぶ)。
+ * 昇降機: 乗っていれば ↑↓ で動き出し、乗っていなければ停止階に立つと呼び戻す。上昇で天井に挟まる
+ * ステップでは止まる。トラム: 時刻から位置が決まり、屋根の乗り手を横へ運ぶ(壁に阻まれたら置いていく)
+ */
+function stepCarriers(s: PlayerInput, dt: number): void {
+  const pb = player.body;
+  const free = player.ledge === null && !player.dead;
+  for (const e of elevators) {
+    const riding = free && ridingId === e.shaft.id;
+    const callStop = !riding && free && pb.onGround ? elevatorCallStop(e.shaft, player.centerX, pb.y + pb.h) : null;
+    e.target = commandElevator(e, { riding, up: s.up, down: s.down, callStop });
+    const next = advanceElevator(e, dt);
+    const dy = next.top - e.top;
+    if (dy === 0) continue;
+    if (riding && carryRider(pb, 0, dy, tiles, dy < 0) === 'stalled') continue;
+    e.top = next.top;
+    if (next.arrived) {
+      e.target = null;
+      // 到着の小さな合図: 既存の着地音を鳴る最小の強さで相乗り(崖つかみと同じ)。乗っているか近いときだけ
+      const near = Math.abs(player.centerX - (e.shaft.x0 + SHAFT_WIDTH / 2)) < 16 && Math.abs(player.centerY - e.top) < 12;
+      if (riding || near) audio.land(LAND_MIN_VY);
+    }
+  }
+  if (tram) {
+    const nx = tramCarX(seed, tram, simTime);
+    const dx = nx - tramX;
+    if (dx !== 0 && free && ridingId === tram.id) carryRider(pb, dx, 0, tiles, false);
+    tramX = nx;
+  }
+}
+
+/** Player.update の後: 足場の上面への着地を解決し、次のステップの乗り手を決める。prevBottom は更新前の足元 */
+function resolvePlatforms(prevBottom: number): void {
+  ridingId = null;
+  if (player.ledge !== null || player.dead) return;
+  const pb = player.body;
+  const plats = currentPlatforms();
+  for (const p of plats) if (landOnPlatform(pb, prevBottom, p, tiles)) break;
+  for (const p of plats) {
+    if (isRiding(pb, p)) {
+      ridingId = p.id;
+      break;
+    }
+  }
 }
 // デバッグ/スクリーンショット用: ?x=&y= でスポーン位置を上書き(埋まり座標は自己責任)
 const qx = params.get('x');
@@ -779,7 +933,11 @@ function update(dt: number): void {
   simTime += dt;
   const s = input.state;
   const pressed = input.takePressed();
+  // 運ぶ物理(設計 2026-11-10-infrastructure §共通の芯): 足場を動かして乗り手を先に運び、通常の更新の後に着地を解決する
+  stepCarriers(s, dt);
+  const prevBottom = player.body.y + player.body.h;
   player.update(s, dt, tiles);
+  resolvePlatforms(prevBottom);
   // ジャンプ・着地・梯子の音(§6.7): 物理の遷移から拾う(ゲームの数値・判定には触らない)。
   // ノックバックの跳ね上がりはジャンプと誤認しないよう knocked 中は除く
   const groundedNow = player.body.onGround;
@@ -1017,6 +1175,8 @@ function update(dt: number): void {
   // 歩行敵・飛行敵: 出現集合の更新、巡回/追尾、パルスとの命中判定(接触ダメージは第4段)
   if (frames % ENEMY_SCAN_INTERVAL_FRAMES === 0) refreshEnemies();
   for (const e of enemies) e.walker.update(dt, tiles);
+  // 建設者(§3): 歩くだけ。接触・命中の判定には一切入れない
+  if (builder) builder.builder.update(dt, tiles);
   for (const e of flyers) {
     const prevMode = e.flyer.mode;
     e.flyer.update(dt, tiles, player.centerX, player.centerY);
@@ -1178,6 +1338,21 @@ function update(dt: number): void {
       });
       armory = null;
       audio.cacheOpen(); // 開封音はキャッシュと共用(§6.7)
+    }
+  }
+
+  // 端末(設計 2026-11-10-infrastructure §4): 触れると断片テキストを字幕で出す。セッション内で同じ端末は
+  // 再表示しない(端末そのものは残り、画面が暗くなる)。実利は無い。合図は既存の小さな tick 音の相乗り
+  if (terminal && !player.dead && !readTerminals.has(terminal.id)) {
+    const t = terminal;
+    const pb = player.body;
+    const overlap =
+      pb.x < t.x + 0.3 && pb.x + pb.w > t.x - 0.3 &&
+      pb.y < t.floorY && pb.y + pb.h > t.floorY - 1.6;
+    if (overlap) {
+      readTerminals.add(t.id);
+      caption.show(terminalTextFor(seed, t.id), simTime, TERMINAL_CAPTION_HOLD_SECONDS);
+      audio.rechargeTick();
     }
   }
 
@@ -1439,6 +1614,28 @@ function frame(now: number): void {
       ...(supplyCache ? [{ x: supplyCache.x, y: supplyCache.floorY - 0.28 }] : []),
       ...(armory ? [{ x: armory.x, y: armory.floorY - 0.3, armory: true }] : []),
     ],
+    // インフラ(設計 2026-11-10-infrastructure): 同じ fx 相乗りの 1 パスで描く
+    infra: {
+      rails: tram ? [{ x0: tram.x0, x1: tram.x1, y: tram.floorY }] : [],
+      lifts: elevators.map((e) => ({
+        x: e.shaft.x0,
+        y: e.top,
+        w: SHAFT_WIDTH,
+        cableY: e.shaft.yTop - SHAFT_DOOR_ROWS, // シャフトの天井の行(yTop − 4)の下面
+        moving: e.target !== null,
+      })),
+      trams: tram ? [{ x: tramX, y: tram.floorY - TRAM_ROOF, w: TRAM_W, h: TRAM_ROOF }] : [],
+      builders: builder
+        ? [{
+            x: builder.builder.centerX,
+            y: builder.builder.centerY,
+            w: BUILDER_W,
+            h: BUILDER_H,
+            dir: builder.builder.dir,
+          }]
+        : [],
+      terminals: terminal ? [{ x: terminal.x, floorY: terminal.floorY, read: readTerminals.has(terminal.id) }] : [],
+    },
   });
   if (collectStats) {
     // present の getImageData が描画コマンドを同期ラスタ化させるので、ここの時間に描画全体が含まれる

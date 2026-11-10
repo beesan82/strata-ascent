@@ -201,8 +201,8 @@ export function landmarkAt(seed: number, cell: number, k: number): Landmark | nu
   return { kind, cell, k, x, top, bottom, floor, gapLeft, gapRight, baseY };
 }
 
-/** 大構造が X 方向に占める範囲 [x0, x1) */
-function spanOf(lm: Landmark): [number, number] {
+/** 大構造が X 方向に占める範囲 [x0, x1)(昇降機の配置の除外にも使う) */
+export function spanOf(lm: Landmark): [number, number] {
   if (isTowerFamily(lm.kind)) return [lm.gapLeft, lm.x + TOWER_TOP_CLEAR_RIGHT];
   return lm.kind === 'collapse' ? [lm.gapLeft, lm.gapRight + COLLAPSE_EXIT_WIDTH] : [lm.gapLeft, lm.gapRight];
 }
