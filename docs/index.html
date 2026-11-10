@@ -131,6 +131,14 @@
         linear-gradient(90deg, transparent 0 18%, #8d62cb 18% 32%, transparent 32% 68%, #8d62cb 68% 82%, transparent 82% 100%),
         linear-gradient(#c7d0ce, #c7d0ce);
     }
+    /* 貴重品(段階 3-B): 金の菱形(◆)+淡い芯。ゲーム内の貴重品ドロップと同じ色 */
+    .ibox-icon.valuable {
+      background:
+        radial-gradient(circle at 50% 50%, #c7d0ce 0 9%, transparent 9%),
+        linear-gradient(#caa64a, #caa64a);
+      clip-path: polygon(50% 8%, 88% 50%, 50% 92%, 12% 50%);
+    }
+    .ibox-status .v.gold { color: #caa64a; }
     .ibox-chips { display: flex; gap: 6px; flex-wrap: wrap; min-height: 30px; }
     .ibox-chip {
       display: inline-flex; align-items: center; gap: 7px;
@@ -142,7 +150,7 @@
     .ibox-empty-note { color: #9aa4ad; font-size: 11px; }
     #itembox-note { color: #9aa4ad; font-size: 11px; margin-top: 9px; min-height: 14px; }
   </style>
-  <script type="module" crossorigin src="/strata-ascent/assets/index-D8jzaM3K.js"></script>
+  <script type="module" crossorigin src="/strata-ascent/assets/index-BdStpeQn.js"></script>
 </head>
 <body>
   <canvas id="game"></canvas>
