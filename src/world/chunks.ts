@@ -58,6 +58,14 @@ export class ChunkStore {
   }
 
   /**
+   * 生成済みチャンクならタイル配列(破壊反映済み)を返し、未生成なら生成せず undefined を返す。
+   * ライトのレイのように同じチャンクを続けて引く描画処理向け(配列は読むだけにする)
+   */
+  peekChunk(cx: number, cy: number): Uint8Array | undefined {
+    return this.chunks.get(`${cx},${cy}`);
+  }
+
+  /**
    * チャンク(cx,cy)と周囲 pad タイル(pad <= CHUNK_SIZE)を (CHUNK_SIZE+2pad)² の配列に並べる
    * (必要なチャンクは自動生成)。値は tileAt と同じ。焼き込みのように近傍を大量に引く処理で、
    * タイルごとの Map 参照を3×3チャンク分の参照9回に減らすため。
