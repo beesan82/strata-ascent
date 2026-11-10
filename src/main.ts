@@ -48,6 +48,8 @@ import {
   addRemainsSite,
   initialGroundAnchor,
   pruneRemainsSites,
+  remainsDropKinds,
+  remainsOffsets,
   stepGroundAnchor,
   type GroundAnchor,
 } from './core/remains';
@@ -56,10 +58,12 @@ import {
   CARRY_KIND_INFO,
   CARRY_KINDS,
   carriedTotal,
+  loseCarry,
   removeCarry,
   secureCaptionText,
   secureCarry,
   securedTotal,
+  securedValue,
   storeCarry,
   withdrawCarry,
   type CarryState,
@@ -184,8 +188,8 @@ let killCount = 0;
 /** 満腹度(サバイバル段階 1)。状態は core/satiety の純関数で進める */
 let satiety: SatietyState = initialSatiety();
 /**
- * 携行と確保(エクストラクション段階 A)。素材セルを拾うと携行に入り、休憩点の箱に入ると
- * 確保済みへ移る。状態は core/carry の純関数で進める。段階 A では死亡しても携行は残る。
+ * 携行と確保(エクストラクション段階 A)。素材セル・貴重品を拾うと携行に入り、休憩点の箱に入ると
+ * 確保済みへ移る。状態は core/carry の純関数で進める。死亡すると携行は遺留品になる(段階 3-B)。
  * 弾薬(砲弾・パルス弾セル)も同じ携行枠に入る(弾薬設計 §1)。開始時はパルス弾セル 2 個だけ
  */
 let carry: CarryState = initialAmmoCarry();
@@ -226,8 +230,10 @@ function onEnemyKilled(spawnId: string, centerX: number, centerY: number): void 
   killCount++;
   if (!kind) return;
   // 糧食は「後で戻って使う」判断が要るため、発生源によらず補給品として残す(サバイバル設計 §5)。
-  // 素材セル(段階 A)も同じく補給品(寿命なし)。地面の上限は pushSupply の種別上限で抑える
-  if (kind === 'ration' || kind === 'material') pushSupply(drops, new DropItem(kind, centerX, centerY, true));
+  // 素材セル(段階 A)と貴重品(段階 3-B)も同じく補給品(寿命なし)。地面の上限は pushSupply の種別上限で抑える
+  if (kind === 'ration' || kind === 'material' || kind === 'valuable') {
+    pushSupply(drops, new DropItem(kind, centerX, centerY, true));
+  }
   else pushDrop(drops, new DropItem(kind, centerX, centerY));
 }
 
@@ -237,38 +243,45 @@ function onEnemyKilled(spawnId: string, centerX: number, centerY: number): void 
  * 撃破位置から落として広間の床へ散らす(第2弾 §2)。
  * 糧食は敵ドロップと同じく補給品として残す(段階 1 の裁定)。砲弾は敵ドロップから外した後も
  * 場所性のある報酬として残す(弾薬設計 §3)。
+ * 貴重品 1 個(段階 3-B §2)は持ち帰る物なので、素材と同じく補給品(寿命なし)で出す。
  */
 function onBossKilled(spawnId: string, b: Boss): void {
   audio.bossDown(); // ボス撃破音(§6.7): 通常の撃破音より長く重い
   recordDefeated(spawnId);
   killCount++;
-  const offsets = [0, -1.5, 1.5]; // 構成の並び順に対応(中心=回復、左=砲弾、右=糧食)
+  // 構成の並び順に対応(中心=回復、左=砲弾、右=糧食、中心と右の間=貴重品)
+  const offsets = [0, -1.5, 1.5, 0.75];
   bossRewardFor().forEach((kind, i) => {
-    const item = new DropItem(kind, b.centerX + offsets[i], b.centerY, kind === 'ration');
-    if (kind === 'ration') pushSupply(drops, item);
+    const permanent = kind === 'ration' || kind === 'valuable';
+    const item = new DropItem(kind, b.centerX + offsets[i], b.centerY, permanent);
+    if (permanent) pushSupply(drops, item);
     else pushDrop(drops, item);
   });
 }
 
 /**
- * 死亡時の遺留品(サバイバル段階 3、設計 §8): 所持糧食を最後の安定接地点へ落とす。
- * 対象は糧食だけ(弾薬は携行枠にあり死亡しても残る(段階 A の決定)。回復セルは所持品として存在しない)。
- * 遺留品は補給品(寿命なし)として出し、箇所は最大 2 つまで(3 つ目で最も古い箇所が消える)。
+ * 死亡時の遺留品(サバイバル段階 3、設計 §8。段階 3-B §1 で携行品へ拡張):
+ * 所持糧食と未確保の携行品(素材・貴重品・砲弾・パルス弾セル)を全て最後の安定接地点へ落とし、
+ * 携行を 0 にする(ロスト)。確保済みは減らさない。回復セルは所持品として存在しない。
+ * 遺留品は補給品(寿命なし)の地面ドロップとして出す。拾えば通常の取得経路で携行へ戻る
+ * (携行が満杯なら地面に残る)。箇所は最大 2 つまで(3 つ目で最も古い箇所が消える)。
  * 復活処理(テレポートと糧食リセット)より前に呼ぶこと。
  */
 function dropRemainsOnDeath(): void {
-  if (satiety.rations <= 0) return;
+  const kinds = remainsDropKinds(satiety.rations, carry.carried);
+  carry = loseCarry(carry);
+  if (kinds.length === 0) return;
   // 回収・消滅済みの箇所は数えない(空いた枠は新しい遺留品に使える)
   remainsSites = pruneRemainsSites(remainsSites, drops);
   const cx = groundAnchor.x + player.body.w / 2;
   const cy = groundAnchor.y + player.body.h / 2;
-  const offsets = satiety.rations === 1 ? [0] : [-0.75, 0.75];
+  const offsets = remainsOffsets(kinds.length);
   const items: DropItem[] = [];
-  for (let i = 0; i < satiety.rations; i++) {
-    const item = new DropItem('ration', cx + offsets[i], cy, true);
+  kinds.forEach((kind, i) => {
+    const item = new DropItem(kind, cx + offsets[i], cy, true);
     pushSupply(drops, item);
     items.push(item);
-  }
+  });
   const added = addRemainsSite(remainsSites, items);
   remainsSites = added.sites;
   if (added.evicted.length > 0) {
@@ -389,7 +402,8 @@ input.onWeaponChange(() => audio.weaponSwitch()); // 切替音(§6.7)。砲の�
 // DOM のパネルで、いつでも開ける(タッチは箱ボタン、PC は KeyB、Esc で閉じる)。
 // 開いている間は frame がゲーム更新を止める(ポーズ)。携行のタップ = その場に 1 個落とす
 // (休憩点にいる間は保管へ入れる)、保管のタップ = 休憩点にいる間だけ携行へ 1 個戻す(戻すと未確保に戻る)。
-// 状態セクションは旧 HUD の文字行の移転先(HP、満腹度と糧食、弾薬、階層、最深記録、確保済み)。
+// 状態セクションは旧 HUD の文字行の移転先(HP、満腹度と糧食、弾薬、階層、最深記録、確保済み)と、
+// 段階 3-B の確保額。
 const itemBoxEl = document.getElementById('itembox')!;
 const itemBoxStatusEl = document.getElementById('itembox-status')!;
 const itemBoxCarryLabelEl = document.getElementById('itembox-carry-label')!;
@@ -408,7 +422,7 @@ function isInRestBoxNow(): boolean {
   );
 }
 
-/** 状態セクションの 1 行(項目名と値)。cls は値の強調(warn / crit) */
+/** 状態セクションの 1 行(項目名と値)。cls は値の強調(warn / crit / gold) */
 function appendStatusRow(label: string, value: string, cls = ''): void {
   const k = document.createElement('span');
   k.className = 'k';
@@ -443,6 +457,9 @@ function renderItemBoxStatus(): void {
   appendStatusRow('階層', `第 ${maxLayer} 階層 / 高度 ${displayAltitude(player.body.y, player.body.h)}`);
   appendStatusRow('最深記録', bestLayer > 0 ? `第 ${bestLayer} 階層` : 'なし');
   appendStatusRow('確保済み', `${securedTotal(carry)} 個`);
+  // 確保額(段階 3-B §3): 確保済みの貴重品から導く値(引き出せば下がる)
+  const value = securedValue(carry);
+  appendStatusRow('確保額', `${value}`, value > 0 ? 'gold' : '');
 }
 
 function renderItemBox(): void {
@@ -869,16 +886,18 @@ function update(dt: number): void {
         respawnPoint = nextRespawn;
         audio.respawnSet(); // 復活点が移ったときだけ鳴らす(§6.7)
       }
-      // 確保(エクストラクション段階 A): どの休憩点でも、箱に入った瞬間に携行中の素材を全て確保済みへ移す。
+      // 確保(エクストラクション段階 A): どの休憩点でも、箱に入った瞬間に携行中の素材と貴重品
+      // (段階 3-B)を全て確保済みへ移す。
       // 弾薬は対象外で携行に残る(弾薬設計 §1 の裁定: 休憩点で武器が空にならない)。
       // 「入った瞬間」だけにするのは、箱で引き出した物を次の判定で再確保しないため。
-      // 合図は専用の短い音と字幕(既存の音系・字幕系に相乗り)。移す物が無ければ何も起きない
+      // 合図は専用の短い音と字幕(既存の音系・字幕系に相乗り)。移す物が無ければ何も起きない。
+      // 貴重品を含むときは字幕に今回ぶんの確保額を添える
       if (!prevInRestBox) {
         const secured = secureCarry(carry);
         if (secured.moved > 0) {
           carry = secured.state;
           audio.secure();
-          caption.show(secureCaptionText(secured.moved), simTime);
+          caption.show(secureCaptionText(secured.moved - secured.valuables, secured.valuables), simTime);
         }
       }
       // 休憩点の初回補給(サバイバル §7、弾薬設計 §3): 初めて入った休憩点だけ備蓄を開ける(セッション内のみ)。
@@ -1173,15 +1192,16 @@ function update(dt: number): void {
   if (player.dead) {
     audio.death(); // 死亡音と復活音(§6.7)。復活音はエンジン側で少し遅らせて鳴らす
     audio.revive();
-    // 遺留品(サバイバル段階 3): テレポートの前に、所持糧食を最後の安定接地点へ落とす
+    // 遺留品(サバイバル段階 3、段階 3-B): テレポートの前に、所持糧食と未確保の携行品を
+    // 最後の安定接地点へ落とし、携行を 0 にする(確保済みは残る)
     dropRemainsOnDeath();
     player.body.x = respawnPoint.x;
     player.body.y = respawnPoint.y;
     player.revive();
     // 満腹度は 35 に戻し、糧食は 0(遺留品へ移ったぶん。保持はしない)
     satiety = resetSatietyOnDeath(satiety);
-    // 携行(素材・弾薬、エクストラクション段階 A)は死亡しても保持する(ロスト・遺留品化は段階 B)。
-    // パルスの装填中の残発数だけは 0 に戻す(弾薬設計: 携行のセルから装填し直す)
+    // 携行は dropRemainsOnDeath で遺留品へ移して 0 になっている(段階 3-B のロスト)。
+    // パルスの装填中の残発数も 0 に戻す(弾薬設計の現行規則のまま。遺留品のセルを拾って装填し直す)
     pulseLoaded = 0;
     satietyPrevLevel = satietyLevel(satiety.value);
     // 復活点が新しい基準になる(次の遺留品の落下先は、ここから先の安定接地で決まる)

@@ -129,7 +129,7 @@ export function canAddSupply(drops: readonly DropItem[], n: number): boolean {
 
 /**
  * 地面の種別 → 携行の種別(弾薬設計 §1)。砲弾セル(charge)は携行の shell、パルス弾セルは
- * pulsecell、素材セルは material。即時消費の回復・糧食は携行しないので null。
+ * pulsecell、素材セルは material、貴重品は valuable(段階 3-B)。即時消費の回復・糧食は携行しないので null。
  */
 export function carryKindFor(kind: DropKind): CarryKind | null {
   switch (kind) {
@@ -139,12 +139,17 @@ export function carryKindFor(kind: DropKind): CarryKind | null {
       return 'pulsecell';
     case 'material':
       return 'material';
+    case 'valuable':
+      return 'valuable';
     default:
       return null;
   }
 }
 
-/** 携行の種別 → 地面に置くときの種別(アイテムボックスで落とすとき)。carryKindFor の逆写像 */
+/**
+ * 携行の種別 → 地面に置くときの種別(アイテムボックスで落とすとき、死亡時の遺留品)。
+ * carryKindFor の逆写像
+ */
 export function dropKindFor(kind: CarryKind): DropKind {
   switch (kind) {
     case 'shell':
@@ -153,13 +158,15 @@ export function dropKindFor(kind: CarryKind): DropKind {
       return 'pulsecell';
     case 'material':
       return 'material';
+    case 'valuable':
+      return 'valuable';
   }
 }
 
 /**
  * そのドロップを今拾えるか。満タン(HP が全快 / 糧食が所持上限 / 携行枠が満杯)のときは
  * 拾えず、ドロップはその場に残る(設計 §3・サバイバル設計 §5・エクストラクション段階 A)。
- * 砲弾セル・パルス弾セル・素材セルは携行へ入るので、まとめて携行枠で判定する(弾薬設計 §1)。
+ * 砲弾セル・パルス弾セル・素材セル・貴重品は携行へ入るので、まとめて携行枠で判定する(弾薬設計 §1)。
  * carried / maxCarry は携行中の総個数と携行枠。
  */
 export function canPickup(

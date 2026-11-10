@@ -22,11 +22,12 @@ export interface BossSpawn {
 /**
  * ボス撃破時の確定ドロップの構成(サバイバル段階 2、設計 §5・§10)。
  * 総数 3 は維持し、内訳は回復 1 + 砲弾 1 + 糧食 1(段階 1 までは砲弾 2 だった)。
- * 並びは出現位置の割り当て順(中心=回復、左=砲弾、右=糧食)に対応する。
+ * 段階 3-B §2 で貴重品 1 個を確定で末尾に足した(総数 4)。
+ * 並びは出現位置の割り当て順(中心=回復、左=砲弾、右=糧食、中心と右の間=貴重品)に対応する。
  * 抽選(dropFor)は経由しない確定報酬である。
  */
 export function bossRewardFor(): readonly DropKind[] {
-  return ['heal', 'charge', 'ration'];
+  return ['heal', 'charge', 'ration', 'valuable'];
 }
 
 /**

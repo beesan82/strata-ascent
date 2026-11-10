@@ -78,7 +78,8 @@ export const MINING_SAMPLES: readonly SampleName[] = ['mining0', 'mining1'];
 export function pickupSampleName(kind: string): SampleName {
   // パルス弾セル(弾薬設計)も砲弾の素材を流用する(金属のセルという点で同じ系統)
   if (kind === 'charge' || kind === 'material' || kind === 'pulsecell') return 'pickupCharge';
-  if (kind === 'heal') return 'pickupHeal';
+  // 貴重品(段階 3-B)は回復の素材を高いレート(params.PICKUP_VALUABLE_RATE)で鳴らす
+  if (kind === 'heal' || kind === 'valuable') return 'pickupHeal';
   return 'pickupRation';
 }
 

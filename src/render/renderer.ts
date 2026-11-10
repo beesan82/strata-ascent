@@ -610,7 +610,7 @@ export class Renderer {
 
     // ドロップ: 同じ fx 相乗りで平坦色だけ(新規パスなし)。
     // 砲弾セルは紫の角型+暗い芯、回復セルは緑の十字+淡い芯、糧食セルは金の横長+切り欠き、
-    // 素材セルは鋼青の縦長+淡い上端帯で、色と形の両方で判別する。
+    // 素材セルは鋼青の縦長+淡い上端帯、貴重品は金の菱形+淡い芯で、色と形の両方で判別する。
     // 色は 32 色パレットの実在色を使う(任意色は量子化で別色相へ寄る: 例 #7fc46a→金 #caa64a)
     if (fx.drops && fx.drops.length > 0) {
       const s = Math.max(2, Math.round(0.5 * ppt));
@@ -651,6 +651,18 @@ export class Renderer {
           ctx.fillStyle = '#8d62cb';
           ctx.fillRect(Math.round(sx - s / 2) + stripe, Math.round(sy - hgt / 2), stripe, hgt);
           ctx.fillRect(Math.round(sx + s / 2) - stripe * 2, Math.round(sy - hgt / 2), stripe, hgt);
+        } else if (d.kind === 'valuable') {
+          // 貴重品(段階 3-B §2): 金の菱形(◆)+淡い芯 1 点。糧食(金の横長)とは形で、
+          // 回復(緑の十字)とは色で分ける。菱形は行ごとの平坦な矩形で刻む(新規パスなし)
+          const top = Math.round(sy - s / 2);
+          const left = Math.round(sx - s / 2);
+          ctx.fillStyle = '#caa64a';
+          for (let r = 0; r < s; r++) {
+            const half = Math.max(1, Math.round(s / 2 - Math.abs(r + 0.5 - s / 2)));
+            ctx.fillRect(left + Math.round(s / 2) - half, top + r, half * 2, 1);
+          }
+          ctx.fillStyle = '#c7d0ce';
+          ctx.fillRect(Math.round(sx) - 1, Math.round(sy) - 1, 1, 1);
         } else {
           ctx.fillStyle = '#3c755f';
           const t = Math.max(1, Math.round(s * 0.38));

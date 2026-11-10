@@ -71,6 +71,7 @@ export interface SupplyTable {
   heal: number;
   charge: number;
   material: number;
+  valuable: number;
 }
 
 /** 消耗品 3 種の内訳(合計 1)。素材を混ぜる前の地区別の比率 */
@@ -100,23 +101,31 @@ const SUPPLY_CONSUMABLES: Record<BiomeId, ConsumableTable> = {
  */
 export const SUPPLY_MATERIAL_RATE = 0.2;
 
-/** キャッシュの中身の地区別確率(素材を混ぜた後。合計 1) */
+/**
+ * キャッシュから貴重品が出る確率(段階 3-B §2、目安 5%)。地区によらず一定。
+ * 素材と同じく消耗品 3 種の取り分から差し引く(素材の確率は変えない)。
+ */
+export const SUPPLY_VALUABLE_RATE = 0.05;
+
+/** キャッシュの中身の地区別確率(素材・貴重品を混ぜた後。合計 1) */
 export function supplyTableFor(biomeId: BiomeId): SupplyTable {
   const c = SUPPLY_CONSUMABLES[biomeId];
-  const k = 1 - SUPPLY_MATERIAL_RATE;
+  const k = 1 - SUPPLY_MATERIAL_RATE - SUPPLY_VALUABLE_RATE;
   return {
     ration: c.ration * k,
     heal: c.heal * k,
     charge: c.charge * k,
     material: SUPPLY_MATERIAL_RATE,
+    valuable: SUPPLY_VALUABLE_RATE,
   };
 }
 
 const SUPPLY_SALT = 4302;
 
 /**
- * キャッシュ 1 個の中身(消耗品 3 種か素材のいずれか 1 個)。決定論。
- * 区間の並びは 糧食 → 回復 → 砲弾 → 素材(素材は末尾に足した)。
+ * キャッシュ 1 個の中身(消耗品 3 種・素材・貴重品のいずれか 1 個)。決定論。
+ * 区間の並びは 糧食 → 回復 → 砲弾 → 素材 → 貴重品(素材、貴重品の順に末尾へ足した)。
+ * 消耗品の取り分が縮んだぶん、段階 3-B 前とは境界付近のロールの結果が変わる。
  */
 export function supplyFor(seed: number, cacheId: string, biomeId: BiomeId): DropKind {
   const t = supplyTableFor(biomeId);
@@ -124,7 +133,8 @@ export function supplyFor(seed: number, cacheId: string, biomeId: BiomeId): Drop
   if (roll < t.ration) return 'ration';
   if (roll < t.ration + t.heal) return 'heal';
   if (roll < t.ration + t.heal + t.charge) return 'charge';
-  return 'material';
+  if (roll < t.ration + t.heal + t.charge + t.material) return 'material';
+  return 'valuable';
 }
 
 const REST_STOCK_SALT = 4303;

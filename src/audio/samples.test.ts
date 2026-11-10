@@ -29,6 +29,8 @@ describe('audio samples table', () => {
     expect(pickupSampleName('material')).toBe('pickupCharge');
     // パルス弾セル(弾薬設計)も砲弾の素材を流用する
     expect(pickupSampleName('pulsecell')).toBe('pickupCharge');
+    // 貴重品(段階 3-B)は回復の素材を高いレートで流用する(レート差は engine 側)
+    expect(pickupSampleName('valuable')).toBe('pickupHeal');
     expect(pickupSampleName('unknown')).toBe('pickupRation');
   });
   it('環境ループは全バイオームに割り当てがあり、実在する素材を指す', () => {

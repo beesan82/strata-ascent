@@ -4,10 +4,72 @@ import {
   initialGroundAnchor,
   MAX_REMAINS_SITES,
   pruneRemainsSites,
+  remainsDropKinds,
+  remainsOffsets,
+  REMAINS_SPREAD,
   STABLE_GROUND_SEC,
   stepGroundAnchor,
   type GroundAnchor,
 } from './remains';
+import { carryKindFor } from '../entities/drop';
+import { addCarry, initialCarry, loseCarry, secureCarry, type CarryKind, type CarryState } from './carry';
+
+describe('remainsDropKinds(死亡時に落とす物の構成、段階 3-B §1)', () => {
+  /** 種別の列から携行状態を作る */
+  function carryOf(...kinds: CarryKind[]): CarryState {
+    let s = initialCarry();
+    for (const k of kinds) s = addCarry(s, k);
+    return s;
+  }
+
+  it('携行が空なら糧食だけ(段階 3 の挙動と同じ)', () => {
+    expect(remainsDropKinds(2, initialCarry().carried)).toEqual(['ration', 'ration']);
+    expect(remainsDropKinds(0, initialCarry().carried)).toEqual([]);
+  });
+
+  it('携行中の全種別を個数ぶん地面の種別へ写し、その後に糧食を続ける(砲弾は charge)', () => {
+    const s = carryOf('pulsecell', 'material', 'valuable', 'shell', 'material');
+    expect(remainsDropKinds(1, s.carried)).toEqual([
+      'material', 'material', 'valuable', 'charge', 'pulsecell', 'ration',
+    ]);
+  });
+
+  it('落とした物を拾えば同じ携行種別に戻る(carryKindFor との往復)', () => {
+    const s = carryOf('material', 'valuable', 'shell', 'pulsecell');
+    const back = remainsDropKinds(0, s.carried).map((k) => carryKindFor(k));
+    expect(back).toEqual(['material', 'valuable', 'shell', 'pulsecell']);
+  });
+
+  it('確保済みは落とさない(携行だけを見る)', () => {
+    let s = secureCarry(carryOf('material', 'valuable')).state;
+    s = addCarry(s, 'shell');
+    expect(remainsDropKinds(0, s.carried)).toEqual(['charge']);
+    // ロスト後の状態では確保済みが残り、携行は 0
+    const lost = loseCarry(s);
+    expect(lost.secured.material).toBe(1);
+    expect(lost.secured.valuable).toBe(1);
+    expect(remainsDropKinds(0, lost.carried)).toEqual([]);
+  });
+});
+
+describe('remainsOffsets(遺留品の横の並び)', () => {
+  it('0 個は空、1 個は中央、2 個は段階 3 と同じ ±0.75', () => {
+    expect(remainsOffsets(0)).toEqual([]);
+    expect(remainsOffsets(1)).toEqual([0]);
+    expect(remainsOffsets(2)).toEqual([-0.75, 0.75]);
+  });
+
+  it('3 個以上は ±REMAINS_SPREAD の間に等間隔で、幅は広がらない', () => {
+    expect(remainsOffsets(3)).toEqual([-0.75, 0, 0.75]);
+    for (const n of [4, 5, 7, 10]) {
+      const o = remainsOffsets(n);
+      expect(o).toHaveLength(n);
+      expect(o[0]).toBeCloseTo(-REMAINS_SPREAD, 10);
+      expect(o[n - 1]).toBeCloseTo(REMAINS_SPREAD, 10);
+      for (let i = 1; i < n; i++) expect(o[i]).toBeGreaterThan(o[i - 1]);
+    }
+  });
+});
 
 const DT = 1 / 60;
 

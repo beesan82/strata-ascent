@@ -19,6 +19,8 @@ export function pickupLabel(kind: DropKind): string {
       return 'パルス弾セル';
     case 'material':
       return '素材';
+    case 'valuable':
+      return '貴重品';
     case 'heal':
       return '回復';
     case 'ration':

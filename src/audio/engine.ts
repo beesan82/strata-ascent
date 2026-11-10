@@ -16,7 +16,7 @@ import {
   CACHE_GAIN, CACHE_HZ_END, CACHE_HZ_START, CACHE_SECONDS,
   EAT_GAIN, EAT_GAP, EAT_HZ, EAT_SECONDS,
   JINGLE_GAIN, JINGLE_NOTE_GAP, JINGLE_NOTE_SECONDS, MILESTONE_NOTES, NEW_RECORD_NOTES,
-  PICKUP_GAIN, PICKUP_MATERIAL_RATE, PICKUP_NOTE_GAP, pickupNotes,
+  PICKUP_GAIN, PICKUP_MATERIAL_RATE, PICKUP_NOTE_GAP, PICKUP_VALUABLE_RATE, pickupNotes,
   RECHARGE_FREQ, RECHARGE_GAIN, RECHARGE_SECONDS,
   RESPAWN_FREQ, RESPAWN_GAIN, RESPAWN_SECONDS, REST_STOCK_GAIN, REST_STOCK_NOTES,
   SECURE_GAIN, SECURE_NOTE_GAP, SECURE_NOTE_SECONDS, SECURE_NOTES, SECURE_SAMPLE_GAP, SECURE_SAMPLE_RATE,
@@ -783,7 +783,8 @@ export class AudioEngine {
   pickup(kind: string): void {
     if (!this.ctx) return;
     // パルス弾セルは砲弾と同じ素材を少し高いレートで(軽いセルの束として砲弾より軽く)
-    const rate = kind === 'charge' ? 1.1 : kind === 'pulsecell' ? 1.25 : kind === 'ration' ? 0.85 : kind === 'material' ? PICKUP_MATERIAL_RATE : 1;
+    // 貴重品(段階 3-B)は回復の素材を高いレートで(明るい小物の手応え)
+    const rate = kind === 'charge' ? 1.1 : kind === 'pulsecell' ? 1.25 : kind === 'ration' ? 0.85 : kind === 'material' ? PICKUP_MATERIAL_RATE : kind === 'valuable' ? PICKUP_VALUABLE_RATE : 1;
     if (this.playSample(pickupSampleName(kind), { gain: 0.5, rate, wet: SAMPLE_WET, space: 'room' })) return;
     this.noteRun(pickupNotes(kind), PICKUP_GAIN, PICKUP_NOTE_GAP, 0.16);
   }

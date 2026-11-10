@@ -16,6 +16,7 @@ import {
   pushSupply,
   supplyCount,
 } from './drop';
+import { CARRY_KINDS } from '../core/carry';
 
 /** y=10 行が床(x は全面) */
 const floorTiles = (_tx: number, ty: number): Tile => (ty === 10 ? TILE.SOLID : TILE.AIR);
@@ -192,21 +193,28 @@ describe('canPickup(満タン時は拾えない)', () => {
     expect(canPickup('material', 5, 5, 2, 2, 4, 5)).toBe(true);
     expect(canPickup('material', 5, 5, 2, 2, 0, 5)).toBe(true);
   });
+
+  it('貴重品: 素材と同じく携行枠だけで判定する(段階 3-B §2、枠は共有)', () => {
+    expect(canPickup('valuable', 1, 5, 0, 2, 5, 5)).toBe(false);
+    expect(canPickup('valuable', 5, 5, 2, 2, 4, 5)).toBe(true);
+  });
 });
 
 describe('carryKindFor / dropKindFor(地面の種別と携行の種別の対応)', () => {
-  it('砲弾セルは shell、パルス弾セルは pulsecell、素材は material、即時消費は null', () => {
+  it('砲弾セルは shell、パルス弾セルは pulsecell、素材は material、貴重品は valuable、即時消費は null', () => {
     expect(carryKindFor('charge')).toBe('shell');
     expect(carryKindFor('pulsecell')).toBe('pulsecell');
     expect(carryKindFor('material')).toBe('material');
+    expect(carryKindFor('valuable')).toBe('valuable');
     expect(carryKindFor('heal')).toBeNull();
     expect(carryKindFor('ration')).toBeNull();
   });
 
-  it('dropKindFor は carryKindFor の逆写像(落として拾うと同じ携行種別に戻る)', () => {
-    for (const k of ['material', 'shell', 'pulsecell'] as const) {
+  it('dropKindFor は carryKindFor の逆写像(落として拾うと同じ携行種別に戻る)。全携行種別で成り立つ', () => {
+    for (const k of CARRY_KINDS) {
       expect(carryKindFor(dropKindFor(k))).toBe(k);
     }
     expect(dropKindFor('shell')).toBe('charge');
+    expect(dropKindFor('valuable')).toBe('valuable');
   });
 });
