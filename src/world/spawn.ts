@@ -254,11 +254,67 @@ export function chooseFlyerSpawns(
   return spawns;
 }
 
+// ---- 粘着保持(種別を問わない。設計 2026-11-11-flyer-stickiness / 2026-11-11-enemy-stability) ----
+
 /**
- * 飛行敵の粘着保持の保持半径(タイル、チェビシェフ距離。設計 2026-11-11-flyer-stickiness)。
- * 敵スキャンの窓(横 ±40・縦 ±24)より広くし、窓の位置で選定が入れ替わっただけでは手放さない。
+ * 敵の粘着保持の保持半径(タイル、チェビシェフ距離)。敵スキャンの窓(横 ±40・縦 ±24)より広くし、
+ * 窓の位置で選定が入れ替わっただけでは手放さない。飛行敵・歩行敵・固定砲台で共通
  */
-export const FLYER_HOLD_RADIUS = 64;
+export const ENEMY_HOLD_RADIUS = 64;
+/** 飛行敵の保持半径(2.17 の名前。値は ENEMY_HOLD_RADIUS と同じ) */
+export const FLYER_HOLD_RADIUS = ENEMY_HOLD_RADIUS;
+
+/** スポーンアンカー(選定が決めた出現位置。個体が動いても変わらない) */
+export interface SpawnAnchor {
+  readonly x: number;
+  readonly y: number;
+}
+
+/**
+ * 粘着保持の判定(種別を問わない純粋関数)。敵の選定は列挙順の貪欲な密度判定なので、走査窓が
+ * ずれるだけで選定集合が入れ替わる。生存中の個体は、今回の選定に入っているか、スポーンアンカーが
+ * プレイヤーから保持半径以内なら残す。地区ゲートが閉じた地区(選定が空)や保護点の内側でも同じ規則で
+ * 残す(ゲート・保護点は新規出現を止めるだけで、近くの個体は消さない)。
+ * anchorOf は実体からスポーンアンカーを引く
+ */
+export function retainHeld<T extends { spawnId: string }>(
+  current: readonly T[],
+  desiredIds: ReadonlySet<string>,
+  anchorOf: (e: T) => SpawnAnchor,
+  playerX: number,
+  playerY: number,
+  radius: number = ENEMY_HOLD_RADIUS,
+): T[] {
+  return current.filter((e) => {
+    if (desiredIds.has(e.spawnId)) return true;
+    const a = anchorOf(e);
+    return Math.max(Math.abs(a.x - playerX), Math.abs(a.y - playerY)) <= radius;
+  });
+}
+
+/**
+ * 保持した個体に対して新しく湧かせる選定(種別を問わない純粋関数)。既に実体がある ID と、保持中の
+ * 個体のアンカーに密度上限(densityDX × densityDY、境界は選定と同じ「未満」)の内側で近接する選定は
+ * 湧かせない(窓のずれで選ばれた別の代表が、保持中の個体の隣に湧いて密度が倍になるのを防ぐ)。
+ * 選定どうしは選定関数が密度を満たしているので、選定に入っている保持個体が他の選定を締め出すことはない。
+ * desired の (x, y) は選定がアンカーとして返す位置(実体側の anchorOf と同じ基準)
+ */
+export function newHeldSpawns<D extends { id: string; x: number; y: number }, T extends { spawnId: string }>(
+  desired: readonly D[],
+  kept: readonly T[],
+  anchorOf: (e: T) => SpawnAnchor,
+  densityDX: number,
+  densityDY: number,
+): D[] {
+  return desired.filter(
+    (d) =>
+      !kept.some((k) => {
+        if (k.spawnId === d.id) return true;
+        const a = anchorOf(k);
+        return Math.abs(a.x - d.x) < densityDX && Math.abs(a.y - d.y) < densityDY;
+      }),
+  );
+}
 
 /** 保持の判定に要る飛行敵の実体の形(main.ts の `{ spawnId, flyer: Flyer }` と構造互換) */
 export interface HeldFlyer {
@@ -266,12 +322,9 @@ export interface HeldFlyer {
   flyer: { readonly anchorX: number; readonly anchorY: number };
 }
 
-/**
- * 飛行敵の粘着保持(設計 2026-11-11-flyer-stickiness)。chooseFlyerSpawns は列挙順の貪欲な
- * 密度判定なので、開けた空間では走査窓が数タイルずれるだけで選定集合が入れ替わる。
- * 生存中の個体は、今回の選定に入っているか、スポーンアンカーがプレイヤーから保持半径以内なら残す。
- * 地区ゲートが閉じた地区(選定が空)でも同じ規則で残す(新規出現を止めるだけで、近くの個体は消さない)。
- */
+const flyerAnchor = (e: HeldFlyer): SpawnAnchor => ({ x: e.flyer.anchorX, y: e.flyer.anchorY });
+
+/** 飛行敵の粘着保持(設計 2026-11-11-flyer-stickiness)。retainHeld を飛行敵のアンカーで引く */
 export function retainFlyers<T extends HeldFlyer>(
   current: readonly T[],
   desiredIds: ReadonlySet<string>,
@@ -279,28 +332,12 @@ export function retainFlyers<T extends HeldFlyer>(
   playerY: number,
   radius: number = FLYER_HOLD_RADIUS,
 ): T[] {
-  return current.filter(
-    (e) =>
-      desiredIds.has(e.spawnId) ||
-      Math.max(Math.abs(e.flyer.anchorX - playerX), Math.abs(e.flyer.anchorY - playerY)) <= radius,
-  );
+  return retainHeld(current, desiredIds, flyerAnchor, playerX, playerY, radius);
 }
 
-/**
- * 保持した個体に対して新しく湧かせる選定。既に実体がある ID と、保持中の個体のアンカーに
- * 密度上限(32×16)の内側で近接する選定は湧かせない(窓のずれで選ばれた別の代表が、保持中の
- * 個体の隣に湧いて密度が倍になるのを防ぐ)。選定どうしは chooseFlyerSpawns が密度を満たしている
- * ので、選定に入っている保持個体が他の選定を締め出すことはない。
- */
+/** 飛行敵の新規出現。保持個体のアンカーから密度上限(32×16)の内側の選定は湧かせない */
 export function newFlyerSpawns(desired: readonly FlyerSpawn[], kept: readonly HeldFlyer[]): FlyerSpawn[] {
-  return desired.filter(
-    (d) =>
-      !kept.some(
-        (k) =>
-          k.spawnId === d.id ||
-          (Math.abs(k.flyer.anchorX - d.x) < FLYER_DENSITY_DX && Math.abs(k.flyer.anchorY - d.y) < FLYER_DENSITY_DY),
-      ),
-  );
+  return newHeldSpawns(desired, kept, flyerAnchor, FLYER_DENSITY_DX, FLYER_DENSITY_DY);
 }
 
 /**
@@ -382,4 +419,61 @@ export function chooseTurretSpawns(
   // 撃破済みは Walker と同じく選定の最後に差し引く(密度の繰り上がりによる置換を防ぐ)
   if (defeated) return spawns.filter((s) => !defeated.has(s.id));
   return spawns;
+}
+
+/**
+ * 保持の判定に要る歩行敵・固定砲台の実体の形(設計 2026-11-11-enemy-stability)。
+ * anchor は選定が返した出現位置(ボディの左上)で、歩行敵が歩いても変わらない
+ */
+export interface HeldEnemy {
+  spawnId: string;
+  anchor: SpawnAnchor;
+}
+
+const enemyAnchor = (e: HeldEnemy): SpawnAnchor => e.anchor;
+
+/** 歩行敵・固定砲台の粘着保持。retainHeld をスポーンアンカーで引く(保持半径は飛行敵と同じ 64) */
+export function retainEnemies<T extends HeldEnemy>(
+  current: readonly T[],
+  desiredIds: ReadonlySet<string>,
+  playerX: number,
+  playerY: number,
+  radius: number = ENEMY_HOLD_RADIUS,
+): T[] {
+  return retainHeld(current, desiredIds, enemyAnchor, playerX, playerY, radius);
+}
+
+/** (x, y) からチェビシェフ TURRET_OCCUPIED_R 以内にアンカーを持つ実体があるか */
+function nearAnchor(held: readonly HeldEnemy[], x: number, y: number): boolean {
+  return held.some((h) => Math.max(Math.abs(h.anchor.x - x), Math.abs(h.anchor.y - y)) <= TURRET_OCCUPIED_R);
+}
+
+/**
+ * 歩行敵の新規出現。既に実体がある ID と、保持中の歩行敵のアンカーから密度上限(24×12)の内側の
+ * 選定は湧かせない。保持中の砲台のアンカーから 3 タイル以内(chooseTurretSpawns の近接除外と同じ距離)
+ * の選定も湧かせない(従来は歩行敵の選定が砲台を退けたが、保持中の砲台は退けず歩行敵側を止める)
+ */
+export function newWalkerSpawns(
+  desired: readonly EnemySpawn[],
+  keptWalkers: readonly HeldEnemy[],
+  keptTurrets: readonly HeldEnemy[],
+): EnemySpawn[] {
+  return newHeldSpawns(desired, keptWalkers, enemyAnchor, DENSITY_DX, DENSITY_DY).filter(
+    (d) => !nearAnchor(keptTurrets, d.x, d.y),
+  );
+}
+
+/**
+ * 固定砲台の新規出現。既に実体がある ID と、保持中の砲台のアンカーから密度上限(24×12)の内側の
+ * 選定は湧かせない。場にいる歩行敵(保持・新規とも)のアンカーから 3 タイル以内の選定も湧かせない
+ * (選定は今回の歩行敵の選定だけを occupied に見るので、選定外で保持している歩行敵をここで足す)
+ */
+export function newTurretSpawns(
+  desired: readonly TurretSpawn[],
+  keptTurrets: readonly HeldEnemy[],
+  walkers: readonly HeldEnemy[],
+): TurretSpawn[] {
+  return newHeldSpawns(desired, keptTurrets, enemyAnchor, DENSITY_DX, DENSITY_DY).filter(
+    (d) => !nearAnchor(walkers, d.x, d.y),
+  );
 }
