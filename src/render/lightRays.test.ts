@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { CHUNK_SIZE, TILE } from '../world/tiles';
 import {
-  chunkSolidLookup, circleRays, coneRays, rayDistance, CIRCLE_RAYS, CONE_RAYS, WALL_SKIN, type SolidAt,
+  chunkSolidLookup, circleRays, clipPolygonToRect, columnReach, coneRays, haloRadius, rayDistance, raysBlocked, reachRuns,
+  CIRCLE_RAYS, CONE_RAYS, HALO_RAYS, LAMP_HALO_RAYS, WALL_SKIN, type SolidAt,
 } from './lightRays';
 
 const open: SolidAt = () => false;
@@ -136,6 +137,126 @@ describe('coneRays(ライトコーン)', () => {
     expect(through).toBeLessThan(CONE_RAYS);
   });
 });
+
+describe('columnReach(光柱・光条の列ごとの平行光、2.16)', () => {
+  it('開けた場所では全列が end まで届く(下向き・上向き)', () => {
+    expect(Array.from(columnReach(5, 3, 10, 30, open))).toEqual([30, 30, 30]);
+    expect(Array.from(columnReach(5, 3, 30, 10, open))).toEqual([10, 10, 10]);
+  });
+
+  it('下向きは床の上面+照らし代で止まり、その下(床の中)へは届かない', () => {
+    // x=6 の列だけ y=20 の行が固体
+    const floor: SolidAt = (x, y) => x === 6 && y === 20;
+    const r = columnReach(5, 3, 10, 30, floor);
+    expect(r[0]).toBe(30);
+    expect(r[1]).toBeCloseTo(20 + WALL_SKIN);
+    expect(r[2]).toBe(30);
+  });
+
+  it('上向きは天井の下面−照らし代で止まる', () => {
+    const ceiling: SolidAt = (_x, y) => y === 14;
+    const r = columnReach(0, 2, 30, 10, ceiling);
+    expect(r[0]).toBeCloseTo(15 - WALL_SKIN);
+    expect(r[1]).toBeCloseTo(15 - WALL_SKIN);
+  });
+
+  it('起点の行が固体の列には光が入らない(壁の中から光らない)', () => {
+    const wall: SolidAt = (x) => x === 1;
+    const down = columnReach(0, 3, 10, 30, wall);
+    expect(down[1]).toBe(10);
+    // 上向きで start が整数なら、その 1 つ上の行(y=29)が起点の行
+    const row29: SolidAt = (x, y) => x === 0 && y === 29;
+    expect(columnReach(0, 1, 30, 10, row29)[0]).toBe(30);
+    // 下向きで start が整数なら、その行(y=10)が起点の行
+    const row10: SolidAt = (x, y) => x === 0 && y === 10;
+    expect(columnReach(0, 1, 10, 30, row10)[0]).toBe(10);
+  });
+
+  it('照らし代で end を超えない', () => {
+    const floor: SolidAt = (_x, y) => y === 29;
+    expect(columnReach(0, 1, 10, 29.1, floor)[0]).toBeCloseTo(29.1, 9);
+  });
+
+  it('out を渡すとそこへ書いて同じ配列を返す', () => {
+    const out = new Float64Array(8);
+    expect(columnReach(0, 3, 0, 5, open, out)).toBe(out);
+  });
+});
+
+describe('reachRuns(同じ到達位置の列をまとめる)', () => {
+  it('全列が同じなら矩形の幅のまま 1 区間', () => {
+    const reach = new Float64Array([30, 30, 30, 30]);
+    expect(reachRuns(reach, 10, 4, 10.5, 13.25)).toEqual([{ x0: 10.5, x1: 13.25, reach: 30 }]);
+  });
+
+  it('到達位置の変わり目で区切る(列の境界で切り、両端は矩形で切る)', () => {
+    const reach = new Float64Array([30, 20.3, 20.3, 30]);
+    expect(reachRuns(reach, 10, 4, 10.5, 13.5)).toEqual([
+      { x0: 10.5, x1: 11, reach: 30 },
+      { x0: 11, x1: 13, reach: 20.3 },
+      { x0: 13, x1: 13.5, reach: 30 },
+    ]);
+  });
+
+  it('reach の外の列は返さない', () => {
+    const reach = new Float64Array([1, 2]);
+    expect(reachRuns(reach, 10, 2, 8, 20)).toEqual([
+      { x0: 10, x1: 11, reach: 1 },
+      { x0: 11, x1: 12, reach: 2 },
+    ]);
+    expect(reachRuns(reach, 10, 2, 0, 5)).toEqual([]);
+  });
+});
+
+describe('点光源の暈(haloRadius / raysBlocked / clipPolygonToRect、2.16)', () => {
+  it('レイの本数は光源の種類ごとに小さく保つ(暈 16 本、休憩点の灯 12 本)', () => {
+    expect(HALO_RAYS).toBe(16);
+    expect(LAMP_HALO_RAYS).toBe(12);
+    expect(HALO_RAYS).toBeLessThan(CIRCLE_RAYS);
+  });
+
+  it('開けた場所ではレイの多角形が暈の矩形を必ず含む(形が変わらない)', () => {
+    for (const rays of [HALO_RAYS, LAMP_HALO_RAYS]) {
+      const r = haloRadius(10, 9.5, 7, 7, 13, 10, rays);
+      const pts = circleRays(10, 9.5, r, rays, open);
+      expect(raysBlocked(pts, rays, 10, 9.5, r)).toBe(false);
+      // 多角形で切っても矩形の面積が保たれる
+      const poly = clipPolygonToRect(pts, rays, 7, 7, 13, 10);
+      expect(polyArea(poly)).toBeCloseTo(6 * 3, 5);
+    }
+  });
+
+  it('壁があるとレイが止まり、暈は壁の手前(照らし代まで)だけになる', () => {
+    // 灯 (10, 9.5) の右 x=12 の列が壁。暈は x 7..13
+    const wall = wallAt(12);
+    const r = haloRadius(10, 9.5, 7, 7, 13, 10, HALO_RAYS);
+    const pts = circleRays(10, 9.5, r, HALO_RAYS, wall);
+    expect(raysBlocked(pts, HALO_RAYS, 10, 9.5, r)).toBe(true);
+    const poly = clipPolygonToRect(pts, HALO_RAYS, 7, 7, 13, 10);
+    for (let i = 0; i < poly.length; i += 2) expect(poly[i]).toBeLessThanOrEqual(12 + WALL_SKIN + 1e-9);
+    // 壁の向こう(x ≥ 12.3)は塗らないので、面積は元の矩形より小さい
+    expect(polyArea(poly)).toBeLessThan(6 * 3);
+    expect(polyArea(poly)).toBeGreaterThan(0);
+  });
+
+  it('clipPolygonToRect: 重ならなければ空、矩形の内側の多角形はそのまま', () => {
+    const square = [0, 0, 2, 0, 2, 2, 0, 2];
+    expect(clipPolygonToRect(square, 4, 5, 5, 6, 6)).toEqual([]);
+    expect(polyArea(clipPolygonToRect(square, 4, -1, -1, 3, 3))).toBeCloseTo(4);
+    expect(polyArea(clipPolygonToRect(square, 4, 1, 1, 3, 3))).toBeCloseTo(1);
+  });
+});
+
+/** [x0,y0,...] の多角形の面積(靴紐公式) */
+function polyArea(p: number[]): number {
+  let s = 0;
+  const m = p.length / 2;
+  for (let i = 0; i < m; i++) {
+    const j = (i + 1) % m;
+    s += p[i * 2] * p[j * 2 + 1] - p[j * 2] * p[i * 2 + 1];
+  }
+  return Math.abs(s) / 2;
+}
 
 describe('chunkSolidLookup(チャンクからの固体判定)', () => {
   function chunkWith(tiles: [number, number, number][]): Uint8Array {

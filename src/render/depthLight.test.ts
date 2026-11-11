@@ -1,5 +1,47 @@
 import { describe, expect, it } from 'vitest';
-import { coneParams, depthShade, DEPTH_SHADE_MIN, FLASHLIGHT_RADIUS_MULT } from './depthLight';
+import {
+  coneParams, depthShade, enclosure, enclosureShade, DEPTH_SHADE_MIN, ENCLOSURE_CLOSED, ENCLOSURE_OPEN, ENCLOSURE_SHADE_MIN,
+  FLASHLIGHT_RADIUS_MULT,
+} from './depthLight';
+import { OPENNESS_LO } from '../core/zoom';
+
+describe('enclosure / enclosureShade(室内の暗さ、2.16)', () => {
+  it('開けた場所(ズームの閉塞境界 OPENNESS_LO 以上)では従来どおり係数 1', () => {
+    expect(ENCLOSURE_OPEN).toBe(OPENNESS_LO);
+    for (const o of [ENCLOSURE_OPEN, 0.7, 0.9, 1]) {
+      expect(enclosure(o)).toBe(0);
+      expect(enclosureShade(o)).toBe(1);
+    }
+  });
+
+  it('囲まれるほど暗く(単調非減少の囲まれ度、単調非増加の係数)', () => {
+    for (let o = 0; o < 1; o += 0.01) {
+      expect(enclosure(o)).toBeGreaterThanOrEqual(enclosure(o + 0.01));
+      expect(enclosureShade(o)).toBeLessThanOrEqual(enclosureShade(o + 0.01));
+    }
+    const mid = (ENCLOSURE_OPEN + ENCLOSURE_CLOSED) / 2;
+    expect(enclosure(mid)).toBeCloseTo(0.5);
+    expect(enclosureShade(mid)).toBeCloseTo((1 + ENCLOSURE_SHADE_MIN) / 2);
+  });
+
+  it('下限で止まり、真っ黒にはしない', () => {
+    expect(ENCLOSURE_SHADE_MIN).toBeGreaterThan(0.4);
+    for (const o of [ENCLOSURE_CLOSED, 0.1, 0, -1]) {
+      expect(enclosure(o)).toBe(1);
+      expect(enclosureShade(o)).toBeCloseTo(ENCLOSURE_SHADE_MIN);
+    }
+  });
+
+  it('深さ係数との積で両方効く(深く囲まれた場所が最も暗い)', () => {
+    const open0 = depthShade(0) * enclosureShade(1);
+    const closed0 = depthShade(0) * enclosureShade(0);
+    const closedDeep = depthShade(10) * enclosureShade(0);
+    expect(open0).toBe(1);
+    expect(closed0).toBeLessThan(open0);
+    expect(closedDeep).toBeLessThan(closed0);
+    expect(closedDeep).toBeCloseTo(DEPTH_SHADE_MIN * ENCLOSURE_SHADE_MIN);
+  });
+});
 
 describe('depthShade(深さの明るさ)', () => {
   it('層 0 で 1.0、1 層ごとに 0.06 ずつ下がる', () => {

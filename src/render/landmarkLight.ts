@@ -5,6 +5,8 @@ import { hash2 } from '../world/noise';
 import { REST_HEIGHT, restPointAt } from '../world/restpoint';
 import { beaconPulse } from './beacon';
 import { biomeForCell, mixHex } from './biome';
+import { HALO_RAYS, LAMP_HALO_RAYS, type ColumnDir, type SolidAt } from './lightRays';
+import { castColumns, fillLitRect, fillPointLit, fillWorldRect, rectOnScreen, type LightView } from './occludedFill';
 
 /**
  * 大構造の固有の光(設計書 §6.2、ゾーン化 段階 2 で地区変種の光へ拡張)と休憩点の暖色(§6.3)。
@@ -48,6 +50,16 @@ export function restLampColor(seed: number, cell: number): string {
   return mixHex(REST_WARM_COLOR, biomeForCell(seed, cell).accent, 0.5);
 }
 
+/**
+ * 光の矩形の壁遮蔽(設計 2026-11-11-light-occlusion-ambient §1)。
+ * column: 縦の平行光。dir の向きへ列ごとにレイを飛ばし、地形で止める。from は光の入口の Y
+ *   (未指定は矩形の上端(down)・下端(up))。入口から矩形までの間の地形でも止まる。
+ * point: 点光源 (x, y) の暈。全周 rays 本のレイで壁に遮った多角形の内側だけを塗る。
+ */
+export type LightOccl =
+  | { kind: 'column'; dir: ColumnDir; from?: number }
+  | { kind: 'point'; x: number; y: number; rays: number };
+
 /** ワールド座標(タイル)の平坦な矩形 [x0,x1)×[y0,y1) */
 export interface LightRect {
   x0: number;
@@ -56,6 +68,8 @@ export interface LightRect {
   y1: number;
   alpha: number;
   color: string;
+  /** 壁遮蔽。未指定は遮蔽しない(灯そのもの=光源の点) */
+  occl?: LightOccl;
 }
 
 /** 変圧塔の放電の明滅。時刻を DISCHARGE_RATE で量子化し hash で決める(不規則・決定論) */
@@ -68,24 +82,27 @@ function towerFamilyLights(seed: number, lm: Landmark, timeSec: number, out: Lig
   const color = biomeForCell(seed, lm.cell).accent;
   // 灯(2×1 タイル)と暈(6×3)。頂部の開口(top−8..top)のすぐ上に浮かぶ
   const y = lm.top - 8;
+  // 壁遮蔽(2.16 §1): 暈は灯の中心からの全周レイで、光柱は灯の行から上向きの平行光で地形に止める。
+  // 灯そのもの(2×1)は光源の点なので遮蔽しない
+  const halo: LightOccl = { kind: 'point', x: lm.x, y: y - 0.5, rays: HALO_RAYS };
   if (lm.kind === 'cooling') {
     // 青い光柱が頂部から上へ伸びる + 灯と暈
-    out.push({ x0: lm.x - 2, y0: lm.top - COOLING_BEAM_HEIGHT, x1: lm.x + 2, y1: y, alpha: COOLING_BEAM_ALPHA, color });
+    out.push({ x0: lm.x - 2, y0: lm.top - COOLING_BEAM_HEIGHT, x1: lm.x + 2, y1: y, alpha: COOLING_BEAM_ALPHA, color, occl: { kind: 'column', dir: 'up' } });
     out.push({ x0: lm.x - 1, y0: y - 1, x1: lm.x + 1, y1: y, alpha: TOWER_LAMP_ALPHA, color });
-    out.push({ x0: lm.x - 3, y0: y - 3, x1: lm.x + 3, y1: y, alpha: TOWER_HALO_ALPHA, color });
+    out.push({ x0: lm.x - 3, y0: y - 3, x1: lm.x + 3, y1: y, alpha: TOWER_HALO_ALPHA, color, occl: halo });
   } else if (lm.kind === 'transformer') {
     if (!dischargeOn(timeSec, lm.k)) return;
     out.push({ x0: lm.x - 1, y0: y - 1, x1: lm.x + 1, y1: y, alpha: 0.8, color });
-    out.push({ x0: lm.x - 4, y0: y - 4, x1: lm.x + 4, y1: y, alpha: 0.16, color });
+    out.push({ x0: lm.x - 4, y0: y - 4, x1: lm.x + 4, y1: y, alpha: 0.16, color, occl: halo });
   } else if (lm.kind === 'chimney') {
     // 熱光は常時点灯
     out.push({ x0: lm.x - 1, y0: y - 1, x1: lm.x + 1, y1: y, alpha: TOWER_LAMP_ALPHA, color });
-    out.push({ x0: lm.x - 3, y0: y - 3, x1: lm.x + 3, y1: y, alpha: TOWER_HALO_ALPHA + 0.02, color });
+    out.push({ x0: lm.x - 3, y0: y - 3, x1: lm.x + 3, y1: y, alpha: TOWER_HALO_ALPHA + 0.02, color, occl: halo });
   } else {
     // 椎骨柱: 脈打つ淡紫(beaconPulse に相乗り)
     const pulse = beaconPulse(timeSec);
     out.push({ x0: lm.x - 1, y0: y - 1, x1: lm.x + 1, y1: y, alpha: 0.5 * pulse, color });
-    out.push({ x0: lm.x - 3, y0: y - 3, x1: lm.x + 3, y1: y, alpha: 0.08 * pulse, color });
+    out.push({ x0: lm.x - 3, y0: y - 3, x1: lm.x + 3, y1: y, alpha: 0.08 * pulse, color, occl: halo });
   }
 }
 
@@ -98,7 +115,8 @@ function collapseLights(seed: number, lm: Landmark, timeSec: number, out: LightR
     const half = Math.round((width * RIFT_RAY_WIDTH) / 2);
     const x0 = cx - half;
     const x1 = cx + half;
-    out.push({ x0, y0: lm.top - RIFT_RAY_TOP, x1, y1: rampTopY(lm, Math.floor((x0 + x1) / 2)), alpha: RIFT_ALPHA * (1 - 0.25 * i) * pulse, color });
+    // 光条は上の層から差し込む平行光: 上端から下へ、地形(斜路の手前の瓦礫など)で止める(2.16 §1)
+    out.push({ x0, y0: lm.top - RIFT_RAY_TOP, x1, y1: rampTopY(lm, Math.floor((x0 + x1) / 2)), alpha: RIFT_ALPHA * (1 - 0.25 * i) * pulse, color, occl: { kind: 'column', dir: 'down' } });
   });
 }
 
@@ -129,16 +147,23 @@ export function landmarkLightsInView(seed: number, camX: number, camY: number, s
       }
       const rp = restPointAt(seed, cell, k);
       if (rp.right >= x0 && rp.left <= x1 && rp.floorY >= y0 && rp.floorY - REST_HEIGHT - 1 <= y1) {
-        out.push({ x0: rp.left + 1, y0: rp.floorY - REST_HEIGHT, x1: rp.right, y1: rp.floorY, alpha: REST_WARM_ALPHA, color: restLampColor(seed, rp.cell) });
+        // 箱の内側の暖色。箱の内側に収まる矩形だが、前室の床などが箱へ重なる配置では中に固体が入るので、
+        // 天井の下から下向きの平行光で地形に止める(2.16 §1。全周レイだと箱の四隅が弦で欠ける)
+        out.push({ x0: rp.left + 1, y0: rp.floorY - REST_HEIGHT, x1: rp.right, y1: rp.floorY, alpha: REST_WARM_ALPHA, color: restLampColor(seed, rp.cell), occl: { kind: 'column', dir: 'down' } });
       }
     }
   }
   return out;
 }
 
+/** 遮蔽の作業配列(列の到達位置と、点光源のレイの端点)。描画は 1 スレッドで順に呼ばれるので共有する */
+let columnBuf = new Float64Array(128);
+const pointBuf = new Float64Array(Math.max(HALO_RAYS, LAMP_HALO_RAYS) * 2);
+
 /**
  * ワールド座標の矩形を lighter で塗る(画面内の部分だけ。lighter の画素数を最小に)。
  * LandmarkLights と AmbientLights(ambient.ts)が共有する。テスト対象外(Canvas)
+ * solidAt を渡すと矩形の occl に従って壁で遮る(2.16 §1)。画面外の矩形はレイを飛ばす前に捨てる
  */
 export function drawLightRects(
   ctx: CanvasRenderingContext2D,
@@ -147,21 +172,28 @@ export function drawLightRects(
   w: number,
   h: number,
   ppt: number,
+  solidAt?: SolidAt,
 ): void {
   if (rects.length === 0) return;
+  const v: LightView = { camX: cam.x, camY: cam.y, w, h, ppt };
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   for (const r of rects) {
-    const sx0 = (r.x0 - cam.x) * ppt + w / 2;
-    const sy0 = (r.y0 - cam.y) * ppt + h / 2;
-    const sx1 = (r.x1 - cam.x) * ppt + w / 2;
-    const sy1 = (r.y1 - cam.y) * ppt + h / 2;
-    const xa = Math.max(0, sx0), xb = Math.min(w, sx1);
-    const ya = Math.max(0, sy0), yb = Math.min(h, sy1);
-    if (xb <= xa || yb <= ya) continue;
+    if (!rectOnScreen(v, r.x0, r.y0, r.x1, r.y1)) continue;
     ctx.globalAlpha = r.alpha;
     ctx.fillStyle = r.color;
-    ctx.fillRect(xa, ya, xb - xa, yb - ya);
+    const o = r.occl;
+    if (!solidAt || !o) {
+      fillWorldRect(ctx, v, r.x0, r.y0, r.x1, r.y1);
+    } else if (o.kind === 'column') {
+      const down = o.dir === 'down';
+      const start = o.from ?? (down ? r.y0 : r.y1);
+      const col = castColumns(v, r.x0, r.x1, start, down ? r.y1 : r.y0, solidAt, columnBuf);
+      columnBuf = col.reach;
+      fillLitRect(ctx, v, col, r.x0, r.y0, r.x1, r.y1);
+    } else {
+      fillPointLit(ctx, v, r.x0, r.y0, r.x1, r.y1, o.x, o.y, o.rays, solidAt, pointBuf);
+    }
   }
   ctx.restore();
 }
@@ -177,7 +209,8 @@ export class LandmarkLights {
     h: number,
     ppt: number,
     timeSec: number,
+    solidAt?: SolidAt,
   ): void {
-    drawLightRects(ctx, landmarkLightsInView(this.seed, cam.x, cam.y, w / ppt, h / ppt, timeSec), cam, w, h, ppt);
+    drawLightRects(ctx, landmarkLightsInView(this.seed, cam.x, cam.y, w / ppt, h / ppt, timeSec), cam, w, h, ppt, solidAt);
   }
 }

@@ -4,6 +4,7 @@ import { interfaceBottom, mod, PASSAGE_SLOT } from '../world/interface';
 import { hash2 } from '../world/noise';
 import { REST_HEIGHT, restPointAt } from '../world/restpoint';
 import { drawLightRects, type LightRect } from './landmarkLight';
+import { LAMP_HALO_RAYS, type SolidAt } from './lightRays';
 
 /**
  * 動く世界(設計書 §6.6): 休憩点の灯の明滅・遠景の建設者・水系の落下粒。純粋関数が幾何を
@@ -67,7 +68,11 @@ export function lampLightsInView(seed: number, camX: number, camY: number, spanX
         if (glow <= 0) continue;
         const lx = rp.lamps[i];
         out.push({ x0: lx, y0: rp.floorY - 1, x1: lx + 1, y1: rp.floorY, alpha: LAMP_ALPHA * glow, color: LAMP_COLOR });
-        out.push({ x0: lx - 1, y0: rp.floorY - 2, x1: lx + 2, y1: rp.floorY, alpha: LAMP_HALO_ALPHA * glow, color: LAMP_COLOR });
+        // 暈は灯の中心からの全周レイで壁に遮る(2.16 §1)。灯そのもの(1×1)は光源の点なので遮蔽しない
+        out.push({
+          x0: lx - 1, y0: rp.floorY - 2, x1: lx + 2, y1: rp.floorY, alpha: LAMP_HALO_ALPHA * glow, color: LAMP_COLOR,
+          occl: { kind: 'point', x: lx + 0.5, y: rp.floorY - 0.5, rays: LAMP_HALO_RAYS },
+        });
       }
     }
   }
@@ -164,7 +169,9 @@ export function fallingDropsInView(seed: number, camX: number, camY: number, spa
       const y = b.top + mod(phase * H + DROP_SPEED * timeSec, H);
       if (y + 2 < y0 || y > y1) continue;
       const x = Math.floor(b.x + dx);
-      out.push({ x0: x, y0: y, x1: x + 1, y1: y + 2, alpha: DROP_ALPHA, color: b.color });
+      // 粒は光柱の中を落ちる: 光柱と同じく板の下面から下向きの平行光で地形に止め、その先(壁の中・
+      // 張り出しの下)では描かない(2.16 §1)
+      out.push({ x0: x, y0: y, x1: x + 1, y1: y + 2, alpha: DROP_ALPHA, color: b.color, occl: { kind: 'column', dir: 'down', from: b.top } });
     }
   }
   return out;
@@ -181,11 +188,12 @@ export class AmbientLights {
     h: number,
     ppt: number,
     timeSec: number,
+    solidAt?: SolidAt,
   ): void {
     const spanX = w / ppt;
     const spanY = h / ppt;
     const rects = lampLightsInView(this.seed, cam.x, cam.y, spanX, spanY, timeSec);
     for (const r of fallingDropsInView(this.seed, cam.x, cam.y, spanX, spanY, timeSec)) rects.push(r);
-    drawLightRects(ctx, rects, cam, w, h, ppt);
+    drawLightRects(ctx, rects, cam, w, h, ppt, solidAt);
   }
 }

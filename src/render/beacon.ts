@@ -6,6 +6,8 @@ import { biomeCellAt } from '../world/biomeCells';
 import { biomeForCell } from './biome';
 import { restWarmthAt } from '../world/restpoint';
 import { holeCenterX } from './hardPlate';
+import type { SolidAt } from './lightRays';
+import { castColumns, fillLitRect, fillWorldRect, type ColumnLight, type LightView } from './occludedFill';
 
 /**
  * 光柱と導光(設計書 §6.2)・ライティング補正(§6.3)の幾何と強度。純粋関数のみ。
@@ -269,8 +271,15 @@ const POOL_RINGS: ReadonlyArray<readonly [number, number]> = [
 /**
  * 光柱と光溜まりの描画(§6.2)。Lighting の暗幕の後に lighter で描く(§6.3: 暗幕で消えない)。
  * テスト対象外(Canvas)。幾何は beaconsInView、脈動は beaconPulse。
+ * 2.16(設計 2026-11-11-light-occlusion-ambient §1): solidAt を渡すと壁で遮る。柱は板の下面から下向きの
+ * 平行光(列ごとのレイ)で地形に止め、光溜まりは楕円の上端から下向きに床の表面(照らし代)で止める。
+ * 矩形の座標はワールドのタイル座標で組み、occludedFill が画面へ写す(遮蔽なしなら従来と同じ矩形)。
  */
 export class BeaconLights {
+  /** 柱と光溜まりの列ごとの到達位置の作業配列(毎フレームの割り当てを避ける) */
+  private shaftBuf = new Float64Array(128);
+  private poolBuf = new Float64Array(128);
+
   constructor(private seed: number) {}
 
   render(
@@ -280,41 +289,45 @@ export class BeaconLights {
     h: number,
     ppt: number,
     timeSec: number,
+    solidAt?: SolidAt,
   ): void {
     const beacons = beaconsInView(this.seed, cam.x, cam.y, w / ppt, h / ppt);
     if (beacons.length === 0) return;
     const a = BEACON_ALPHA * beaconPulse(timeSec);
+    const v: LightView = { camX: cam.x, camY: cam.y, w, h, ppt };
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     for (const b of beacons) {
       const sx = (b.x - cam.x) * ppt + w / 2;
       const sy0 = (b.top - cam.y) * ppt + h / 2;
       const sy1 = (b.floor - cam.y) * ppt + h / 2;
-      // 画面内の縦範囲だけ塗る(グラデ座標は板の下面〜床のまま)
-      const yA = Math.max(sy0, 0);
-      const yB = Math.min(sy1, h);
       // グラデは使わず平坦な段で塗る。グラデは画素ごとに色が変わり、present の量子化キャッシュ
       // (色×Bayer 位置のキー 2^16)を溢れさせて、柱 1 本で約 6 ms 増えた。
       ctx.fillStyle = b.color;
-      if (yB > yA) {
+      if (Math.min(sy1, h) > Math.max(sy0, 0)) {
+        // 柱の遮蔽: 板の下面から床の行まで、柱の幅の列ごとに下向きのレイ(画面外の列は飛ばさない)
+        let shaft: ColumnLight | null = null;
+        if (solidAt) {
+          shaft = castColumns(v, b.x - BEACON_HALF_WIDTH, b.x + BEACON_HALF_WIDTH, b.top, b.floor, solidAt, this.shaftBuf);
+          this.shaftBuf = shaft.reach;
+        }
+        const fill = (x0: number, y0: number, x1: number, y1: number): void => {
+          if (shaft) fillLitRect(ctx, v, shaft, x0, y0, x1, y1);
+          else fillWorldRect(ctx, v, x0, y0, x1, y1);
+        };
         // 柱(柔らかい縁): 芯の外側を 3 段(0.25/0.5/0.75)で広げる
-        const half = BEACON_HALF_WIDTH * ppt;
-        const ch = CORE_HALF_WIDTH * ppt;
-        const step = (half - ch) / SOFT_STEPS;
+        const step = (BEACON_HALF_WIDTH - CORE_HALF_WIDTH) / SOFT_STEPS;
         for (let i = 0; i < SOFT_STEPS; i++) {
           ctx.globalAlpha = a * ((i + 1) / (SOFT_STEPS + 1));
-          const inner = half - step * (i + 1);
-          ctx.fillRect(sx - inner - step, yA, step, yB - yA);
-          ctx.fillRect(sx + inner, yA, step, yB - yA);
+          const inner = BEACON_HALF_WIDTH - step * (i + 1);
+          fill(b.x - inner - step, b.top, b.x - inner, b.floor);
+          fill(b.x + inner, b.top, b.x + inner + step, b.floor);
         }
         // 柱の芯(硬い縁): 板の下面で強く、床へ向かって 4 段で弱まる
-        const segH = (sy1 - sy0) / CORE_STEPS;
+        const segH = (b.floor - b.top) / CORE_STEPS;
         for (let i = 0; i < CORE_STEPS; i++) {
-          const y0 = Math.max(yA, sy0 + segH * i);
-          const y1 = Math.min(yB, sy0 + segH * (i + 1));
-          if (y1 <= y0) continue;
           ctx.globalAlpha = a * (CORE_TOP - (CORE_TOP - CORE_BOTTOM) * (i / (CORE_STEPS - 1)));
-          ctx.fillRect(sx - ch, y0, ch * 2, y1 - y0);
+          fill(b.x - CORE_HALF_WIDTH, b.top + segH * i, b.x + CORE_HALF_WIDTH, b.top + segH * (i + 1));
         }
       }
       // 光溜まり: 床の行の上端に寝た楕円を 3 重の平坦な段で描く。芯(20)は明るく、裾(48)は孔の梯子まで届く。
@@ -323,28 +336,38 @@ export class BeaconLights {
       const rx = POOL_FRINGE_RADIUS * ppt;
       const ry = rx * POOL_ASPECT;
       if (sy1 + ry >= 0 && sy1 - ry <= h && sx + rx >= 0 && sx - rx <= w) {
+        // 光溜まりの遮蔽: 楕円の上端から下端まで下向きのレイ。床の行の表面(照らし代)で止まり、
+        // 床の中(楕円の下半分)と、前室の中の張り出しの下は照らさない
+        const ryT = POOL_FRINGE_RADIUS * POOL_ASPECT;
+        let pool: ColumnLight | null = null;
+        if (solidAt) {
+          pool = castColumns(v, b.x - POOL_FRINGE_RADIUS, b.x + POOL_FRINGE_RADIUS, b.floor - ryT, b.floor + ryT, solidAt, this.poolBuf);
+          this.poolBuf = pool.reach;
+        }
         // 段は重ねず、外側の環から順に「外の楕円 − 内の楕円」の帯だけを塗る(各画素を 1 回しか合成しない)。
-        // 行の高さは一番外の楕円で決め、各行の中央高さでの半幅を外・内それぞれ求める。
-        const rowH = ry / POOL_ROWS;
+        // 行の高さは一番外の楕円で決め、各行の中央高さでの半幅を外・内それぞれ求める(タイル単位)。
+        const rowH = ryT / POOL_ROWS;
+        const fill = (x0: number, y0: number, x1: number, y1: number): void => {
+          if (pool) fillLitRect(ctx, v, pool, x0, y0, x1, y1);
+          else fillWorldRect(ctx, v, x0, y0, x1, y1);
+        };
         for (let i = 0; i < POOL_RINGS.length; i++) {
           const [rOut, alpha] = POOL_RINGS[i];
           const rIn = i + 1 < POOL_RINGS.length ? POOL_RINGS[i + 1][0] : 0;
           ctx.globalAlpha = a * alpha;
-          const rxOut = rOut * ppt;
-          const rxIn = rIn * ppt;
           for (let j = 0; j < POOL_ROWS; j++) {
             const yMid = rowH * (j + 0.5);
-            const tOut = yMid / (rxOut * POOL_ASPECT);
+            const tOut = yMid / (rOut * POOL_ASPECT);
             if (tOut >= 1) continue;
-            const hwOut = rxOut * Math.sqrt(1 - tOut * tOut);
-            const tIn = rxIn > 0 ? yMid / (rxIn * POOL_ASPECT) : 1;
-            const hwIn = tIn < 1 ? rxIn * Math.sqrt(1 - tIn * tIn) : 0;
-            for (const yTop of [sy1 - rowH * (j + 1), sy1 + rowH * j]) {
+            const hwOut = rOut * Math.sqrt(1 - tOut * tOut);
+            const tIn = rIn > 0 ? yMid / (rIn * POOL_ASPECT) : 1;
+            const hwIn = tIn < 1 ? rIn * Math.sqrt(1 - tIn * tIn) : 0;
+            for (const yTop of [b.floor - rowH * (j + 1), b.floor + rowH * j]) {
               if (hwIn > 0) {
-                ctx.fillRect(sx - hwOut, yTop, hwOut - hwIn, rowH);
-                ctx.fillRect(sx + hwIn, yTop, hwOut - hwIn, rowH);
+                fill(b.x - hwOut, yTop, b.x - hwIn, yTop + rowH);
+                fill(b.x + hwIn, yTop, b.x + hwOut, yTop + rowH);
               } else {
-                ctx.fillRect(sx - hwOut, yTop, hwOut * 2, rowH);
+                fill(b.x - hwOut, yTop, b.x + hwOut, yTop + rowH);
               }
             }
           }

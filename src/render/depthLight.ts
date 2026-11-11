@@ -1,7 +1,9 @@
 /**
- * 深さの明るさと懐中電灯モードの係数(設計 2026-11-09-steps-and-light §3、§4)。
+ * 深さの明るさと懐中電灯モードの係数(設計 2026-11-09-steps-and-light §3、§4)、
+ * 室内の暗さの係数(設計 2026-11-11-light-occlusion-ambient §2)。
  * Canvas に触らない純粋関数だけを置き、renderer と Lighting がこれを読む。
  */
+import { OPENNESS_LO } from '../core/zoom';
 
 /** 1 層ごとに環境光を下げる量 */
 export const DEPTH_SHADE_PER_LAYER = 0.06;
@@ -16,6 +18,37 @@ export const DEPTH_SHADE_MIN = 0.45;
 export function depthShade(layer: number): number {
   const v = 1 - DEPTH_SHADE_PER_LAYER * Math.max(0, layer);
   return v < DEPTH_SHADE_MIN ? DEPTH_SHADE_MIN : v;
+}
+
+/**
+ * 室内の暗さ(設計 2026-11-11-light-occlusion-ambient §2)。
+ * 開放度(core/zoom.sampleOpenness をズーム用に 6 フレームおきに測り、時間平滑したもの)がこれ以上なら
+ * 開けた場所として従来どおり(係数 1)。ズームの「閉塞・通路」の境(OPENNESS_LO)と同じ値にそろえる
+ */
+export const ENCLOSURE_OPEN = OPENNESS_LO;
+/** 開放度がこれ以下なら最も囲まれている(囲まれ度 1) */
+export const ENCLOSURE_CLOSED = 0.2;
+/**
+ * 囲まれ度 1 のときに環境光へ掛ける係数(暗さの下限)。これより下げない(シルエットが読める暗さに留める)。
+ * 暗幕の不透明度の上限(Lighting の 0.62)はそのまま残るので、真っ黒にはならない
+ */
+export const ENCLOSURE_SHADE_MIN = 0.55;
+
+/**
+ * 開放度(0..1) → 囲まれ度(0..1)。ENCLOSURE_OPEN 以上で 0、ENCLOSURE_CLOSED 以下で 1、間は線形。
+ * 開放度の逆(開けているほど小さい)
+ */
+export function enclosure(openness: number): number {
+  const t = (ENCLOSURE_OPEN - openness) / (ENCLOSURE_OPEN - ENCLOSURE_CLOSED);
+  return t < 0 ? 0 : t > 1 ? 1 : t;
+}
+
+/**
+ * 開放度 → 環境光に掛ける係数。開けた場所で 1、囲まれるほど下げ、ENCLOSURE_SHADE_MIN で止める。
+ * depthShade と掛け合わせて使う(深さと囲まれ方の両方が効く)。開放度が未計測なら呼び出し側で 1 を渡す
+ */
+export function enclosureShade(openness: number): number {
+  return 1 - (1 - ENCLOSURE_SHADE_MIN) * enclosure(openness);
 }
 
 /** 懐中電灯モードでのコーン半径の倍率 */
