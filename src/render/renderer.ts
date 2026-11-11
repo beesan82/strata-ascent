@@ -9,7 +9,7 @@ import { ChunkBaker, REBAKE_DILATE } from './chunkbake';
 import { rebakeTargets } from './dirtyBounds';
 import { Lighting } from './lighting';
 import { chunkSolidLookup } from './lightRays';
-import { drawFlyer, drawTurret, drawWalker } from './enemySprite';
+import { drawFlyer, drawTurret, drawWalker, FLYER_DRAW_SCALE, TURRET_DRAW_SCALE, WALKER_DRAW_SCALE } from './enemySprite';
 import { flyerPose, turretPose, walkerPose } from './enemyPose';
 import { coneParams, depthShade, enclosureShade } from './depthLight';
 import { layerNumber } from '../world/interface';
@@ -107,10 +107,12 @@ export interface GravitonFx {
   /** 敵(ワールド座標の中心と被弾フラッシュ)。平坦色の矩形で描く。flyer は飛行敵、
    *  turret は固定砲台(angle が照準方向)、w/h と bossPhase がある要素はボス(体格と相で描き分ける)。
    *  ポーズの入力(見た目だけに使う): 歩行敵は dir(進行方向)、飛行敵は vx/vy(速度)・chase(追尾中)・
-   *  phase(個体の位相)、砲台は cooldown(次の発射までの秒)・aiming(狙えているか) */
+   *  phase(個体の位相)、砲台は cooldown(次の発射までの秒)・aiming(狙えているか)。
+   *  broken は部位破壊(歩行敵の脚・飛行敵のローター・砲台のセンサー、設計 2026-11-12-action-overhaul §2) */
   enemies?: readonly {
     x: number; y: number; flash: boolean; flyer?: boolean; turret?: boolean; angle?: number;
     dir?: 1 | -1; vx?: number; vy?: number; chase?: boolean; phase?: number; cooldown?: number; aiming?: boolean;
+    broken?: boolean;
     w?: number; h?: number; bossPhase?: BossPhase; bossPhaseT?: number; bossDir?: 1 | -1;
   }[];
   /** ドロップ(ワールド座標の中心)。hidden は点滅の消灯側フレーム */
@@ -653,9 +655,11 @@ export class Renderer {
         }
         // 通常敵(設計 2026-11-10 §2): ポーズは実体の状態と時刻から enemyPose が決め、
         // enemySprite が平坦な矩形とパレット実在色で描く(同じ fx 相乗り、新規パスなし)
+        // 2.19 の大型化: スプライトは旧体格(0.9 四方)の寸法のまま、体格比の倍率を ppt に掛けて描く
+        const broken = e.broken ?? false;
         if (e.turret) {
           const pose = turretPose(e.cooldown ?? 1, e.aiming ?? false, timeSec);
-          drawTurret(ctx, sx, sy, ppt, e.angle ?? 0, pose, e.flash);
+          drawTurret(ctx, sx, sy, ppt * TURRET_DRAW_SCALE, e.angle ?? 0, pose, e.flash, broken);
           continue;
         }
         if (e.flyer) {
@@ -663,11 +667,13 @@ export class Renderer {
             timeSec, e.phase ?? 0, e.vx ?? 0, e.vy ?? 0, e.chase ?? false,
             player.centerX - e.x, player.centerY - e.y,
           );
-          drawFlyer(ctx, sx, sy, ppt, pose, e.flash);
+          drawFlyer(ctx, sx, sy, ppt * FLYER_DRAW_SCALE, pose, e.flash, broken);
           continue;
         }
         const dir = e.dir ?? 1;
-        drawWalker(ctx, sx, sy, ppt, dir, walkerPose(e.x, dir), e.flash);
+        // 歩行位相も同じ倍率で割る(描く歩幅が倍率ぶん伸びるので、足を床に対して滑らせない)
+        const wPose = walkerPose(e.x / WALKER_DRAW_SCALE, dir, broken);
+        drawWalker(ctx, sx, sy, ppt * WALKER_DRAW_SCALE, dir, wPose, e.flash, broken);
       }
     }
 

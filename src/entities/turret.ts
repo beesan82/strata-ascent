@@ -1,13 +1,19 @@
 import { isSolid } from '../world/tiles';
 import { bodyOverlapsSolid, type Body, type TileLookup } from './physics';
+import { inUpperBand, type PartHit } from './parts';
 
 /**
  * 新敵「固定砲台」(v2.0 Task 6)。床の上に据え置きで動かず、射程内に
  * プレイヤーがいて視線が通ると一定間隔で狙撃する。接触ダメージは持たない。
+ * 2.19(設計 2026-11-12-action-overhaul): 体格を 1.2 四方へ一回り大きくし、センサー(上端の帯)を部位にした。
+ * センサーへの被弾 2 回でセンサー破壊 → 照準も発射もしない(盲目化)。本体 HP は 4 のまま。
  */
 export const TURRET_HP = 4;
-export const TURRET_W = 0.9;
-export const TURRET_H = 0.9;
+/** 体格(タイル)。頭上 2 タイルの空きがある床ランに収まる高さ(出現位置は spawn.ts が床 - TURRET_H に置く) */
+export const TURRET_W = 1.2;
+export const TURRET_H = 1.2;
+/** センサーの耐久(本体 HP とは別枠) */
+export const TURRET_SENSOR_HP = 2;
 /** 射程(タイル、中心間距離) */
 export const TURRET_RANGE = 10;
 /** 連射間隔(秒) */
@@ -100,6 +106,8 @@ export class TurretShot {
 export class Turret {
   body: Body;
   hp = TURRET_HP;
+  /** センサーの残り耐久。0 でセンサー破壊(発射停止) */
+  sensorHp = TURRET_SENSOR_HP;
   /** 被弾直後の残りフラッシュ時間(描画側が色を変える) */
   flashT = 0;
   /** 照準角(ラジアン)。狙えている間だけ更新し、見失っても最後の角度を保持する */
@@ -125,7 +133,11 @@ export class Turret {
     return this.hp <= 0;
   }
 
-  /** ダメージを与える。他敵と同じ。倒れたら true */
+  get sensorBroken(): boolean {
+    return this.sensorHp <= 0;
+  }
+
+  /** ダメージを与える。他敵と同じ(重粒子砲の即死もここを通す)。倒れたら true */
   hit(damage: number): boolean {
     this.hp -= damage;
     this.flashT = 0.09;
@@ -133,12 +145,30 @@ export class Turret {
   }
 
   /**
-   * 発射条件: プレイヤー中心までの距離が射程内かつ視線が通ること。
+   * 被弾位置 hitY(タイル)つきのダメージ。センサーが健在で上端の帯に当たればセンサーの耐久だけを削る。
+   * センサー破壊後と帯の外は本体へ入る
+   */
+  hitAt(damage: number, hitY: number): PartHit {
+    if (!this.sensorBroken && inUpperBand(this.body.y, this.body.h, hitY)) {
+      this.sensorHp -= damage;
+      this.flashT = 0.09;
+      if (this.sensorBroken) this.aiming = false;
+      return { killed: false, part: true, broke: this.sensorBroken };
+    }
+    return { killed: this.hit(damage), part: false, broke: false };
+  }
+
+  /**
+   * 発射条件: センサーが健在で、プレイヤー中心までの距離が射程内かつ視線が通ること。
    * クールダウンは狙えている間だけ減り、0 になったら発射して間隔に戻す。
    * 返り値はこのフレームに発射した弾(最大 1 発)。
    */
   update(dt: number, tiles: TileLookup, playerX: number, playerY: number): TurretShot[] {
     this.flashT = Math.max(0, this.flashT - dt);
+    if (this.sensorBroken) {
+      this.aiming = false;
+      return [];
+    }
     const dx = playerX - this.centerX;
     const dy = playerY - this.centerY;
     const dist = Math.hypot(dx, dy);

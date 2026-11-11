@@ -1,3 +1,5 @@
+import { FLYER_W, WALKER_H } from '../entities/enemy';
+import { TURRET_H } from '../entities/turret';
 import type { FlyerPose, TurretPose, WalkerPose } from './enemyPose';
 
 /**
@@ -5,7 +7,18 @@ import type { FlyerPose, TurretPose, WalkerPose } from './enemyPose';
  * renderer の fx 相乗りの中で呼ぶ(新しい描画パスは足さない)。平坦な矩形とパレット実在色だけで描き、
  * ポーズは enemyPose の純粋関数が決める。座標の引数 (sx, sy) は実体中心の内部バッファ座標、
  * 形の寸法はタイル単位で書いて ppt を掛け、整数 px に丸めて置く。
+ * 2.19(設計 2026-11-12-action-overhaul §3)の大型化後も形の寸法は旧体格(0.9 四方)のまま書き、
+ * renderer が ppt に体格比の倍率(*_DRAW_SCALE)を掛けて渡す。部位破壊は broken で描き分ける(§2)。
  */
+
+/** 形の寸法を書いた基準の体格(タイル) */
+const SPRITE_BASE = 0.9;
+/** 歩行敵: 高さで合わせる(足が床、胴は幅 1.8 の箱の内側に収まる) */
+export const WALKER_DRAW_SCALE = WALKER_H / SPRITE_BASE;
+/** 飛行ドローン: 幅で合わせる(ローターの端が箱の左右に届く) */
+export const FLYER_DRAW_SCALE = FLYER_W / SPRITE_BASE;
+/** 固定砲台: 高さで合わせる(台座の下端が床) */
+export const TURRET_DRAW_SCALE = TURRET_H / SPRITE_BASE;
 
 /**
  * 中心 (sx, sy) からのタイル単位の矩形 [x0,x1]×[y0,y1] を塗る。dir=-1 なら x を左右反転する。
@@ -35,17 +48,18 @@ function segment(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: numb
 /**
  * 歩行敵: 錆の胴(上蓋・パネルライン・暗い腹帯)+ 背のセンサー + 進行方向側の暗いバイザーと
  * 発光する金の目(淡色の芯)+ 関節付きの 2 本脚(奥は暗く、手前は茶)。
- * 当たり判定の箱(0.9 四方)の中に収め、上半分強を胴、下 1/3 を脚にする
+ * 基準体格(0.9 四方)の寸法で書き、上半分強を胴、下 1/3 を脚にする。
+ * legsBroken(脚破壊)は奥の脚を焦げた暗色で引きずり、その付け根に金の火花を明滅させる
  */
 export function drawWalker(
   ctx: CanvasRenderingContext2D, sx: number, sy: number, ppt: number,
-  dir: 1 | -1, pose: WalkerPose, flash: boolean,
+  dir: 1 | -1, pose: WalkerPose, flash: boolean, legsBroken = false,
 ): void {
   const b = pose.bob;
   const legTh = Math.max(1, Math.round(0.1 * ppt));
   const hipY = 0.12 + b;
   // 脚(胴の後ろ)。奥の脚 → 手前の脚の順
-  const legColors = ['#3d2618', '#5a3a24'];
+  const legColors = [legsBroken ? '#16202b' : '#3d2618', '#5a3a24'];
   const hipXs = [-0.2, 0.2];
   for (let i = 0; i < 2; i++) {
     const leg = pose.legs[i];
@@ -90,19 +104,32 @@ export function drawWalker(
     ctx.fillStyle = '#c7d0ce';
     rect(ctx, sx, sy, ppt, 0.32, -0.25 + b, 0.4, -0.18 + b, dir);
   }
+  // 脚破壊: 壊れた奥の脚の付け根(腹帯の下)に火花。歩行位相で明滅する(時刻を使わず決定的)
+  if (legsBroken && !flash && pose.phase < 0.35) {
+    ctx.fillStyle = '#caa64a';
+    rect(ctx, sx, sy, ppt, -0.26, 0.12 + b, -0.14, 0.2 + b, dir);
+  }
 }
 
 /**
  * 飛行ドローン: 鋼の胴 + 暗い上帯 + 左右のローター(半透明の円盤 + 回転する羽根)+ 点滅する航行灯
  * (左は錆、右は緑)+ 下面の暗いドームとセンサーアイ(淡色、追尾中はプレイヤーを向く)+
- * 移動方向と逆に焚くスラスター(錆の外炎 + 金の芯)
+ * 移動方向と逆に焚くスラスター(錆の外炎 + 金の芯)。
+ * rotorBroken(ローター破壊)は円盤・羽根・スラスターを描かず、折れた柱と羽根の残骸だけを残す
  */
 export function drawFlyer(
   ctx: CanvasRenderingContext2D, sx: number, sy: number, ppt: number,
-  pose: FlyerPose, flash: boolean,
+  pose: FlyerPose, flash: boolean, rotorBroken = false,
 ): void {
+  if (rotorBroken) {
+    // 折れたローターの柱(短い)と、左の柱に引っかかった羽根の切れ端
+    ctx.fillStyle = '#16202b';
+    rect(ctx, sx, sy, ppt, -0.28, -0.25, -0.23, -0.18);
+    rect(ctx, sx, sy, ppt, 0.23, -0.23, 0.28, -0.18);
+    rect(ctx, sx, sy, ppt, -0.38, -0.29, -0.22, -0.25);
+  }
   // スラスター(胴の後ろ)。胴の縁から噴射の向きへ伸ばす
-  if (pose.thrust > 0) {
+  if (!rotorBroken && pose.thrust > 0) {
     const th = Math.max(1, Math.round(0.12 * ppt));
     const ox = sx + pose.thrustX * 0.3 * ppt;
     const oy = sy + pose.thrustY * 0.2 * ppt;
@@ -112,21 +139,23 @@ export function drawFlyer(
     ctx.fillStyle = '#caa64a';
     segment(ctx, ox, oy, ox + pose.thrustX * len * 0.5, oy + pose.thrustY * len * 0.5, th);
   }
-  // ローターの柱
-  ctx.fillStyle = '#16202b';
-  rect(ctx, sx, sy, ppt, -0.28, -0.3, -0.23, -0.18);
-  rect(ctx, sx, sy, ppt, 0.23, -0.3, 0.28, -0.18);
-  // ローターの円盤(半透明の淡色の薄い帯)と羽根(見かけの長さが回転で伸び縮みする)
-  ctx.globalAlpha = 0.4;
-  ctx.fillStyle = '#c7d0ce';
-  rect(ctx, sx, sy, ppt, -0.46, -0.34, -0.06, -0.29);
-  rect(ctx, sx, sy, ppt, 0.06, -0.34, 0.46, -0.29);
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = '#16202b';
-  const ba = 0.2 * pose.rotorA;
-  const bb = 0.2 * pose.rotorB;
-  rect(ctx, sx, sy, ppt, -0.26 - ba, -0.34, -0.26 + ba, -0.3);
-  rect(ctx, sx, sy, ppt, 0.26 - bb, -0.34, 0.26 + bb, -0.3);
+  if (!rotorBroken) {
+    // ローターの柱
+    ctx.fillStyle = '#16202b';
+    rect(ctx, sx, sy, ppt, -0.28, -0.3, -0.23, -0.18);
+    rect(ctx, sx, sy, ppt, 0.23, -0.3, 0.28, -0.18);
+    // ローターの円盤(半透明の淡色の薄い帯)と羽根(見かけの長さが回転で伸び縮みする)
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = '#c7d0ce';
+    rect(ctx, sx, sy, ppt, -0.46, -0.34, -0.06, -0.29);
+    rect(ctx, sx, sy, ppt, 0.06, -0.34, 0.46, -0.29);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#16202b';
+    const ba = 0.2 * pose.rotorA;
+    const bb = 0.2 * pose.rotorB;
+    rect(ctx, sx, sy, ppt, -0.26 - ba, -0.34, -0.26 + ba, -0.3);
+    rect(ctx, sx, sy, ppt, 0.26 - bb, -0.34, 0.26 + bb, -0.3);
+  }
   // 胴と暗い上帯
   ctx.fillStyle = flash ? '#c7d0ce' : '#51728d';
   rect(ctx, sx, sy, ppt, -0.34, -0.2, 0.34, 0.16);
@@ -149,11 +178,12 @@ export function drawFlyer(
 
 /**
  * 固定砲台: 2 段の台座(暗い足 + 暗青の首、鋲)+ 鋼の砲塔(上蓋・継ぎ目)+ 照準方向へ回る砲身
- * (発射直後に後退)+ 上蓋の警告灯(撃つ前に強まり、直前は白く灯って暈が出る)
+ * (発射直後に後退)+ 上蓋の警告灯(撃つ前に強まり、直前は白く灯って暈が出る)。
+ * sensorBroken(センサー破壊)は警告灯の代わりに暗い割れ目と金の火花を描き、暈を出さない
  */
 export function drawTurret(
   ctx: CanvasRenderingContext2D, sx: number, sy: number, ppt: number,
-  angle: number, pose: TurretPose, flash: boolean,
+  angle: number, pose: TurretPose, flash: boolean, sensorBroken = false,
 ): void {
   // 台座: 足 + 首 + 鋲
   ctx.fillStyle = '#16202b';
@@ -187,6 +217,17 @@ export function drawTurret(
     const mx = Math.round(pivotX + dx * len - th / 2);
     const my = Math.round(pivotY + dy * len - th / 2);
     ctx.fillRect(mx, my, th, th);
+  }
+  if (sensorBroken) {
+    // 割れたセンサー: 上蓋を斜めに欠いた暗い割れ目 + 残った配線の火花
+    ctx.fillStyle = '#16202b';
+    rect(ctx, sx, sy, ppt, -0.1, -0.38, 0.12, -0.3);
+    rect(ctx, sx, sy, ppt, 0.04, -0.3, 0.2, -0.26);
+    if (!flash) {
+      ctx.fillStyle = '#caa64a';
+      rect(ctx, sx, sy, ppt, -0.04, -0.36, 0.02, -0.32);
+    }
+    return;
   }
   // 警告灯(上蓋の中央)。直前は暈(錆)を先に敷いてから白く灯す
   if (pose.halo) {

@@ -1,6 +1,8 @@
 import { hash2 } from './noise';
 import { TILE, isSolid } from './tiles';
 import type { TileLookup } from '../entities/physics';
+import { WALKER_H } from '../entities/enemy';
+import { TURRET_H, TURRET_W } from '../entities/turret';
 import type { BiomeId } from './biomeCells';
 
 /**
@@ -70,10 +72,14 @@ export function findFloorRuns(
   return runs;
 }
 
-/** 出現率: 第 0 層(開始 cell)は 0、以降は漸増して上限 0.7 */
+/**
+ * 出現率: 第 0 層(開始 cell)は 0、以降は漸増して上限 0.35。
+ * 2.19(設計 2026-11-12-action-overhaul §1)で基礎 0.2 / +0.08 / 上限 0.7 から約半分へ下げた。
+ * 飛行敵・固定砲台もこの基礎率に地区倍率を掛けるので、同率で下がる(地区倍率と密度規則は不変)
+ */
 export function spawnRateForLayer(layer: number): number {
   if (layer <= 0) return 0;
-  return Math.min(0.2 + (layer - 1) * 0.08, 0.7);
+  return Math.min(0.1 + (layer - 1) * 0.04, 0.35);
 }
 
 const DENSITY_DX = 24;
@@ -100,7 +106,9 @@ export function chooseSpawns(
     if (hash2(seed + 4001, run.x, run.floorY) >= rate) continue;
     const offset = Math.floor(hash2(seed + 4002, run.x, run.floorY) * Math.max(1, run.len - 2));
     const sx = run.x + offset;
-    const sy = run.floorY - 0.9; // 敵ボディ(高さ 0.9)の左上。床の上にちょうど乗る
+    // 敵ボディ(高さ WALKER_H)の左上。床の上にちょうど乗る。ランは頭上 2 タイルが空いていて、
+    // オフセットは最大 len - 3 なので幅 1.8 の体もラン内の床に収まる
+    const sy = run.floorY - WALKER_H;
     const guarded = protectedPoints.some(
       (p) => Math.max(Math.abs(sx - p.x), Math.abs(sy - p.y)) <= p.r,
     );
@@ -395,14 +403,14 @@ export function chooseTurretSpawns(
     if (hash2(seed + 4301, run.x, run.floorY) >= rate) continue;
     const offset = Math.floor(hash2(seed + 4302, run.x, run.floorY) * Math.max(1, run.len - 2));
     const sx = run.x + offset;
-    const sy = run.floorY - 0.9; // 砲台ボディ(高さ 0.9)の左上。床の上にちょうど乗る
+    const sy = run.floorY - TURRET_H; // 砲台ボディ(高さ TURRET_H)の左上。床の上にちょうど乗る
     const guarded = protectedPoints.some(
       (p) => Math.max(Math.abs(sx - p.x), Math.abs(sy - p.y)) <= p.r,
     );
     if (guarded) continue;
     // 大広間はボスの arena として空ける: ボディ矩形が少しでも重なれば出さない
     const inHall = halls.some(
-      (h) => sx < h.x1 && sx + 0.9 > h.x0 && sy < h.y1 && sy + 0.9 > h.y0,
+      (h) => sx < h.x1 && sx + TURRET_W > h.x0 && sy < h.y1 && sy + TURRET_H > h.y0,
     );
     if (inHall) continue;
     // 歩行敵の選定済み位置から 3 タイル以内には置かない(重なり・詰まりの回避)

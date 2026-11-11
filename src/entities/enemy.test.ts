@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { TILE, type Tile } from '../world/tiles';
-import { Walker, Flyer, nextFlyerMode, Boss, stepBossPhase, BOSS_HP, BOSS_BEAM_DAMAGE, type BossPhase } from './enemy';
+import {
+  Walker, Flyer, nextFlyerMode, Boss, stepBossPhase, BOSS_HP, BOSS_BEAM_DAMAGE, type BossPhase,
+  WALKER_W, WALKER_H, WALKER_HP, WALKER_LEG_HP, WALKER_SPEED, WALKER_LEGLESS_SPEED,
+  FLYER_W, FLYER_HP, FLYER_ROTOR_HP, FLYER_CRAWL_SPEED,
+} from './enemy';
 
 const noTiles = (): Tile => TILE.AIR;
 /** y=10 行が床(x は全面) */
@@ -23,14 +27,14 @@ describe('Walker(歩行敵)', () => {
   });
 
   it('壁に当たると反転する', () => {
-    const w = new Walker(9, 9, 1);
+    const w = new Walker(9, 10 - WALKER_H, 1); // 床(y=10)の上にちょうど乗る
     for (let i = 0; i < 120; i++) w.update(1 / 60, wallTiles);
     expect(w.dir).toBe(-1);
     expect(w.body.x).toBeLessThan(11.2); // 壁(x=12)へめり込まない
   });
 
   it('床の端で反転し、落ちない', () => {
-    const w = new Walker(5, 9, 1);
+    const w = new Walker(5, 10 - WALKER_H, 1);
     for (let i = 0; i < 240; i++) w.update(1 / 60, ledgeTiles);
     expect(w.body.y).toBeLessThan(10); // 落ちていない
     expect(w.dir).toBe(-1); // 端で折り返した
@@ -48,6 +52,82 @@ describe('Walker(歩行敵)', () => {
     const w = new Walker(0, 0, 1);
     w.update(1 / 60, noTiles);
     expect(w.body.vy).toBeGreaterThan(0);
+  });
+});
+
+describe('Walker の大型化と脚の部位破壊(2.19、設計 2026-11-12-action-overhaul)', () => {
+  /** 床(y=10)の上に立つ歩行敵。矩形は y ∈ [8.4, 10]、脚の帯は下 45%(y > 9.28) */
+  const standing = (x = 2): Walker => new Walker(x, 10 - WALKER_H, 1);
+  const legY = (w: Walker): number => w.body.y + w.body.h - 0.1;
+  const torsoY = (w: Walker): number => w.body.y + 0.2;
+
+  it('体格は 1.8 × 1.6(プレイヤー 0.9 より大きく、頭上 2 タイルに収まる)', () => {
+    const w = standing();
+    expect(WALKER_W).toBe(1.8);
+    expect(WALKER_H).toBe(1.6);
+    expect(w.body.w).toBe(WALKER_W);
+    expect(w.body.h).toBe(WALKER_H);
+    expect(WALKER_H).toBeLessThan(2);
+  });
+
+  it('脚(下端の帯)への被弾 2 回で脚破壊。本体 HP 3 は減らない', () => {
+    const w = standing();
+    expect(WALKER_LEG_HP).toBe(2);
+    const r1 = w.hitAt(1, legY(w));
+    expect(r1).toEqual({ killed: false, part: true, broke: false });
+    expect(w.legsBroken).toBe(false);
+    const r2 = w.hitAt(1, legY(w));
+    expect(r2).toEqual({ killed: false, part: true, broke: true });
+    expect(w.legsBroken).toBe(true);
+    expect(w.hp).toBe(WALKER_HP);
+    expect(w.flashT).toBeGreaterThan(0);
+  });
+
+  it('帯の外(胴)への被弾は本体に入り、脚の耐久は減らない', () => {
+    const w = standing();
+    const r = w.hitAt(1, torsoY(w));
+    expect(r).toEqual({ killed: false, part: false, broke: false });
+    expect(w.hp).toBe(WALKER_HP - 1);
+    expect(w.legHp).toBe(WALKER_LEG_HP);
+  });
+
+  it('脚破壊後は下端への被弾も本体へ入り、3 発で倒れる', () => {
+    const w = standing();
+    w.hitAt(1, legY(w));
+    w.hitAt(1, legY(w));
+    expect(w.hitAt(1, legY(w)).part).toBe(false);
+    expect(w.hitAt(1, legY(w)).killed).toBe(false);
+    const last = w.hitAt(1, legY(w));
+    expect(last.killed).toBe(true);
+    expect(w.dead).toBe(true);
+  });
+
+  it('脚破壊後の移動速度は通常の半分以下(1 秒の移動距離で比べる)', () => {
+    expect(WALKER_LEGLESS_SPEED).toBeLessThanOrEqual(WALKER_SPEED / 2);
+    const healthy = standing();
+    const broken = standing();
+    broken.hitAt(1, legY(broken));
+    broken.hitAt(1, legY(broken));
+    for (let i = 0; i < 60; i++) {
+      healthy.update(1 / 60, floorTiles);
+      broken.update(1 / 60, floorTiles);
+    }
+    const dh = healthy.body.x - 2;
+    const db = broken.body.x - 2;
+    expect(broken.body.onGround).toBe(true);
+    expect(db).toBeGreaterThan(0); // 止まりはしない(よろけながら進む)
+    expect(db).toBeLessThanOrEqual(dh / 2 + 1e-6);
+    expect(db).toBeCloseTo(WALKER_LEGLESS_SPEED, 1);
+  });
+
+  it('重粒子砲(現在 HP ぶんの hit)は脚の状態によらず即死させる', () => {
+    const w = standing();
+    w.hitAt(1, legY(w));
+    expect(w.hit(w.hp)).toBe(true);
+    const w2 = standing();
+    w2.hitAt(1, legY(w2));
+    w2.hitAt(1, legY(w2));
+    expect(w2.hit(w2.hp)).toBe(true);
   });
 });
 
@@ -139,6 +219,88 @@ describe('Flyer(飛行ドローン)', () => {
     expect(sawChase).toBe(true);
     // 諦めて巡回へ戻り、少なくとも 0.5 秒は巡回に留まる(その場で固着し続けない)
     expect(longestPatrolAfterChase).toBeGreaterThanOrEqual(30);
+  });
+});
+
+describe('Flyer の大型化とローターの部位破壊(2.19、設計 2026-11-12-action-overhaul)', () => {
+  /** ローターの帯は上 45%(矩形 [y, y+1] の y + 0.45 未満) */
+  const rotorY = (f: Flyer): number => f.body.y + 0.1;
+  const bodyY = (f: Flyer): number => f.body.y + f.body.h - 0.1;
+
+  it('体格は幅 1.5(プレイヤー 0.9 より大きい)', () => {
+    const f = new Flyer(10, 10, 0);
+    expect(FLYER_W).toBe(1.5);
+    expect(f.body.w).toBe(FLYER_W);
+    expect(f.centerX).toBeCloseTo(10);
+    expect(f.centerY).toBeCloseTo(10);
+  });
+
+  it('ローター(上端の帯)への被弾 1 回でローター破壊。本体 HP 2 は減らない', () => {
+    const f = new Flyer(10, 10, 0);
+    expect(FLYER_ROTOR_HP).toBe(1);
+    const r = f.hitAt(1, rotorY(f));
+    expect(r).toEqual({ killed: false, part: true, broke: true });
+    expect(f.rotorBroken).toBe(true);
+    expect(f.hp).toBe(FLYER_HP);
+  });
+
+  it('帯の外(胴の下側)への被弾は本体に入り、2 発で倒れる', () => {
+    const f = new Flyer(10, 10, 0);
+    expect(f.hitAt(1, bodyY(f))).toEqual({ killed: false, part: false, broke: false });
+    expect(f.rotorBroken).toBe(false);
+    expect(f.hitAt(1, bodyY(f)).killed).toBe(true);
+  });
+
+  it('ローター破壊後は上端への被弾も本体へ入る', () => {
+    const f = new Flyer(10, 10, 0);
+    f.hitAt(1, rotorY(f));
+    const r = f.hitAt(1, rotorY(f));
+    expect(r.part).toBe(false);
+    expect(f.hp).toBe(FLYER_HP - 1);
+  });
+
+  it('ローター破壊後は落下して床に着き、追尾せず飛ばない(浮き上がらない)', () => {
+    // アンカー (10, 5)、床は y=10 行。プレイヤーは感知半径内の真横(従来なら追尾する)
+    const f = new Flyer(10, 5, 0);
+    f.hitAt(1, rotorY(f));
+    let prevY = f.body.y;
+    for (let i = 0; i < 120; i++) {
+      f.update(1 / 60, floorTiles, 13, 5);
+      expect(f.body.y).toBeGreaterThanOrEqual(prevY - 1e-9); // 上昇しない
+      expect(f.mode).toBe('patrol');
+      prevY = f.body.y;
+    }
+    expect(f.body.onGround).toBe(true);
+    // 床面(y=10)に接地(衝突解決の 1/16 刻み探索ぶんの隙間は残りうる)
+    expect(f.body.y + f.body.h).toBeLessThanOrEqual(10);
+    expect(f.body.y + f.body.h).toBeGreaterThan(10 - 1 / 16 - 1e-9);
+    // 頭上にプレイヤーが来ても床に留まる
+    const floorY = f.body.y;
+    for (let i = 0; i < 60; i++) f.update(1 / 60, floorTiles, f.centerX, 2);
+    expect(f.body.y).toBeCloseTo(floorY, 5);
+    expect(f.mode).toBe('patrol');
+  });
+
+  it('ローター破壊後は地上を這い、速さは歩行敵の半分以下', () => {
+    expect(FLYER_CRAWL_SPEED).toBeLessThanOrEqual(WALKER_SPEED / 2);
+    const f = new Flyer(10, 5, 0);
+    f.hitAt(1, rotorY(f));
+    for (let i = 0; i < 120; i++) f.update(1 / 60, floorTiles, 1000, 1000); // 着地まで
+    expect(f.body.onGround).toBe(true);
+    const x0 = f.body.x;
+    for (let i = 0; i < 60; i++) {
+      f.update(1 / 60, floorTiles, 1000, 1000);
+      expect(Math.abs(f.body.vx)).toBeLessThanOrEqual(FLYER_CRAWL_SPEED + 1e-9);
+    }
+    const moved = Math.abs(f.body.x - x0);
+    expect(moved).toBeGreaterThan(0); // 這って動く
+    expect(moved).toBeLessThanOrEqual(FLYER_CRAWL_SPEED + 1e-6);
+  });
+
+  it('重粒子砲(現在 HP ぶんの hit)はローターの状態によらず即死させる', () => {
+    const f = new Flyer(10, 10, 0);
+    f.hitAt(1, rotorY(f));
+    expect(f.hit(f.hp)).toBe(true);
   });
 });
 

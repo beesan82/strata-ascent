@@ -4,7 +4,7 @@ import { TURRET_FIRE_INTERVAL } from '../entities/turret';
 import {
   flyerPose, kneeOf, turretPose, walkerPose, walkPhase,
   NAV_DUTY, NAV_HZ, TURRET_RECOIL_TIME, TURRET_WARN_WINDOW, WALKER_HIP_TO_GROUND, WALKER_STRIDE,
-  WALKER_SWING, WALKER_THIGH,
+  WALKER_SWING, WALKER_THIGH, WALKER_LIMP_LURCH, WALKER_LIMP_SINK,
 } from './enemyPose';
 
 const PALETTE_LIGHTS = ['#5a3a24', '#9a6d32', '#caa64a', '#c7d0ce'];
@@ -95,6 +95,46 @@ describe('walkerPose(歩行敵のポーズ)', () => {
       expect(b).toBeGreaterThanOrEqual(0);
       expect(b).toBeLessThanOrEqual(0.03 + 1e-9);
     }
+  });
+
+  it('既定(脚が健在)は従来どおり', () => {
+    expect(walkerPose(5.67, -1, false)).toEqual(walkerPose(5.67, -1));
+  });
+});
+
+describe('walkerPose の脚破壊(よろけ歩行、2.19)', () => {
+  it('胴は常に沈み、1 周期に 1 回大きく倒れ込む', () => {
+    let min = Infinity;
+    let max = -Infinity;
+    for (let x = 0; x < WALKER_STRIDE; x += WALKER_STRIDE / 40) {
+      const b = walkerPose(x, 1, true).bob;
+      min = Math.min(min, b);
+      max = Math.max(max, b);
+    }
+    expect(min).toBeGreaterThanOrEqual(WALKER_LIMP_SINK - 1e-9);
+    expect(max).toBeCloseTo(WALKER_LIMP_SINK + WALKER_LIMP_LURCH, 2);
+    // 健在時の上下動(最大 0.03)より明らかに大きい
+    expect(min).toBeGreaterThan(0.03);
+  });
+
+  it('奥の脚は後ろへ引きずられて床に着いたまま、手前の脚は半分の振り幅で踏み出す', () => {
+    for (let x = 0; x < WALKER_STRIDE; x += WALKER_STRIDE / 16) {
+      const pose = walkerPose(x, 1, true);
+      expect(pose.legs[0].foot.x).toBeLessThan(0);
+      expect(pose.legs[0].foot.y).toBeCloseTo(WALKER_HIP_TO_GROUND);
+      expect(Math.abs(pose.legs[1].foot.x)).toBeLessThanOrEqual(WALKER_SWING / 2 + 1e-9);
+    }
+    expect(walkerPose(1, 1, true).legs[0].foot).toEqual(walkerPose(2, 1, true).legs[0].foot);
+  });
+
+  it('左向きは右向きの鏡像で、決定論', () => {
+    const r = walkerPose(3.21, 1, true);
+    const l = walkerPose(-3.21, -1, true);
+    for (let i = 0; i < 2; i++) {
+      expect(l.legs[i].foot.x).toBeCloseTo(-r.legs[i].foot.x);
+      expect(l.legs[i].knee.x).toBeCloseTo(-r.legs[i].knee.x);
+    }
+    expect(walkerPose(3.21, 1, true)).toEqual(r);
   });
 });
 
