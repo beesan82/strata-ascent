@@ -2,8 +2,9 @@ import type { Camera } from '../core/camera';
 import { hash2 } from '../world/noise';
 
 /**
- * これ以上明るいバイオームでは光条を出さない上限。現行バイオームの最大ambient(0.72)より上に
- * 置き、開けた空洞ならどの系統でも光条が差すようにする(暗さは intensity の darkF で反映)。
+ * これ以上明るいバイオームでは光条を出さない上限。バイオームの最大 ambient より上に置き、
+ * 開けた空洞ならどの系統でも光条が差すようにする(暗さは intensity の darkF で反映)。
+ * 2.17 で地区の ambient は最大 0.39(+前室の補正 0.15)へ下がり、この上限に達する場所はなくなった。
  * 主ゲートは開放度(zoom)側。暗∧開放だけに絞ると実世界では両立が稀で発動しないため。
  */
 export const AMBIENT_MAX = 0.8;

@@ -52,6 +52,8 @@ import {
   findAirPockets,
   findFloorRuns,
   flyerMulFor,
+  newFlyerSpawns,
+  retainFlyers,
   turretMulFor,
   type FloorRun,
   type ProtectedPoint,
@@ -407,19 +409,19 @@ function refreshEnemies(): void {
   } else if (turrets.length > 0) {
     turrets = [];
   }
-  // 飛行敵(第2弾 §1): 地区ゲートが閉じている間はポケット走査自体をしない(他地区では無コスト)
+  // 飛行敵(第2弾 §1): 地区ゲートが閉じている間はポケット走査自体をしない(他地区では無コスト)。
+  // 粘着保持(設計 2026-11-11-flyer-stickiness): 選定は窓の位置で入れ替わるので、生存中の個体は
+  // アンカーが保持半径内なら選定から外れても残す。地区ゲートは新規出現だけを止め、保持が優先する
   if (flyerMulFor(biomeId) > 0) {
     const pockets = findAirPockets(tiles, cx - ENEMY_SCAN_X, cy - ENEMY_SCAN_Y, cx + ENEMY_SCAN_X, cy + ENEMY_SCAN_Y);
     const desiredFlyers = chooseFlyerSpawns(seed, layer, pockets, protectedPoints, biomeId, halls, defeatedEnemies);
     const flyerIds = new Set(desiredFlyers.map((d) => d.id));
-    flyers = flyers.filter((e) => flyerIds.has(e.spawnId));
-    for (const d of desiredFlyers) {
-      if (!flyers.some((e) => e.spawnId === d.id)) {
-        flyers.push({ spawnId: d.id, flyer: new Flyer(d.x, d.y, d.phase) });
-      }
+    flyers = retainFlyers(flyers, flyerIds, player.centerX, player.centerY);
+    for (const d of newFlyerSpawns(desiredFlyers, flyers)) {
+      flyers.push({ spawnId: d.id, flyer: new Flyer(d.x, d.y, d.phase) });
     }
   } else if (flyers.length > 0) {
-    flyers = [];
+    flyers = retainFlyers(flyers, new Set(), player.centerX, player.centerY);
   }
   // ボス(第2弾 §2): プレイヤーがいるセルの大広間にだけ有効化する。
   // 撃破済みなら bossSpawnFor が null を返し、二度と出ない(再戦不可)

@@ -56,40 +56,46 @@ const bg = (
 ): BgLayer[] =>
   defs.map(([factor, density, kind], i) => ({ factor, density, kind, color: bgColor(tint, i, amount) }));
 
+/*
+ * ambientLevel は 2.17(設計 2026-11-11-darkness-rework §1)で旧値の約 0.55 倍へ下げた(暗いのが既定)。
+ * 地区の明るさの順(大空洞帯 > 上層 > 居住区跡 > 精錬炉 > 廃棄物層 > 最下層 > 生体異物)は旧値のまま保つ。
+ * 値は 1/64 刻み(10/64, 20/64, 13/64, 25/64, 22/64, 16/64, 9/64)にして、境界の混合の中点が
+ * 浮動小数の丸めなしで (from + to) / 2 に一致するようにしてある
+ */
 export const VISUAL_BIOME: Record<BiomeId, Biome> = {
   coldSteel: {
-    name: '最下層', ambientColor: '#101b26', ambientLevel: 0.28,
+    name: '最下層', ambientColor: '#101b26', ambientLevel: 0.15625,
     palette: steelPalette('#5b7e9b', 0.2), accent: '#7898ae',
     bgLayers: bg('#5b7e9b', [[0.2, 0.36, 'tower'], [0.45, 0.28, 'deck']], 0.22),
   },
   habitation: {
-    name: '居住区跡', ambientColor: '#0c302a', ambientLevel: 0.56,
+    name: '居住区跡', ambientColor: '#0c302a', ambientLevel: 0.3125,
     palette: { ...steelPalette('#3f9b83', 0.23), edge: '#3c755f' }, accent: '#3c755f',
     bgLayers: bg('#2eae79', [[0.18, 0.78, 'tower'], [0.35, 0.68, 'deck'], [0.5, 0.38, 'haze']], 0.22),
   },
   disposal: {
-    name: '廃棄物層', ambientColor: '#341c0d', ambientLevel: 0.36,
+    name: '廃棄物層', ambientColor: '#341c0d', ambientLevel: 0.203125,
     palette: { ...steelPalette('#a26028', 0.22), edge: '#9a6d32' }, accent: '#d38a42',
     bgLayers: bg('#b16628', [[0.24, 0.33, 'tower'], [0.5, 0.72, 'deck']], 0.22),
   },
   waterVoid: {
-    name: '大空洞帯', ambientColor: '#0a1d4e', ambientLevel: 0.7, // 最も開けた系統だけ僅かに環境色を残す
+    name: '大空洞帯', ambientColor: '#0a1d4e', ambientLevel: 0.390625, // 最も開けた系統だけ僅かに環境色を残す
     palette: steelPalette('#297cc4', 0.25), accent: '#3a73a4',
     bgLayers: bg('#2484da', [[0.12, 0.25, 'tower'], [0.3, 0.22, 'deck'], [0.55, 0.78, 'haze']], 0.22),
   },
   power: {
-    name: '上層', ambientColor: '#2b1648', ambientLevel: 0.62,
+    name: '上層', ambientColor: '#2b1648', ambientLevel: 0.34375,
     palette: steelPalette('#8157c8', 0.23), accent: '#bc7cff',
     bgLayers: bg('#8d52d8', [[0.16, 0.62, 'tower'], [0.36, 0.56, 'deck']], 0.22),
   },
   foundry: {
-    name: '精錬炉', ambientColor: mixHex('#4a2620', '#020408', 0.72), ambientLevel: 0.44,
+    name: '精錬炉', ambientColor: mixHex('#4a2620', '#020408', 0.72), ambientLevel: 0.25,
     // 縁は溶鉱の熱で金色に光る(パレット 31 番)。廃棄沈殿層の鈍い金茶(30 番)と量子化後も分かれる
     palette: { ...steelPalette('#d06a3c', 0.2), edge: '#caa64a' }, accent: '#ff6a35',
     bgLayers: bg('#d06a3c', [[0.2, 0.5, 'tower'], [0.4, 0.45, 'deck']]),
   },
   biomech: {
-    name: '生体異物', ambientColor: '#1d1030', ambientLevel: 0.24,
+    name: '生体異物', ambientColor: '#1d1030', ambientLevel: 0.140625,
     // 縁は淡紫の膜・骨の色。電力区の紫・寒鋼の青灰と量子化後も分かれるよう明示する
     palette: { ...steelPalette('#6a5a7d', 0.23), edge: '#978bab' }, accent: '#a58fc4',
     bgLayers: bg('#a25174', [[0.18, 0.5, 'tower'], [0.4, 0.35, 'deck']], 0.3),

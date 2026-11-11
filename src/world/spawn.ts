@@ -255,6 +255,55 @@ export function chooseFlyerSpawns(
 }
 
 /**
+ * 飛行敵の粘着保持の保持半径(タイル、チェビシェフ距離。設計 2026-11-11-flyer-stickiness)。
+ * 敵スキャンの窓(横 ±40・縦 ±24)より広くし、窓の位置で選定が入れ替わっただけでは手放さない。
+ */
+export const FLYER_HOLD_RADIUS = 64;
+
+/** 保持の判定に要る飛行敵の実体の形(main.ts の `{ spawnId, flyer: Flyer }` と構造互換) */
+export interface HeldFlyer {
+  spawnId: string;
+  flyer: { readonly anchorX: number; readonly anchorY: number };
+}
+
+/**
+ * 飛行敵の粘着保持(設計 2026-11-11-flyer-stickiness)。chooseFlyerSpawns は列挙順の貪欲な
+ * 密度判定なので、開けた空間では走査窓が数タイルずれるだけで選定集合が入れ替わる。
+ * 生存中の個体は、今回の選定に入っているか、スポーンアンカーがプレイヤーから保持半径以内なら残す。
+ * 地区ゲートが閉じた地区(選定が空)でも同じ規則で残す(新規出現を止めるだけで、近くの個体は消さない)。
+ */
+export function retainFlyers<T extends HeldFlyer>(
+  current: readonly T[],
+  desiredIds: ReadonlySet<string>,
+  playerX: number,
+  playerY: number,
+  radius: number = FLYER_HOLD_RADIUS,
+): T[] {
+  return current.filter(
+    (e) =>
+      desiredIds.has(e.spawnId) ||
+      Math.max(Math.abs(e.flyer.anchorX - playerX), Math.abs(e.flyer.anchorY - playerY)) <= radius,
+  );
+}
+
+/**
+ * 保持した個体に対して新しく湧かせる選定。既に実体がある ID と、保持中の個体のアンカーに
+ * 密度上限(32×16)の内側で近接する選定は湧かせない(窓のずれで選ばれた別の代表が、保持中の
+ * 個体の隣に湧いて密度が倍になるのを防ぐ)。選定どうしは chooseFlyerSpawns が密度を満たしている
+ * ので、選定に入っている保持個体が他の選定を締め出すことはない。
+ */
+export function newFlyerSpawns(desired: readonly FlyerSpawn[], kept: readonly HeldFlyer[]): FlyerSpawn[] {
+  return desired.filter(
+    (d) =>
+      !kept.some(
+        (k) =>
+          k.spawnId === d.id ||
+          (Math.abs(k.flyer.anchorX - d.x) < FLYER_DENSITY_DX && Math.abs(k.flyer.anchorY - d.y) < FLYER_DENSITY_DY),
+      ),
+  );
+}
+
+/**
  * 固定砲台の出現(v2.0 Task 6)。Walker と同じ床ラン + hash の決定論で、
  * 出現地区は電力区と精錬区のみ(倍率表でゲート)。
  */
