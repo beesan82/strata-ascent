@@ -53,10 +53,14 @@ import {
   findFloorRuns,
   flyerMulFor,
   newFlyerSpawns,
+  newTurretSpawns,
+  newWalkerSpawns,
+  retainEnemies,
   retainFlyers,
   turretMulFor,
   type FloorRun,
   type ProtectedPoint,
+  type SpawnAnchor,
   type SpawnRect,
 } from './world/spawn';
 import { bossRewardFor, bossSpawnFor, type BossSpawn } from './world/boss';
@@ -195,12 +199,15 @@ const store = new ChunkStore(seed, destruction);
 const graviton = new Graviton();
 const pulseGun = new PulseGun();
 
-/** 生存中の歩行敵(スポーン識別子つき)。出現の決定は world/spawn の決定論スキャン */
-let enemies: { spawnId: string; walker: Walker }[] = [];
+/**
+ * 生存中の歩行敵(スポーン識別子とスポーンアンカーつき)。出現の決定は world/spawn の決定論スキャン。
+ * anchor は選定が決めた出現位置で、粘着保持の距離はこれで測る(設計 2026-11-11-enemy-stability)
+ */
+let enemies: { spawnId: string; anchor: SpawnAnchor; walker: Walker }[] = [];
 /** 生存中の飛行敵(スポーン識別子つき)。出現の決定は walker と同じスキャンに相乗りする */
 let flyers: { spawnId: string; flyer: Flyer }[] = [];
-/** 生存中の固定砲台(スポーン識別子つき)。出現の決定は walker と同じスキャンに相乗りする */
-let turrets: { spawnId: string; turret: Turret }[] = [];
+/** 生存中の固定砲台(スポーン識別子とスポーンアンカーつき)。出現の決定は walker と同じスキャンに相乗りする */
+let turrets: { spawnId: string; anchor: SpawnAnchor; turret: Turret }[] = [];
 /** 飛んでいる砲台の弾。プレイヤーに当たると消費され、地形・寿命でも消える */
 let turretShots: TurretShot[] = [];
 /**
@@ -370,21 +377,18 @@ function refreshEnemies(): void {
   const spawnMul = terrainProfileFor(biomeId).spawnMul;
   const cx = Math.floor(player.centerX);
   const cy = Math.floor(player.centerY);
-  const runs = findFloorRuns(tiles, cx - ENEMY_SCAN_X, cy - ENEMY_SCAN_Y, cx + ENEMY_SCAN_X, cy + ENEMY_SCAN_Y);
+  const wx0 = cx - ENEMY_SCAN_X;
+  const wx1 = cx + ENEMY_SCAN_X;
+  const runs = findFloorRuns(tiles, wx0, cy - ENEMY_SCAN_Y, wx1, cy + ENEMY_SCAN_Y);
+  // 窓の端で切れた床ランを本来の端へ揃える(設計 2026-11-11-enemy-stability §1)。敵とインフラ(建設者・端末)の
+  // 選定はこれを使い、スポーン ID(ランの左端)とラン内の位置(ランの長さ)が窓の位置で揺れないようにする
+  const canon = runs.map((r) => canonicalRun(tiles, r, wx0, wx1));
   const rp = nearestRestPoint(seed, player.centerX, player.centerY);
   const protectedPoints = [
     { x: spawn.x, y: spawn.y, r: 10 },
     { x: rp.x, y: rp.floorY, r: 20 },
   ];
-  const desired = chooseSpawns(seed, layer, runs, protectedPoints, spawnMul, defeatedEnemies);
-  const ids = new Set(desired.map((d) => d.id));
-  enemies = enemies.filter((e) => ids.has(e.spawnId));
-  for (const d of desired) {
-    if (!enemies.some((e) => e.spawnId === d.id)) {
-      enemies.push({ spawnId: d.id, walker: new Walker(d.x, d.y, d.dir) });
-    }
-  }
-  // スキャン範囲に重なるセルの大広間(飛行敵の除外とキャッシュの除外で共用)
+  // スキャン範囲に重なるセルの大広間(砲台・飛行敵の除外とキャッシュの除外で共用)
   const halls = [];
   const cellMin = biomeCellAt(seed, cy - ENEMY_SCAN_Y);
   const cellMax = biomeCellAt(seed, cy + ENEMY_SCAN_Y);
@@ -392,22 +396,25 @@ function refreshEnemies(): void {
     const hall = grandHallAt(seed, c);
     if (hall) halls.push(hall);
   }
-  // 固定砲台(v2.0 Task 6): 地区ゲート(電力区・精錬区)が開いているときだけ床ランを引く。
-  // 歩行敵の選定結果(desired)を occupied として渡し、近接する位置には置かない
-  if (turretMulFor(biomeId) > 0) {
-    const desiredTurrets = chooseTurretSpawns(
-      seed, layer, runs, protectedPoints, biomeId, halls,
+  // 歩行敵と固定砲台(v2.0 Task 6)の選定。砲台は地区ゲート(電力区・精錬区)が開いているときだけ引き、
+  // 歩行敵の選定結果(desired)を occupied として渡して近接する位置には置かない
+  const desired = chooseSpawns(seed, layer, canon, protectedPoints, spawnMul, defeatedEnemies);
+  const desiredTurrets = turretMulFor(biomeId) > 0
+    ? chooseTurretSpawns(
+      seed, layer, canon, protectedPoints, biomeId, halls,
       desired.map((d) => ({ x: d.x, y: d.y })), defeatedEnemies,
-    );
-    const turretIds = new Set(desiredTurrets.map((d) => d.id));
-    turrets = turrets.filter((e) => turretIds.has(e.spawnId));
-    for (const d of desiredTurrets) {
-      if (!turrets.some((e) => e.spawnId === d.id)) {
-        turrets.push({ spawnId: d.id, turret: new Turret(d.x, d.y) });
-      }
-    }
-  } else if (turrets.length > 0) {
-    turrets = [];
+    )
+    : [];
+  // 粘着保持(設計 2026-11-11-enemy-stability §2): 選定は窓の位置で入れ替わるので、生存中の個体は
+  // スポーンアンカーが保持半径内なら選定から外れても残す。地区ゲート・保護点は新規出現だけを止める。
+  // 新規出現は保持個体の近傍(各種の密度規則・砲台と歩行敵の 3 タイル)では湧かせない
+  enemies = retainEnemies(enemies, new Set(desired.map((d) => d.id)), player.centerX, player.centerY);
+  turrets = retainEnemies(turrets, new Set(desiredTurrets.map((d) => d.id)), player.centerX, player.centerY);
+  for (const d of newWalkerSpawns(desired, enemies, turrets)) {
+    enemies.push({ spawnId: d.id, anchor: { x: d.x, y: d.y }, walker: new Walker(d.x, d.y, d.dir) });
+  }
+  for (const d of newTurretSpawns(desiredTurrets, turrets, enemies)) {
+    turrets.push({ spawnId: d.id, anchor: { x: d.x, y: d.y }, turret: new Turret(d.x, d.y) });
   }
   // 飛行敵(第2弾 §1): 地区ゲートが閉じている間はポケット走査自体をしない(他地区では無コスト)。
   // 粘着保持(設計 2026-11-11-flyer-stickiness): 選定は窓の位置で入れ替わるので、生存中の個体は
@@ -449,15 +456,22 @@ function refreshEnemies(): void {
   const armoryOverlapsCache = armory !== null && supplyCache !== null &&
     Math.max(Math.abs(armory.x - supplyCache.x), Math.abs(armory.floorY - supplyCache.floorY)) <= 2;
   armory = holdSpot(armoryOverlapsCache ? null : armory, armories, player.centerX, player.centerY, claimedArmories);
-  refreshInfra(runs, halls, cx - ENEMY_SCAN_X, cx + ENEMY_SCAN_X);
+  refreshInfra(runs, canon, halls, wx0, wx1);
 }
 
 /**
  * インフラの近傍集合を更新する(設計 2026-11-10-infrastructure)。敵スキャンの床ラン・大広間に相乗りする。
  * 昇降機はシャフトの決定論配置から、トラム・建設者・端末は床ランの決定的な選定(キャッシュと同じ流儀)から。
- * どれも近傍に保持半径つきで粘着させ、走査窓の端をまたいだだけでは消えたり跳んだりしない
+ * どれも近傍に保持半径つきで粘着させ、走査窓の端をまたいだだけでは消えたり跳んだりしない。
+ * canon は runs を canonicalRun で正規化したもの(refreshEnemies で一度だけ求めて敵の選定と共用する)
  */
-function refreshInfra(runs: readonly FloorRun[], halls: readonly SpawnRect[], wx0: number, wx1: number): void {
+function refreshInfra(
+  runs: readonly FloorRun[],
+  canon: readonly FloorRun[],
+  halls: readonly SpawnRect[],
+  wx0: number,
+  wx1: number,
+): void {
   const px = player.centerX;
   const py = player.centerY;
   // 昇降機: 既知の足場の状態は ID で引き継ぐ
@@ -479,7 +493,6 @@ function refreshInfra(runs: readonly FloorRun[], halls: readonly SpawnRect[], wx
     }
   }
   // 建設者と端末は窓の端で切れた床ランを本来の端へ揃えてから選ぶ(ID と位置が窓の位置で揺れない)
-  const canon = runs.map((r) => canonicalRun(tiles, r, wx0, wx1));
   if (!builder || Math.hypot(builder.builder.centerX - px, builder.builder.centerY - py) > BUILDER_HOLD_RADIUS) {
     const bs = chooseBuilder(
       seed, canon, [spawnGuard], excluded, BUILDER_W, BUILDER_H,
