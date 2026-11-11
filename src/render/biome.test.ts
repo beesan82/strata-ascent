@@ -181,6 +181,36 @@ describe('tone and palette realism', () => {
   });
 });
 
+describe('ambient levels(暗さの作り直し、2.17)', () => {
+  it('地区の環境光は旧値の約 0.55 倍(1/64 刻み)', () => {
+    expect(VISUAL_BIOME.coldSteel.ambientLevel).toBe(10 / 64);
+    expect(VISUAL_BIOME.habitation.ambientLevel).toBe(20 / 64);
+    expect(VISUAL_BIOME.disposal.ambientLevel).toBe(13 / 64);
+    expect(VISUAL_BIOME.waterVoid.ambientLevel).toBe(25 / 64);
+    expect(VISUAL_BIOME.power.ambientLevel).toBe(22 / 64);
+    expect(VISUAL_BIOME.foundry.ambientLevel).toBe(16 / 64);
+    expect(VISUAL_BIOME.biomech.ambientLevel).toBe(9 / 64);
+  });
+
+  it('旧値に対する比は 0.5〜0.6 に収まり、地区の明るさの順は旧値のまま', () => {
+    const old: Record<keyof typeof VISUAL_BIOME, number> = {
+      coldSteel: 0.28, habitation: 0.56, disposal: 0.36, waterVoid: 0.7, power: 0.62, foundry: 0.44, biomech: 0.24,
+    };
+    const ids = Object.keys(old) as (keyof typeof VISUAL_BIOME)[];
+    for (const id of ids) {
+      const r = VISUAL_BIOME[id].ambientLevel / old[id];
+      expect(r).toBeGreaterThanOrEqual(0.5);
+      expect(r).toBeLessThanOrEqual(0.6);
+    }
+    const byOld = [...ids].sort((a, b) => old[b] - old[a]);
+    const byNew = [...ids].sort((a, b) => VISUAL_BIOME[b].ambientLevel - VISUAL_BIOME[a].ambientLevel);
+    expect(byNew).toEqual(byOld);
+    // 大空洞帯は最も明るいまま、ただし 0.4 を超えない(暗いのが既定)
+    expect(byNew[0]).toBe('waterVoid');
+    expect(VISUAL_BIOME.waterVoid.ambientLevel).toBeLessThanOrEqual(0.4);
+  });
+});
+
 describe('visual biome separation', () => {
   const visualBiomes = BIOME_IDS.map((id) => VISUAL_BIOME[id]);
 

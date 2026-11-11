@@ -32,7 +32,7 @@ export class Post {
         ctx.drawImage(grain, x, y);
       }
     }
-    // ビネットは暗いバイオームほど強く、明るい帯(大空洞帯 .72)ではほぼ消す。
+    // ビネットは暗いバイオームほど強く、明るいほど弱める(2.17 で地区の環境光が下がったので全体にやや強く出る)。
     ctx.globalAlpha = Math.max(0, Math.min(1, 1 - ambientLevel));
     if (this.vignette) ctx.drawImage(this.vignette, 0, 0);
     ctx.globalAlpha = 1;

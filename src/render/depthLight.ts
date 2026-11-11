@@ -1,14 +1,14 @@
 /**
  * 深さの明るさと懐中電灯モードの係数(設計 2026-11-09-steps-and-light §3、§4)、
- * 室内の暗さの係数(設計 2026-11-11-light-occlusion-ambient §2)。
+ * 室内の暗さの係数(設計 2026-11-11-light-occlusion-ambient §2)、
+ * 暗幕の濃さ(設計 2026-11-11-darkness-rework: 暗いのが既定、光は例外)。
  * Canvas に触らない純粋関数だけを置き、renderer と Lighting がこれを読む。
  */
-import { OPENNESS_LO } from '../core/zoom';
 
-/** 1 層ごとに環境光を下げる量 */
-export const DEPTH_SHADE_PER_LAYER = 0.06;
-/** 深さ係数の下限(最も深い層でも環境光をこれ以上は下げない) */
-export const DEPTH_SHADE_MIN = 0.45;
+/** 1 層ごとに環境光を下げる量(2.17 で 0.06 → 0.08) */
+export const DEPTH_SHADE_PER_LAYER = 0.08;
+/** 深さ係数の下限(最も深い層でも環境光をこれ以上は下げない。2.17 で 0.45 → 0.30) */
+export const DEPTH_SHADE_MIN = 0.3;
 
 /**
  * 層番号 → 環境光に掛ける係数。層 0 で 1.0、層番号が 1 増えるごとに DEPTH_SHADE_PER_LAYER ずつ下げ、
@@ -23,16 +23,17 @@ export function depthShade(layer: number): number {
 /**
  * 室内の暗さ(設計 2026-11-11-light-occlusion-ambient §2)。
  * 開放度(core/zoom.sampleOpenness をズーム用に 6 フレームおきに測り、時間平滑したもの)がこれ以上なら
- * 開けた場所として従来どおり(係数 1)。ズームの「閉塞・通路」の境(OPENNESS_LO)と同じ値にそろえる
+ * 開けた場所として係数 1。2.17(設計 2026-11-11-darkness-rework §3)でズームの「閉塞・通路」の境
+ * (OPENNESS_LO = 0.55)より手前の 0.7 から効かせる(通路程度の囲まれ方から暗くなり始める)
  */
-export const ENCLOSURE_OPEN = OPENNESS_LO;
+export const ENCLOSURE_OPEN = 0.7;
 /** 開放度がこれ以下なら最も囲まれている(囲まれ度 1) */
 export const ENCLOSURE_CLOSED = 0.2;
 /**
- * 囲まれ度 1 のときに環境光へ掛ける係数(暗さの下限)。これより下げない(シルエットが読める暗さに留める)。
- * 暗幕の不透明度の上限(Lighting の 0.62)はそのまま残るので、真っ黒にはならない
+ * 囲まれ度 1 のときに環境光へ掛ける係数(暗さの下限。2.17 で 0.55 → 0.35)。
+ * 暗幕の不透明度は CURTAIN_MAX で頭打ちになるので、真っ黒にはならない
  */
-export const ENCLOSURE_SHADE_MIN = 0.55;
+export const ENCLOSURE_SHADE_MIN = 0.35;
 
 /**
  * 開放度(0..1) → 囲まれ度(0..1)。ENCLOSURE_OPEN 以上で 0、ENCLOSURE_CLOSED 以下で 1、間は線形。
@@ -49,6 +50,24 @@ export function enclosure(openness: number): number {
  */
 export function enclosureShade(openness: number): number {
   return 1 - (1 - ENCLOSURE_SHADE_MIN) * enclosure(openness);
+}
+
+/**
+ * 暗幕の不透明度の上限(設計 2026-11-11-darkness-rework §2。旧 0.62)。
+ * 光源のない場所でも地形のシルエットがかろうじて読める濃さに留める(真っ黒にはしない)
+ */
+export const CURTAIN_MAX = 0.86;
+/** 暗幕の傾き: (1 − 環境光) に掛ける係数(旧 0.72) */
+export const CURTAIN_SLOPE = 1.0;
+
+/**
+ * 環境光(地区 × 深さ × 囲まれ、0..1) → 暗幕の不透明度。明るいほど薄く、CURTAIN_MAX で止める。
+ * 範囲外の環境光は 0..1 に丸める(負の不透明度を返さない)
+ */
+export function curtainAlpha(ambient: number): number {
+  const a = ambient < 0 ? 0 : ambient > 1 ? 1 : ambient;
+  const v = (1 - a) * CURTAIN_SLOPE;
+  return v > CURTAIN_MAX ? CURTAIN_MAX : v;
 }
 
 /** 懐中電灯モードでのコーン半径の倍率 */

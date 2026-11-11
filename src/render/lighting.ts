@@ -1,4 +1,4 @@
-import type { ConeParams } from './depthLight';
+import { curtainAlpha, type ConeParams } from './depthLight';
 import { circleRays, coneRays, CIRCLE_RAYS, CONE_RAYS, type SolidAt } from './lightRays';
 
 /** 補助光(円)の半径(タイル) */
@@ -22,7 +22,8 @@ export interface LightOcclusion {
 
 /**
  * バイオーム環境光+プレイヤー補助光。
- * 旧「闇を敷いて光で切り抜く」方式を廃止し、全体が見える明るい画面にする。
+ * 2.17(設計 2026-11-11-darkness-rework)で「暗いのが既定、光は例外」へ戻した。暗幕は濃いが
+ * 上限(depthLight.CURTAIN_MAX)で止め、地形のシルエットは読める。
  */
 export class Lighting {
   private canvas = document.createElement('canvas');
@@ -43,7 +44,7 @@ export class Lighting {
   /**
    * ambientColor/ambientLevel: バイオーム環境光(levelが高いほど明るい=減光が薄い)。
    * px,py: プレイヤー画面座標、angle: 補助光の向き、ppt: 1タイルpx、timeSec: 揺らぎ。
-   * 1) 画面全体を「(1-ambientLevel)に比例する薄いバイオーム色の暗幕」で覆う(全体は必ず見える)
+   * 1) 画面全体を「(1-ambientLevel)に比例するバイオーム色の暗幕」で覆う(上限 CURTAIN_MAX でシルエットは残る)
    * 2) プレイヤー周囲と前方の暗幕を destination-out で消して局所的に明るく
    * 3) overlay があれば暗幕の「上」に加算する光(光柱など)を半解像度のこのキャンバスへ描かせる。
    *    暗幕と一緒に 1 回で主バッファへ乗るので、全画面の lighter パスを 1 つ節約できる
@@ -65,8 +66,8 @@ export class Lighting {
     const ctx = this.ctx;
     const hx = px / 2, hy = py / 2, hp = ppt / 2;
 
-    // 1) 環境減光: (1-level) を上限0.62に抑える → 最も暗いバイオームでも世界は見える
-    const dark = Math.min(0.62, (1 - ambientLevel) * 0.72);
+    // 1) 環境減光: (1-level) を上限 0.86 に抑える → 光の外は暗く、それでも地形のシルエットは読める
+    const dark = curtainAlpha(ambientLevel);
     ctx.globalCompositeOperation = 'source-over';
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = withAlpha(darken(ambientColor, 0.4), dark);

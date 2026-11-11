@@ -4,9 +4,10 @@ import {
   ANTECHAMBER_DEPTH, ANTECHAMBER_FADE, ANTECHAMBER_HALF_WIDTH, interfaceBottom, nearestPassage,
 } from '../world/interface';
 import { hash2 } from '../world/noise';
+import { nearestRestPoint, REST_HEIGHT, restPointBand } from '../world/restpoint';
 import { stratumIndexAt } from '../world/strata';
 import { CHUNK_SIZE, TILE, isSolid } from '../world/tiles';
-import { tileAt } from '../world/worldgen';
+import { findSpawn, tileAt } from '../world/worldgen';
 import { VISUAL_BIOME } from './biome';
 import { STEEL, mixHex } from './steel';
 
@@ -142,6 +143,167 @@ export const PALETTE = {
   hole: mixHex(STEEL.black, STEEL.far, 0.35), // 抜け区画
 } as const;
 
+/**
+ * 歩く景色(2.17 後半、設計 2026-11-11-walked-scenery)の色。すべて鋼ランプ STEEL の隣り合う 2 色の混合で、
+ * 暖色は PALETTE.rust だけを使う。既存の PALETTE / STEEL / 地区色とは重ならない値にして、
+ * 既存テストの「色で装飾を見分ける」検査(配管・トレイ・ストリンガー等)に紛れ込まないようにする。
+ */
+export const SCENERY_COLORS = {
+  /** 機械の残骸の胴(塗り) */
+  wreck: mixHex(STEEL.base, STEEL.stringer, 0.5),
+  /** 機械の残骸の頭部(塗り) */
+  wreckHead: mixHex(STEEL.base, STEEL.grate, 0.3),
+  /** 残滓の輪郭の受け光 */
+  edge: mixHex(STEEL.bayEdge, STEEL.post, 0.5),
+  /** 残滓の継ぎ目・消えた眼 */
+  dark: mixHex(STEEL.far, STEEL.shadow, 0.5),
+  /** 残骸の手足 */
+  limb: mixHex(STEEL.rib, STEEL.hanger, 0.4),
+  /** 積まれた板・塊 */
+  slab: mixHex(STEEL.grate, STEEL.rib, 0.5),
+  slabEdge: mixHex(STEEL.trayEdge, STEEL.bayEdge, 0.5),
+  /** 倒れた梁 */
+  beam: mixHex(STEEL.rib, STEEL.hanger, 0.25),
+  /** 破片の野原 */
+  shard: mixHex(STEEL.stringer, STEEL.grate, 0.5),
+  /** 頭上の桁渡り: ウェブ・フランジ・受け光 */
+  girderWeb: mixHex(STEEL.shadow, STEEL.base, 0.5),
+  girderFlange: mixHex(STEEL.rib, STEEL.trayEdge, 0.5),
+  girderLit: mixHex(STEEL.flange, STEEL.railTop, 0.5),
+  /** 深い壁ベイの奥 */
+  bayDeep: mixHex(STEEL.black, STEEL.far, 0.6),
+  /** ベイの中の残滓のシルエット */
+  baySilhouette: mixHex(STEEL.shadow, STEEL.stringer, 0.5),
+  /** ベイの中・桁の下の配管束 */
+  bayPipe: mixHex(STEEL.stringer, STEEL.rib, 0.5),
+  bayPipeLit: mixHex(STEEL.hanger, STEEL.trayEdge, 0.5),
+  /** 巨大壁面のステンシル(薄く、rect の alpha で載せる) */
+  stencil: mixHex(STEEL.bayEdge, STEEL.railTop, 0.3),
+} as const;
+
+/**
+ * 歩く景色の地区バイアス(設計 C)。terrainProfileFor と同じ流儀の表。濃さ(密度倍率)と
+ * 種類の重みだけを変え、判定はすべてセグメント・ブロックの世界座標で引くのでチャンク境界で破綻しない。
+ */
+export interface SceneryProfile {
+  /** 床の残滓の密度倍率 */
+  remnant: number;
+  /** 残滓の種類の重み: 機械の残骸・積まれた板・倒れた梁・破片の野原 */
+  wreck: number;
+  slabs: number;
+  beam: number;
+  field: number;
+  /** 頭上の桁渡りの密度倍率 */
+  girder: number;
+  /** 深い壁ベイの中身(残滓・配管束)の密度倍率 */
+  bayFill: number;
+  /** 配管束の割合(0..1)。ベイの中身が配管束になる確率・桁の下に配管束が添う確率の元 */
+  pipes: number;
+  /** 巨大壁面のステンシルの密度倍率 */
+  stencil: number;
+  /** 錆の濃さ(残滓・桁の錆筋の確率倍率) */
+  rust: number;
+}
+
+export const SCENERY_PROFILE: Record<BiomeId, SceneryProfile> = {
+  // 寒鋼基層: 均一で寒い(全体に薄め)
+  coldSteel: { remnant: 0.6, wreck: 1, slabs: 1, beam: 1, field: 1, girder: 0.6, bayFill: 0.5, pipes: 0.3, stencil: 0.6, rust: 0.5 },
+  // 居住区画: 残滓(機械の残骸・運びかけの板)とステンシルが濃い
+  habitation: { remnant: 1.6, wreck: 2, slabs: 1.5, beam: 0.6, field: 0.6, girder: 0.7, bayFill: 1.3, pipes: 0.25, stencil: 2.2, rust: 0.8 },
+  // 廃棄沈殿層: 破片の野原と倒れた梁
+  disposal: { remnant: 1.5, wreck: 0.7, slabs: 0.6, beam: 2.2, field: 2.6, girder: 0.6, bayFill: 0.8, pipes: 0.2, stencil: 0.5, rust: 1.3 },
+  // 大空洞水域: ベイと桁で「空間の巨大さ」寄り。足元の残滓は薄い
+  waterVoid: { remnant: 0.6, wreck: 1, slabs: 0.8, beam: 0.6, field: 0.6, girder: 1.6, bayFill: 1.8, pipes: 0.4, stencil: 0.8, rust: 0.9 },
+  // 電力区: 桁渡りと太い配管束
+  power: { remnant: 0.8, wreck: 1, slabs: 0.8, beam: 1, field: 0.6, girder: 1.9, bayFill: 1.1, pipes: 0.85, stencil: 1.0, rust: 0.6 },
+  // 精錬区: 錆とスラブの山
+  foundry: { remnant: 1.2, wreck: 0.8, slabs: 2.6, beam: 0.8, field: 0.8, girder: 1.0, bayFill: 0.8, pipes: 0.35, stencil: 0.7, rust: 2.0 },
+  // 生体異物区: 既存の根に機械の残骸を混ぜる(残骸には根が絡む)
+  biomech: { remnant: 1.0, wreck: 1.8, slabs: 0.6, beam: 0.8, field: 1.0, girder: 0.8, bayFill: 0.8, pipes: 0.3, stencil: 0.4, rust: 0.8 },
+};
+
+export function sceneryProfileFor(id: BiomeId): SceneryProfile {
+  return SCENERY_PROFILE[id] ?? SCENERY_PROFILE.coldSteel;
+}
+
+/** 床の 16 タイルセグメントに残滓が出る基礎確率(地区の remnant を掛ける)。見つけると印象に残る程度に低く */
+export const REMNANT_RATE = 0.12;
+/**
+ * 壁と床の角(出入口のない壁の脇に BEAM_RUN 列の床)に倒れた梁が出る基礎確率(地区の remnant × beam を掛け、
+ * BEAM_MAX で頭打ち)。角はセグメントより少ないので残滓より高めに取る
+ */
+export const BEAM_RATE = 0.25;
+const BEAM_MAX = 0.6;
+/** 倒れた梁が要る、壁の隣から続く床の列数(梁の先 4.9 と折れた端の欠片 5.75 + 余白) */
+const BEAM_RUN = 8;
+/** 天井の 16 タイルセグメントに桁渡りが出る基礎確率(地区の girder を掛ける) */
+export const GIRDER_RATE = 0.18;
+/** 損傷のない凹ベイに中身が入る基礎確率(地区の bayFill を掛ける) */
+export const BAY_FILL_RATE = 0.35;
+/** ベイにならなかった閉じた壁ブロックにステンシルが出る基礎確率(地区の stencil を掛ける) */
+export const STENCIL_RATE = 0.08;
+/** 桁渡りの下に続いていなければならない空気の行数(桁の下端から床の上の頭まで 2 タイル以上空く) */
+export const GIRDER_CLEARANCE = 6;
+/** 残滓の足元の列で、床の上に空気が続いていなければならない行数(梯子・出入口・壁際を避ける) */
+export const REMNANT_CLEAR_ROWS = 4;
+/** 残滓が床から上へ伸びる最大の高さ(タイル)。下のチャンクの床から上のチャンクへはみ出す分を走査する */
+const REMNANT_REACH = 4;
+/** 休憩点の箱(天井〜床)からこの距離(チェビシェフ、タイル)以内には景色を置かない */
+export const SCENERY_REST_GUARD = 8;
+/** 開始地点の足元からこの距離(チェビシェフ、タイル)以内には景色を置かない */
+export const SCENERY_SPAWN_GUARD = 12;
+
+const spawnMemo = new Map<number, { x: number; y: number }>();
+/** 開始地点の足元の床(列, 床の行)。findSpawn は tileAt を走査するのでシードごとに 1 回だけ引く */
+function spawnFloorOf(seed: number): { x: number; y: number } {
+  let s = spawnMemo.get(seed);
+  if (!s) {
+    const p = findSpawn(seed);
+    s = { x: Math.floor(p.x), y: Math.round(p.y + 1.9) };
+    spawnMemo.set(seed, s);
+  }
+  return s;
+}
+
+/**
+ * 世界座標の矩形 [x0,x1]×[y0,y1](タイル)が、休憩点・開始地点の保護範囲に掛かるか(純粋関数)。
+ * 実行時の保護(main.ts の休憩点 r=20・開始地点 r=10)より少し広く取り、灯や荷袋の読みを邪魔しない。
+ * 開始地点は findSpawn(seed) の位置で、?x=&y= の上書きは見ない(装飾はシードだけの関数)。
+ */
+export function sceneryGuarded(seed: number, x0: number, x1: number, y0: number, y1: number): boolean {
+  const sp = spawnFloorOf(seed);
+  const sdx = Math.max(0, x0 - sp.x, sp.x - x1);
+  const sdy = Math.max(0, y0 - sp.y, sp.y - y1);
+  if (Math.max(sdx, sdy) <= SCENERY_SPAWN_GUARD) return true;
+  const c0 = biomeCellAt(seed, y0);
+  const c1 = biomeCellAt(seed, y1);
+  for (let cell = c0; cell <= c1; cell++) {
+    const band = restPointBand(seed, cell);
+    if (y1 < band.y0 - SCENERY_REST_GUARD || y0 > band.y1 + SCENERY_REST_GUARD) continue;
+    const rp = nearestRestPoint(seed, (x0 + x1) / 2, Math.min(Math.max(band.y0, y0), band.y1));
+    const dx = Math.max(0, rp.left - x1, x0 - rp.right);
+    const dy = Math.max(0, rp.floorY - REST_HEIGHT - 1 - y1, y0 - rp.floorY);
+    if (Math.max(dx, dy) <= SCENERY_REST_GUARD) return true;
+  }
+  return false;
+}
+
+/** 重み付きの選択。r は [0,1)。重みがすべて 0 なら -1 */
+function pickWeighted(r: number, weights: readonly number[]): number {
+  let sum = 0;
+  for (const w of weights) sum += w;
+  if (sum <= 0) return -1;
+  let acc = 0;
+  let last = -1;
+  for (let i = 0; i < weights.length; i++) {
+    if (weights[i] <= 0) continue;
+    last = i;
+    acc += weights[i] / sum;
+    if (r < acc) return i;
+  }
+  return last;
+}
+
 function mod(n: number, m: number): number {
   return ((n % m) + m) % m;
 }
@@ -256,7 +418,10 @@ export function decorateChunk(seed: number, cx: number, cy: number, pristine?: U
   }
 
   // セグメント装飾はワールド座標整列で判定する。世界座標アクセサをバッファ読みで渡す。
-  segmentOps(ops, seed, bx, by, (wx, wy) => t(wx - bx, wy - by));
+  const tw = (wx: number, wy: number) => t(wx - bx, wy - by);
+  segmentOps(ops, seed, bx, by, tw);
+  // 歩く景色(2.17 後半): 床の残滓と頭上の桁渡り。既存装飾の上に重ねる
+  sceneryOps(ops, seed, bx, by, tw);
   return ops;
 }
 
@@ -589,7 +754,14 @@ function segmentOps(
   const bt1 = Math.floor((by + CHUNK_SIZE) / 7);
   for (let sy = bt0; sy <= bt1; sy++) {
     for (let sx = bs0; sx <= bs1; sx++) {
-      if (hash2(seed + 721, sx, sy) > 0.6) continue; // 全面ベイだと壁が虚ろになるので6割
+      const bay = hash2(seed + 721, sx, sy) <= 0.6; // 全面ベイだと壁が虚ろになるので6割
+      // ベイにならないブロックは、まれに巨大壁面のステンシル(歩く景色 B)の候補になる。
+      // 地区はブロック中央の行で引く(上下どちらのチャンクから見ても同じ)
+      let prof: SceneryProfile | null = null;
+      if (!bay) {
+        prof = sceneryProfileFor(biomeIdForCell(seed, biomeCellAt(seed, sy * 7 + 3)));
+        if (hash2(seed + 771, sx, sy) >= STENCIL_RATE * prof.stencil) continue;
+      }
       const x0 = sx * 8;
       const y0 = sy * 7;
       let ok = true;
@@ -604,9 +776,17 @@ function segmentOps(
       if (!ok) continue;
       const lx0 = x0 - bx;
       const ly0 = y0 - by;
+      if (!bay) {
+        stencilOps(ops, seed, sx, sy, lx0, ly0);
+        continue;
+      }
       ops.push({ kind: 'rect', x: lx0 + 0.5, y: ly0 + 0.5, w: 7, h: 6, color: PALETTE.bay });
       ops.push({ kind: 'rect', x: lx0 + 0.5, y: ly0 + 0.5, w: 7, h: 0.5, color: STEEL.black, alpha: 0.6 });
       ops.push({ kind: 'line', x1: lx0 + 0.5, y1: ly0 + 0.5, x2: lx0 + 7.5, y2: ly0 + 0.5, w: 0.08, color: PALETTE.bayEdge });
+      // 歩く景色 B: ベイを深くする(奥の一段暗い面+左の内壁の陰+底の敷居の受け光)
+      ops.push({ kind: 'rect', x: lx0 + 1.2, y: ly0 + 1.0, w: 5.6, h: 5.0, color: SCENERY_COLORS.bayDeep });
+      ops.push({ kind: 'rect', x: lx0 + 0.5, y: ly0 + 1.0, w: 0.7, h: 5.5, color: STEEL.black, alpha: 0.35 });
+      ops.push({ kind: 'line', x1: lx0 + 0.5, y1: ly0 + 6.45, x2: lx0 + 7.5, y2: ly0 + 6.45, w: 0.07, color: SCENERY_COLORS.bayPipeLit });
       // 損傷: 抜け区画+露出鉄筋(35%)
       if (hash2(seed + 722, sx, sy) < 0.35) {
         const hx = lx0 + 1 + Math.floor(hash2(seed + 723, sx, sy) * 4);
@@ -615,6 +795,12 @@ function segmentOps(
         for (let i = 0; i < 3; i++) {
           const rx = hx + 0.3 + i * 0.8;
           ops.push({ kind: 'line', x1: rx, y1: hy + 2.4, x2: rx + 0.5, y2: hy + 1.2, w: 0.05, color: PALETTE.rebar });
+        }
+      } else {
+        // 歩く景色 B: 損傷のないベイの奥に、配管の束か小さな残滓のシルエットを入れる(壁の中にも空間と物がある)
+        prof ??= sceneryProfileFor(biomeIdForCell(seed, biomeCellAt(seed, sy * 7 + 3)));
+        if (hash2(seed + 776, sx, sy) < BAY_FILL_RATE * prof.bayFill) {
+          bayFillOps(ops, lx0, ly0, hash2(seed + 777, sx, sy) < prof.pipes, hash2(seed + 778, sx, sy));
         }
       }
       // 錆筋: 上縁から下へフェード(50%)
@@ -625,6 +811,389 @@ function segmentOps(
           stops: [[0, PALETTE.rust], [1, PALETTE.rust0]], alpha: 0.45,
         });
       }
+    }
+  }
+}
+
+/** ベイの奥の中身(歩く景色 B)。pipes なら横走りの配管束+落ちる 1 本、でなければ敷居に置かれた板と機械のシルエット */
+function bayFillOps(ops: DecorOp[], lx0: number, ly0: number, pipes: boolean, jit: number): void {
+  if (pipes) {
+    const ys = [2.0, 2.45, 2.9];
+    const ws = [0.32, 0.26, 0.22];
+    for (let i = 0; i < 3; i++) {
+      ops.push({ kind: 'line', x1: lx0 + 1.2, y1: ly0 + ys[i], x2: lx0 + 6.8, y2: ly0 + ys[i], w: ws[i], color: SCENERY_COLORS.bayPipe });
+    }
+    ops.push({ kind: 'line', x1: lx0 + 1.2, y1: ly0 + 1.86, x2: lx0 + 6.8, y2: ly0 + 1.86, w: 0.05, color: SCENERY_COLORS.bayPipeLit });
+    for (const cx of [2.4, 5.6]) {
+      ops.push({ kind: 'line', x1: lx0 + cx, y1: ly0 + 1.75, x2: lx0 + cx, y2: ly0 + 3.1, w: 0.1, color: SCENERY_COLORS.bayPipeLit });
+    }
+    const dx = lx0 + 3.6 + jit * 2;
+    ops.push({ kind: 'line', x1: dx, y1: ly0 + 2.9, x2: dx, y2: ly0 + 6.45, w: 0.22, color: SCENERY_COLORS.bayPipe });
+    return;
+  }
+  const f = ly0 + 6.45; // 敷居(ベイの底)
+  const ox = jit * 0.6;
+  ops.push({ kind: 'rect', x: lx0 + 1.5 + ox, y: f - 0.55, w: 2.2, h: 0.55, color: SCENERY_COLORS.baySilhouette });
+  ops.push({ kind: 'rect', x: lx0 + 1.8 + ox, y: f - 1.05, w: 1.6, h: 0.5, color: SCENERY_COLORS.baySilhouette });
+  const mx = lx0 + 4.3 + ox;
+  const body = [mx, f, mx + 0.2, f - 1.5, mx + 1.1, f - 1.95, mx + 1.9, f - 1.35, mx + 2.0, f];
+  ops.push({ kind: 'poly', pts: body, w: 0, color: SCENERY_COLORS.baySilhouette, fill: true });
+  ops.push({ kind: 'poly', pts: [mx + 0.2, f - 1.5, mx + 1.1, f - 1.95, mx + 1.9, f - 1.35], w: 0.05, color: SCENERY_COLORS.bayPipeLit });
+}
+
+/** 7 セグメントの数字 0〜9(bit0..6 = a,b,c,d,e,f,g) */
+const SEVEN_SEG = [0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f] as const;
+const STENCIL_W = 1.7;
+const STENCIL_H = 3.2;
+const STENCIL_STROKE = 0.42;
+const STENCIL_ALPHA = 0.22;
+
+function stencilRect(ops: DecorOp[], x: number, y: number, w: number, h: number): void {
+  ops.push({ kind: 'rect', x, y, w, h, color: SCENERY_COLORS.stencil, alpha: STENCIL_ALPHA });
+}
+
+/** 数字 1 文字。画の端を詰めて隙間(ステンシルのブリッジ)を残す */
+function stencilDigit(ops: DecorOp[], d: number, x: number, y: number): void {
+  const W = STENCIL_W, H = STENCIL_H, s = STENCIL_STROKE;
+  const hw = W - 2 * s;
+  const vh = (H - s) / 2 - s;
+  const segs: ReadonlyArray<readonly [number, number, number, number]> = [
+    [x + s, y, hw, s], // a
+    [x + W - s, y + s, s, vh], // b
+    [x + W - s, y + (H + s) / 2, s, vh], // c
+    [x + s, y + H - s, hw, s], // d
+    [x, y + (H + s) / 2, s, vh], // e
+    [x, y + s, s, vh], // f
+    [x + s, y + (H - s) / 2, hw, s], // g
+  ];
+  const m = SEVEN_SEG[d];
+  for (let i = 0; i < 7; i++) if (m & (1 << i)) stencilRect(ops, ...segs[i]);
+}
+
+/**
+ * 巨大壁面のステンシル(歩く景色 B)。閉じた 8x7 の壁ブロックの面に、タイル数個分の薄い区画番号を描く。
+ * 数字と単純な記号(横棒・十字・下線)だけ。文字・固有名詞は使わない。
+ */
+function stencilOps(ops: DecorOp[], seed: number, sx: number, sy: number, lx0: number, ly0: number): void {
+  const v = hash2(seed + 772, sx, sy);
+  const d1 = Math.floor(hash2(seed + 773, sx, sy) * 10);
+  const d2 = Math.floor(hash2(seed + 774, sx, sy) * 10);
+  const glyphs: ReadonlyArray<number | 'dash' | 'plus'> = v < 0.5 ? [d1, d2] : v < 0.8 ? [d1, 'dash', d2] : [d1, 'plus'];
+  const GAP = 0.5;
+  const widthOf = (g: number | 'dash' | 'plus') => (g === 'dash' ? 1.0 : g === 'plus' ? 1.4 : STENCIL_W);
+  let total = -GAP;
+  for (const g of glyphs) total += widthOf(g) + GAP;
+  const y = ly0 + 1.4;
+  const s = STENCIL_STROKE;
+  let x = lx0 + 4 - total / 2;
+  const x0 = x;
+  for (const g of glyphs) {
+    if (g === 'dash') {
+      stencilRect(ops, x, y + (STENCIL_H - s) / 2, 1.0, s);
+    } else if (g === 'plus') {
+      const vx = x + (1.4 - s) / 2;
+      stencilRect(ops, x, y + (STENCIL_H - s) / 2, 1.4, s);
+      stencilRect(ops, vx, y + STENCIL_H / 2 - 0.7, s, 0.7 - s / 2);
+      stencilRect(ops, vx, y + (STENCIL_H + s) / 2, s, 0.7 - s / 2);
+    } else {
+      stencilDigit(ops, g, x, y);
+    }
+    x += widthOf(g) + GAP;
+  }
+  // 区画の下線(半数)
+  if (hash2(seed + 775, sx, sy) < 0.5) stencilRect(ops, x0, y + STENCIL_H + 0.45, total, 0.26);
+}
+
+/** 機械の残骸の幅(タイル) */
+const WRECK_W = 4.8;
+
+/**
+ * 機械の残骸(歩く景色 A)。歩行敵より一回り大きい機械が座り込んだまま止まったシルエット。
+ * rx は左端、f は床の上面(床タイルの行)。flip で左右反転。胴の塗りの最下点は必ず f(接地)。
+ */
+function wreckOps(ops: DecorOp[], rx: number, f: number, flip: boolean, rust: number | null, root: boolean): void {
+  const X = (u: number) => (flip ? rx + WRECK_W - u : rx + u);
+  const P = (pts: readonly number[]) => pts.map((v, i) => (i % 2 === 0 ? X(v) : f + v));
+  const C = SCENERY_COLORS;
+  ops.push({ kind: 'poly', pts: P([0.5, 0, 0.8, -1.5, 2.1, -2.1, 3.2, -1.8, 3.6, -0.7, 3.2, 0]), w: 0, color: C.wreck, fill: true });
+  ops.push({ kind: 'poly', pts: P([2.3, -1.95, 2.7, -2.65, 3.45, -2.5, 3.3, -1.8]), w: 0, color: C.wreckHead, fill: true });
+  ops.push({ kind: 'poly', pts: P([0.8, -1.5, 2.1, -2.1, 3.2, -1.8]), w: 0.07, color: C.edge });
+  ops.push({ kind: 'poly', pts: P([2.7, -2.65, 3.45, -2.5]), w: 0.06, color: C.edge });
+  ops.push({ kind: 'dot', x: X(3.05), y: f - 2.25, r: 0.09, color: C.dark }); // 消えた眼
+  ops.push({ kind: 'line', x1: X(1.7), y1: f - 1.85, x2: X(1.95), y2: f - 0.15, w: 0.06, color: C.dark }); // 胴の継ぎ目
+  // 投げ出した脚(膝の継手で折れている)
+  ops.push({ kind: 'line', x1: X(3.3), y1: f - 0.9, x2: X(4.2), y2: f - 0.55, w: 0.2, color: C.limb });
+  ops.push({ kind: 'line', x1: X(4.2), y1: f - 0.55, x2: X(4.75), y2: f - 0.05, w: 0.18, color: C.limb });
+  ops.push({ kind: 'dot', x: X(4.2), y: f - 0.55, r: 0.14, color: C.edge });
+  ops.push({ kind: 'line', x1: X(4.2), y1: f - 0.55, x2: X(4.5), y2: f - 0.9, w: 0.07, color: C.edge });
+  // 畳んだ脚と垂れた腕
+  ops.push({ kind: 'line', x1: X(0.9), y1: f - 0.45, x2: X(0.15), y2: f - 0.12, w: 0.2, color: C.limb });
+  ops.push({ kind: 'dot', x: X(0.15), y: f - 0.12, r: 0.12, color: C.edge });
+  ops.push({ kind: 'poly', pts: P([1.4, -1.35, 1.0, -0.6, 1.7, -0.08]), w: 0.14, color: C.limb });
+  if (rust !== null) {
+    const u = 1.6 + rust * 1.2;
+    ops.push({
+      kind: 'grad', x: flip ? X(u) - 0.22 : X(u), y: f - 1.9, w: 0.22, h: 1.6, dir: 'v',
+      stops: [[0, PALETTE.rust], [1, PALETTE.rust0]], alpha: 0.35,
+    });
+  }
+  if (root) {
+    ops.push({ kind: 'poly', pts: P([0.2, 0, 1.1, -1.1, 2.3, -1.65, 3.4, -1.05]), w: 0.09, color: DISTRICT_DECOR_COLORS.biomechRoot });
+  }
+}
+
+/** 積まれた板の山の最大幅(山+脇の塊、揺らぎ込み) */
+const SLABS_W = 5.2;
+
+/** 積まれた板・塊(歩く景色 A)。誰かが運んで途中で置いていった山。最下段の板と脇の塊の下端は f(接地) */
+function slabOps(ops: DecorOp[], rx: number, f: number, h: (k: number) => number, rust: number | null): void {
+  const C = SCENERY_COLORS;
+  const baseW = 2.4 + h(2) * 1.2;
+  const n = 2 + Math.floor(h(3) * 3);
+  const SH = 0.42;
+  let top = f;
+  for (let k = 0; k < n; k++) {
+    const w = baseW - k * 0.4;
+    const x = rx + 0.25 + k * 0.18 + (h(4 + k) - 0.5) * 0.3;
+    top = f - SH * (k + 1);
+    ops.push({ kind: 'rect', x, y: top, w, h: SH, color: C.slab });
+    ops.push({ kind: 'line', x1: x, y1: top, x2: x + w, y2: top, w: 0.05, color: C.slabEdge });
+    ops.push({ kind: 'line', x1: x + 0.04, y1: top, x2: x + 0.04, y2: top + SH, w: 0.05, color: C.dark });
+    if (rust !== null && k === 1) {
+      ops.push({
+        kind: 'grad', x: x + 0.3 + rust * (w - 0.6), y: top, w: 0.2, h: 0.9, dir: 'v',
+        stops: [[0, PALETTE.rust], [1, PALETTE.rust0]], alpha: 0.35,
+      });
+    }
+  }
+  // 脇に置かれた塊(下の大きい方は床に接地)
+  const bx = rx + baseW + 0.6;
+  ops.push({ kind: 'rect', x: bx, y: f - 0.85, w: 0.9, h: 0.85, color: C.slab });
+  ops.push({ kind: 'line', x1: bx, y1: f - 0.85, x2: bx + 0.9, y2: f - 0.85, w: 0.05, color: C.slabEdge });
+  ops.push({ kind: 'rect', x: bx + 0.12, y: f - 1.35, w: 0.6, h: 0.5, color: C.slab });
+  ops.push({ kind: 'line', x1: bx + 0.12, y1: f - 1.35, x2: bx + 0.72, y2: f - 1.35, w: 0.05, color: C.slabEdge });
+}
+
+/**
+ * 倒れた梁(歩く景色 A)。壁の面 xw から床へ斜めに倒れかかる(dir=+1 は右へ、-1 は左へ倒れる)。
+ * 塗りの最初の点は壁の面の上端、最下点は f(接地)。描画のみで、通れる。
+ */
+function beamOps(ops: DecorOp[], xw: number, f: number, dir: 1 | -1, rust: boolean): void {
+  const C = SCENERY_COLORS;
+  ops.push({
+    kind: 'poly', pts: [xw, f - 3.4, xw + dir * 4.9, f, xw + dir * 4.3, f, xw, f - 2.9], w: 0, color: C.beam, fill: true,
+  });
+  ops.push({ kind: 'line', x1: xw, y1: f - 3.4, x2: xw + dir * 4.9, y2: f, w: 0.06, color: C.edge }); // 上フランジの受け光
+  ops.push({ kind: 'line', x1: xw, y1: f - 3.15, x2: xw + dir * 4.6, y2: f, w: 0.05, color: C.dark }); // ウェブ
+  ops.push({ kind: 'dot', x: xw + dir * 0.4, y: f - 3.0, r: 0.06, color: C.edge });
+  ops.push({ kind: 'dot', x: xw + dir * 0.75, y: f - 2.75, r: 0.06, color: C.edge });
+  // 折れた端の欠片
+  ops.push({ kind: 'poly', pts: [xw + dir * 4.9, f, xw + dir * 5.3, f - 0.28, xw + dir * 5.75, f], w: 0, color: C.slab, fill: true });
+  if (rust) {
+    ops.push({ kind: 'line', x1: xw + dir * 1.29, y1: f - 2.03, x2: xw + dir * 2.58, y2: f - 1.16, w: 0.08, color: PALETTE.rust });
+  }
+}
+
+/**
+ * 破片の野原(歩く景色 A)。既存の瓦礫(点)ではなく、セグメントの足元一帯に低い破片を敷く。
+ * 下敷きの低い堆積(塗り、最下点は f)+小片・平たい破片・錆の粒。
+ */
+function fieldOps(ops: DecorOp[], seed: number, s: number, wy: number, lx0: number, f: number): void {
+  const C = SCENERY_COLORS;
+  const drift: number[] = [lx0 + 1, f];
+  for (let i = 0; i < 8; i++) {
+    drift.push(lx0 + 1.6 + i * 1.7, f - 0.1 - hash2(seed + 800, s * 64 + i, wy) * 0.2);
+  }
+  drift.push(lx0 + 15, f);
+  ops.push({ kind: 'poly', pts: drift, w: 0, color: C.shard, fill: true });
+  const n = 10 + Math.floor(hash2(seed + 801, s, wy) * 8);
+  for (let i = 0; i < n; i++) {
+    const x = lx0 + 1 + hash2(seed + 802, s * 64 + i, wy) * 13.2;
+    const a = hash2(seed + 803, s * 64 + i, wy);
+    const b = hash2(seed + 804, s * 64 + i, wy);
+    const kind = hash2(seed + 805, s * 64 + i, wy);
+    if (kind < 0.55) {
+      ops.push({ kind: 'poly', pts: [x, f, x + 0.25 + a * 0.3, f - 0.2 - b * 0.28, x + 0.6 + a * 0.4, f], w: 0, color: C.shard, fill: true });
+    } else if (kind < 0.85) {
+      ops.push({ kind: 'line', x1: x, y1: f - 0.06, x2: x + 0.5 + a * 0.7, y2: f - 0.12 - b * 0.15, w: 0.07, color: C.edge });
+    } else {
+      ops.push({ kind: 'dot', x, y: f - 0.06, r: 0.06, color: PALETTE.rust });
+    }
+  }
+}
+
+/**
+ * 頭上の桁渡り(歩く景色 B)。天井の下に吊られた太い H 桁(上フランジの受け光・ウェブ・補剛材・下フランジ)と
+ * その落ち影。c は天井の下面(天井行 + 1)。下端は c+1.68(配管束が添えば c+2.33)で、
+ * 下に GIRDER_CLEARANCE 行の空気を要求するので、床に立つ頭との間は 2 タイル以上空く。
+ */
+function girderOps(ops: DecorOp[], lx0: number, c: number, rust: number | null, pipes: boolean): void {
+  const C = SCENERY_COLORS;
+  for (const hx of [2, 8, 14]) {
+    ops.push({ kind: 'line', x1: lx0 + hx, y1: c, x2: lx0 + hx, y2: c + 0.45, w: 0.14, color: C.girderFlange }); // 吊り材
+  }
+  ops.push({ kind: 'rect', x: lx0, y: c + 0.45, w: 16, h: 0.18, color: C.girderFlange });
+  ops.push({ kind: 'rect', x: lx0, y: c + 0.63, w: 16, h: 0.85, color: C.girderWeb });
+  ops.push({ kind: 'rect', x: lx0, y: c + 1.48, w: 16, h: 0.2, color: C.girderFlange });
+  ops.push({ kind: 'line', x1: lx0, y1: c + 0.45, x2: lx0 + 16, y2: c + 0.45, w: 0.06, color: C.girderLit });
+  for (let i = 1; i < 16; i += 2) {
+    ops.push({ kind: 'line', x1: lx0 + i, y1: c + 0.63, x2: lx0 + i, y2: c + 1.48, w: 0.12, color: C.girderFlange }); // 補剛材
+  }
+  for (const ex of [0.1, 15.9]) {
+    ops.push({ kind: 'line', x1: lx0 + ex, y1: c + 0.45, x2: lx0 + ex, y2: c + 1.68, w: 0.08, color: C.girderLit }); // 継手板
+  }
+  ops.push({
+    kind: 'grad', x: lx0, y: c + 1.68, w: 16, h: 0.9, dir: 'v',
+    stops: [[0, STEEL.black], [1, 'rgba(2,4,8,0)']], alpha: 0.45,
+  });
+  if (rust !== null) {
+    ops.push({
+      kind: 'grad', x: lx0 + 1 + rust * 13, y: c + 1.68, w: 0.24, h: 1.2, dir: 'v',
+      stops: [[0, PALETTE.rust], [1, PALETTE.rust0]], alpha: 0.35,
+    });
+  }
+  if (pipes) {
+    // 桁の下に添う配管束(電力区で濃い)
+    for (const px of [4, 12]) {
+      ops.push({ kind: 'line', x1: lx0 + px, y1: c + 1.68, x2: lx0 + px, y2: c + 2.3, w: 0.07, color: C.bayPipeLit });
+    }
+    ops.push({ kind: 'line', x1: lx0, y1: c + 1.95, x2: lx0 + 16, y2: c + 1.95, w: 0.22, color: C.bayPipe });
+    ops.push({ kind: 'line', x1: lx0, y1: c + 2.22, x2: lx0 + 16, y2: c + 2.22, w: 0.18, color: C.bayPipe });
+    ops.push({ kind: 'line', x1: lx0, y1: c + 1.85, x2: lx0 + 16, y2: c + 1.85, w: 0.05, color: C.bayPipeLit });
+  }
+}
+
+/**
+ * 歩く景色(2.17 後半、設計 2026-11-11-walked-scenery)の床の残滓と頭上の桁渡り。
+ * 判定は世界座標整列の 16 タイルセグメントと (s, wy) のハッシュ(倒れた梁だけは壁と床の角の世界座標の
+ * ハッシュ)で、地区は行 wy で引く。
+ * セグメントは 16 整列なので垂直のチャンク境界(64 整列)をまたがない。水平境界は、残滓が床から上へ
+ * 最大 REMNANT_REACH、桁が天井から下へ最大 3.6 伸びる分を両側のチャンクが走査して一致させる。
+ * バッファ読みは最悪 床 ly=68 の wy+1 → ローカル 69、天井 ly=64 の wy+6 → 70 で MARGIN=17 内。
+ * 横は x0+17(最右のセグメント)がバッファ外になりうるが、そのセグメントはこのチャンクの画素に重ならない。
+ */
+function sceneryOps(
+  ops: DecorOp[],
+  seed: number,
+  bx: number,
+  by: number,
+  t: (wx: number, wy: number) => number,
+): void {
+  // 床の上 REMNANT_CLEAR_ROWS 行が空気(梯子でもない)で、床の直下が梯子でない列か
+  const clearAbove = (c0: number, c1: number, wy: number): boolean => {
+    for (let x = c0; x <= c1; x++) {
+      if (t(x, wy + 1) === TILE.LADDER) return false;
+      for (let k = 1; k <= REMNANT_CLEAR_ROWS; k++) if (t(x, wy - k) !== TILE.AIR) return false;
+    }
+    return true;
+  };
+  // 床の行から上へ REMNANT_CLEAR_ROWS 行が固体の壁(出入口の穴が無い)か
+  const wallAt = (x: number, wy: number): boolean => {
+    for (let k = 0; k <= REMNANT_CLEAR_ROWS; k++) if (!isSolid(t(x, wy - k))) return false;
+    return true;
+  };
+  // 床の 16 タイルセグメント s(床の行 wy)の残滓の種類(0 残骸・1 板・2 梁の枠・3 野原)。残滓のセグメントでなければ -1。
+  // 種類の重みは当初のまま(セグメントの端の外が壁なら梁の重みを持つ)にして、残骸・板・野原の出方を変えない
+  const remnantKind = (s: number, wy: number, prof: SceneryProfile): number => {
+    const x0 = s * 16;
+    for (let i = 0; i < 16; i++) {
+      if (t(x0 + i, wy) !== TILE.SOLID || isSolid(t(x0 + i, wy - 1))) return -1;
+    }
+    if (hash2(seed + 761, s, wy) >= REMNANT_RATE * prof.remnant) return -1;
+    const wallSeg = wallAt(x0 - 1, wy) || wallAt(x0 + 16, wy);
+    return pickWeighted(hash2(seed + 762, s, wy), [prof.wreck, prof.slabs, wallSeg ? prof.beam : 0, prof.field]);
+  };
+
+  // ── 床の残滓: 16 タイルセグメント(segmentOps の床と同じ判定) ──
+  const fs0 = Math.floor((bx - 16) / 16);
+  const fs1 = Math.floor((bx + CHUNK_SIZE) / 16);
+  for (let ly = 0; ly <= CHUNK_SIZE + REMNANT_REACH; ly++) {
+    const wy = by + ly;
+    const biome = biomeIdForCell(seed, biomeCellAt(seed, wy));
+    const prof = sceneryProfileFor(biome);
+    for (let s = fs0; s <= fs1; s++) {
+      const kind = remnantKind(s, wy, prof);
+      // 梁の枠(kind 2)はここでは描かない。倒れた梁は下の「壁と床の角」の走査で置く
+      if (kind < 0 || kind === 2) continue;
+      const x0 = s * 16;
+      const h = (k: number) => hash2(seed + 780 + k, s, wy);
+      const rust = h(9) < Math.min(0.9, 0.35 * prof.rust) ? h(8) : null;
+      const lx0 = x0 - bx;
+      if (kind === 0 || kind === 1) {
+        const W = kind === 0 ? WRECK_W : SLABS_W;
+        const fx = x0 + 1.5 + h(0) * (16 - 3 - W);
+        const c0 = Math.floor(fx) - 2;
+        const c1 = Math.ceil(fx + W) + 1;
+        if (!clearAbove(c0, c1, wy) || sceneryGuarded(seed, c0, c1, wy - REMNANT_CLEAR_ROWS, wy)) continue;
+        if (kind === 0) wreckOps(ops, fx - bx, ly, h(1) < 0.5, rust, biome === 'biomech');
+        else slabOps(ops, fx - bx, ly, h, rust);
+      } else if (kind === 3) {
+        if (!clearAbove(x0, x0 + 15, wy) || sceneryGuarded(seed, x0, x0 + 15, wy - REMNANT_CLEAR_ROWS, wy)) continue;
+        fieldOps(ops, seed, s, wy, lx0, ly);
+      }
+    }
+  }
+
+  // ── 倒れた梁: 壁と床の角ごと(壁の列 wx・床の行 wy・倒れる向き dir)に判定する ──
+  // 床セグメントは 16 列すべてが床でなければならないので、壁がセグメントの端(16 整列の列)にちょうど来ることは
+  // ほとんど無い。梁はセグメントに縛らず、角の世界座標のハッシュで置く。
+  // 壁: 床の行から上へ REMNANT_CLEAR_ROWS 行が SOLID(出入口の穴が無い)。床: 壁の隣から BEAM_RUN 列が
+  // 「SOLID の床・上 REMNANT_CLEAR_ROWS 行が空気・直下に梯子なし」。床の残滓のセグメントとは重ねない。
+  // 壁の列はローカル [-7, 70]: このチャンクの画素に掛かる梁(壁の面から 5.75 先まで)をすべて含む。
+  // 読みは最悪 床の列 ±BEAM_RUN と足元のセグメント(ローカル [-17, 80])・行 wy-4..wy+1 で MARGIN=17 内。
+  for (let ly = 0; ly <= CHUNK_SIZE + REMNANT_REACH; ly++) {
+    const wy = by + ly;
+    let prof: SceneryProfile | null = null;
+    for (let wx = bx - 7; wx <= bx + CHUNK_SIZE + 6; wx++) {
+      let wall = true;
+      for (let k = 0; k <= REMNANT_CLEAR_ROWS && wall; k++) wall = t(wx, wy - k) === TILE.SOLID;
+      if (!wall) continue;
+      for (const dir of [1, -1] as const) {
+        if (t(wx + dir, wy) !== TILE.SOLID || t(wx + dir, wy - 1) !== TILE.AIR) continue;
+        const c0 = dir === 1 ? wx + 1 : wx - BEAM_RUN;
+        const c1 = dir === 1 ? wx + BEAM_RUN : wx - 1;
+        const p = (prof ??= sceneryProfileFor(biomeIdForCell(seed, biomeCellAt(seed, wy))));
+        const key = wx * 2 + (dir === 1 ? 1 : 0);
+        if (hash2(seed + 795, key, wy) >= Math.min(BEAM_MAX, BEAM_RATE * p.remnant * p.beam)) continue;
+        let floor = true;
+        for (let x = c0; x <= c1 && floor; x++) floor = t(x, wy) === TILE.SOLID;
+        if (!floor || !clearAbove(c0, c1, wy)) continue;
+        let claimed = false;
+        for (let s = Math.floor(c0 / 16); s <= Math.floor(c1 / 16) && !claimed; s++) {
+          const k = remnantKind(s, wy, p);
+          claimed = k >= 0 && k !== 2;
+        }
+        if (claimed || sceneryGuarded(seed, Math.min(wx, c0), Math.max(wx, c1), wy - REMNANT_CLEAR_ROWS, wy)) continue;
+        const rust = hash2(seed + 796, key, wy) < Math.min(0.9, 0.35 * p.rust);
+        beamOps(ops, (dir === 1 ? wx + 1 : wx) - bx, ly, dir, rust);
+      }
+    }
+  }
+
+  // ── 頭上の桁渡り: 天井の 16 タイルセグメント(下面が空気の SOLID)で、下に GIRDER_CLEARANCE 行の空気 ──
+  // 吊りトレイ(segmentOps の 8 タイル天井 r∈[0.44,0.56))のある区間には出さない(吊り金具と桁が交差するため)
+  const gs0 = Math.floor((bx - 16) / 16);
+  const gs1 = Math.floor((bx + CHUNK_SIZE) / 16);
+  for (let ly = -4; ly <= CHUNK_SIZE; ly++) {
+    const wy = by + ly;
+    for (let s = gs0; s <= gs1; s++) {
+      const x0 = s * 16;
+      let ok = true;
+      for (let i = 0; i < 16 && ok; i++) {
+        ok = t(x0 + i, wy) === TILE.SOLID && t(x0 + i, wy + 1) === TILE.AIR;
+      }
+      if (!ok) continue;
+      const prof = sceneryProfileFor(biomeIdForCell(seed, biomeCellAt(seed, wy)));
+      if (hash2(seed + 791, s, wy) >= GIRDER_RATE * prof.girder) continue;
+      const rA = hash2(seed + 703, 2 * s, wy);
+      const rB = hash2(seed + 703, 2 * s + 1, wy);
+      if ((rA >= 0.44 && rA < 0.56) || (rB >= 0.44 && rB < 0.56)) continue;
+      for (let i = 0; i < 16 && ok; i++) {
+        for (let k = 2; k <= GIRDER_CLEARANCE && ok; k++) ok = t(x0 + i, wy + k) === TILE.AIR;
+      }
+      if (!ok || sceneryGuarded(seed, x0, x0 + 15, wy, wy + GIRDER_CLEARANCE)) continue;
+      const rust = hash2(seed + 792, s, wy) < Math.min(0.9, 0.35 * prof.rust) ? hash2(seed + 793, s, wy) : null;
+      girderOps(ops, x0 - bx, ly + 1, rust, hash2(seed + 794, s, wy) < prof.pipes * 0.6);
     }
   }
 }
