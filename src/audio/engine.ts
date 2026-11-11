@@ -585,6 +585,29 @@ export class AudioEngine {
     mod.stop(at + HIT_SECONDS + 0.05);
   }
 
+  /**
+   * 部位破壊(設計 2026-11-12-action-overhaul §2): 撃破より短く軽い「割れ」。打撃サンプルを速めに回し、
+   * FM の金属ティックと、ハイパスのノイズを伴う鋸波の短い下降を重ねる。脚・ローター・センサーで共通
+   */
+  partBreak(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const idx = this.hitCount++;
+    this.playSample(HIT_SAMPLES[pickVariant(idx, HIT_SAMPLES.length)], {
+      gain: 0.7, rate: sampleRate(0.8, idx, 0.04), wet: 0.35,
+    });
+    this.fmTick(now);
+    this.voice({
+      layers: [{ type: 'sawtooth', from: 900, to: 180, gain: 0.8 }],
+      filter: { type: 'lowpass', from: 3200, to: 500, q: 0.9 },
+      noise: { gain: 0.2, type: 'highpass', from: 1800, seconds: 0.1 },
+      seconds: 0.16,
+      gain: 0.3,
+      wet: 0.25,
+    });
+  }
+
   /** 敵の撃破: 打撃サンプル + 正弦波の pitch 落下(芯)+ ローパスのノイズ(崩れ)。パルスでもビームでも同じ音 */
   enemyDown(): void {
     const ctx = this.ctx;

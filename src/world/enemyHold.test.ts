@@ -27,7 +27,7 @@ const floors = (tx: number, ty: number): Tile => {
 
 const SCAN_X = 40;
 const SCAN_Y = 24;
-/** 出現率が上限(0.7)に達する層 */
+/** 出現率が上限に達している層(2.19 で上限 0.7 → 0.35、第 8 層から上限) */
 const LAYER = 10;
 const SEEDS = [1, 42, 55, 20260711];
 

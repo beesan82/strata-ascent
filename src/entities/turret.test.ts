@@ -11,6 +11,9 @@ import {
   TURRET_SHOT_LIFE,
   TURRET_SHOT_SIZE,
   TURRET_SHOT_SPEED,
+  TURRET_W,
+  TURRET_H,
+  TURRET_SENSOR_HP,
 } from './turret';
 
 const noTiles = (): Tile => TILE.AIR;
@@ -58,13 +61,15 @@ describe('Turret(固定砲台)', () => {
     expect(TURRET_SHOT_LIFE).toBeGreaterThan(TURRET_RANGE / TURRET_SHOT_SPEED);
   });
 
-  it('動かない(位置が変わらず、床の上に置かれる前提の体格 0.9×0.9)', () => {
-    const t = new Turret(3, 9.1);
-    expect(t.body.w).toBe(0.9);
-    expect(t.body.h).toBe(0.9);
+  it('動かない(位置が変わらず、床の上に置かれる前提の体格 1.2×1.2。2.19 で 0.9 から大型化)', () => {
+    const t = new Turret(3, 10 - TURRET_H);
+    expect(TURRET_W).toBe(1.2);
+    expect(TURRET_H).toBe(1.2);
+    expect(t.body.w).toBe(TURRET_W);
+    expect(t.body.h).toBe(TURRET_H);
     for (let i = 0; i < 60; i++) t.update(1 / 60, floorTiles, 100, 100);
     expect(t.body.x).toBe(3);
-    expect(t.body.y).toBe(9.1);
+    expect(t.body.y).toBe(10 - TURRET_H);
   });
 
   it('4 発で倒れる(hit のたびに HP が減り flashT が立つ)', () => {
@@ -78,7 +83,7 @@ describe('Turret(固定砲台)', () => {
   });
 
   it('初回発射遅延 0.8 秒までは撃たず、それを過ぎると撃つ', () => {
-    const t = new Turret(0, 0); // 中心 (0.45, 0.45)
+    const t = new Turret(0, 0); // 中心 (0.6, 0.6)
     let shots = 0;
     // 0.7 秒ぶんは無発射
     for (let i = 0; i < 42; i++) shots += t.update(1 / 60, noTiles, 5.45, 0.45).length;
@@ -114,7 +119,7 @@ describe('Turret(固定砲台)', () => {
     const t2 = new Turret(0, 0);
     let shots2 = 0;
     for (let i = 0; i < 60 * 3; i++) shots2 += t2.update(1 / 60, wallTiles, 9.5, 0.45).length;
-    expect(shots2).toBe(0); // 壁の向こうは射程内(距離約 9.1)でも撃たない
+    expect(shots2).toBe(0); // 壁の向こうは射程内(距離約 8.9)でも撃たない
   });
 
   it('狙えていない間はクールダウンが進まない(見えた時点から初回遅延が要る)', () => {
@@ -130,7 +135,7 @@ describe('Turret(固定砲台)', () => {
 
   it('照準角は狙えている間プレイヤー中心へ更新し、見失っても保持する', () => {
     const t = new Turret(0, 0);
-    t.update(1 / 60, noTiles, 0.45, 5.45); // 真下
+    t.update(1 / 60, noTiles, t.centerX, 5.45); // 真下
     expect(t.angle).toBeCloseTo(Math.PI / 2);
     const held = t.angle;
     t.update(1 / 60, noTiles, 100, 100); // 見失う
@@ -141,7 +146,7 @@ describe('Turret(固定砲台)', () => {
     const t = new Turret(0, 0);
     let shot: TurretShot | undefined;
     for (let i = 0; i < 60 && !shot; i++) {
-      const s = t.update(1 / 60, noTiles, 5.45, 0.45); // 真右
+      const s = t.update(1 / 60, noTiles, 5.45, t.centerY); // 真右
       if (s.length > 0) shot = s[0];
     }
     expect(shot).toBeDefined();
@@ -149,6 +154,64 @@ describe('Turret(固定砲台)', () => {
     expect(shot!.centerY).toBeCloseTo(t.centerY);
     expect(shot!.dx).toBeCloseTo(1);
     expect(shot!.dy).toBeCloseTo(0);
+  });
+});
+
+describe('Turret のセンサー部位破壊(2.19、設計 2026-11-12-action-overhaul §2)', () => {
+  /** 矩形 [0, 1.2]。センサーの帯は上 45%(y < 0.54) */
+  const sensorY = 0.1;
+  const bodyY = 1.0;
+
+  it('センサー(上端の帯)への被弾 2 回でセンサー破壊。本体 HP 4 は減らない', () => {
+    const t = new Turret(0, 0);
+    expect(TURRET_SENSOR_HP).toBe(2);
+    expect(t.hitAt(1, sensorY)).toEqual({ killed: false, part: true, broke: false });
+    expect(t.sensorBroken).toBe(false);
+    expect(t.hitAt(1, sensorY)).toEqual({ killed: false, part: true, broke: true });
+    expect(t.sensorBroken).toBe(true);
+    expect(t.hp).toBe(TURRET_HP);
+  });
+
+  it('帯の外(台座側)への被弾は本体に入る', () => {
+    const t = new Turret(0, 0);
+    expect(t.hitAt(1, bodyY)).toEqual({ killed: false, part: false, broke: false });
+    expect(t.hp).toBe(TURRET_HP - 1);
+    expect(t.sensorHp).toBe(TURRET_SENSOR_HP);
+  });
+
+  it('センサー破壊後は射程内・視線ありでも照準せず撃たない(盲目化)', () => {
+    const t = new Turret(0, 0);
+    t.hitAt(1, sensorY);
+    t.hitAt(1, sensorY);
+    const angle = t.angle;
+    let shots = 0;
+    for (let i = 0; i < 60 * 5; i++) {
+      shots += t.update(1 / 60, noTiles, 5.45, t.centerY).length;
+      expect(t.aiming).toBe(false);
+    }
+    expect(shots).toBe(0);
+    expect(t.angle).toBe(angle);
+  });
+
+  it('照準中に壊しても次の update から撃たない(クールダウンが尽きかけていても)', () => {
+    const t = new Turret(0, 0);
+    // 初回遅延の直前まで狙わせる
+    for (let i = 0; i < 45; i++) t.update(1 / 60, noTiles, 5.45, t.centerY);
+    expect(t.aiming).toBe(true);
+    t.hitAt(1, sensorY);
+    t.hitAt(1, sensorY);
+    expect(t.aiming).toBe(false);
+    let shots = 0;
+    for (let i = 0; i < 60 * 3; i++) shots += t.update(1 / 60, noTiles, 5.45, t.centerY).length;
+    expect(shots).toBe(0);
+  });
+
+  it('センサー破壊後は上端への被弾も本体へ入り、4 発で倒れる', () => {
+    const t = new Turret(0, 0);
+    t.hitAt(1, sensorY);
+    t.hitAt(1, sensorY);
+    for (let i = 0; i < TURRET_HP - 1; i++) expect(t.hitAt(1, sensorY).killed).toBe(false);
+    expect(t.hitAt(1, sensorY).killed).toBe(true);
   });
 });
 

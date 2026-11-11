@@ -27,6 +27,14 @@ describe('PickupLog', () => {
     expect(log.lines(PICKUP_LOG_TTL + 0.1)).toEqual([]);
   });
 
+  it('通知(部位破壊など)は文言のまま取得と同じ列に新しい順で並ぶ', () => {
+    const log = new PickupLog();
+    log.push('material', 0);
+    log.pushNotice('脚部破壊', 0.5);
+    expect(log.lines(0.6)).toEqual(['脚部破壊', '素材 +1']);
+    expect(log.lines(0.5 + PICKUP_LOG_TTL + 0.1)).toEqual([]);
+  });
+
   it('最大件数を超えたら古い方から落ちる', () => {
     const log = new PickupLog();
     for (let i = 0; i < PICKUP_LOG_MAX + 2; i++) log.push('ration', i * 0.1);

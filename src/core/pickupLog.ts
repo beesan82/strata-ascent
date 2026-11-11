@@ -28,20 +28,23 @@ export function pickupLabel(kind: DropKind): string {
   }
 }
 
-interface PickupEntry {
-  kind: DropKind;
-  t: number;
-}
+/** 1 件の記録。取得(kind)か、部位破壊などの短い通知(text)のどちらか */
+type PickupEntry = { kind: DropKind; t: number } | { text: string; t: number };
 
 export class PickupLog {
   private entries: PickupEntry[] = [];
 
   /** 取得を 1 件記録する */
   push(kind: DropKind, now: number): void {
-    this.entries.push({ kind, t: now });
-    if (this.entries.length > PICKUP_LOG_MAX * 2) {
-      this.entries = this.entries.slice(-PICKUP_LOG_MAX * 2);
-    }
+    this.add({ kind, t: now });
+  }
+
+  /**
+   * 取得以外の短い通知(部位破壊など、設計 2026-11-12-action-overhaul §2)を同じ行に 1 件記録する。
+   * 文言はそのまま表示し、TTL・最大件数は取得と共通
+   */
+  pushNotice(text: string, now: number): void {
+    this.add({ text, t: now });
   }
 
   /** 現在表示すべき行(新しい順、期限切れは落とす)。副作用として古い記録を間引く */
@@ -50,6 +53,13 @@ export class PickupLog {
     return this.entries
       .slice(-PICKUP_LOG_MAX)
       .reverse()
-      .map((e) => `${pickupLabel(e.kind)} +1`);
+      .map((e) => ('text' in e ? e.text : `${pickupLabel(e.kind)} +1`));
+  }
+
+  private add(e: PickupEntry): void {
+    this.entries.push(e);
+    if (this.entries.length > PICKUP_LOG_MAX * 2) {
+      this.entries = this.entries.slice(-PICKUP_LOG_MAX * 2);
+    }
   }
 }

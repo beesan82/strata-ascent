@@ -91,9 +91,30 @@ function footAt(q: number, dir: 1 | -1): Joint {
   return { x: fwd * dir, y: WALKER_HIP_TO_GROUND - lift };
 }
 
-/** 歩行敵のポーズ。x は中心の x 座標、dir は進行方向 */
-export function walkerPose(x: number, dir: 1 | -1): WalkerPose {
+/** 脚破壊後(設計 2026-11-12-action-overhaul §2)の胴の沈み(タイル)。腰が落ちて低く構える */
+export const WALKER_LIMP_SINK = 0.08;
+/** 脚破壊後のよろけ(1 周期に 1 回、片脚へ倒れ込む沈みの振幅、タイル) */
+export const WALKER_LIMP_LURCH = 0.06;
+
+/**
+ * 歩行敵のポーズ。x は中心の x 座標、dir は進行方向。
+ * legsBroken(脚破壊)のときはよろけ歩行: 胴が沈み、1 周期に 1 回大きく倒れ込む。奥の脚は壊れて
+ * 後ろへ引きずられ(床に着いたまま動かない)、手前の脚だけが半分の振り幅で踏み出す
+ */
+export function walkerPose(x: number, dir: 1 | -1, legsBroken = false): WalkerPose {
   const phase = walkPhase(x, dir);
+  if (legsBroken) {
+    const bob = WALKER_LIMP_SINK + (WALKER_LIMP_LURCH * (1 - Math.cos(Math.PI * 2 * phase))) / 2;
+    // 足は床基準(描画側で胴の沈みを乗せない)、膝は沈んだ腰から見た足の位置で解く
+    const dragged: Joint = { x: -WALKER_SWING * 1.5 * dir, y: WALKER_HIP_TO_GROUND };
+    const stepping = footAt(phase, dir);
+    stepping.x *= 0.5;
+    const legs = [dragged, stepping].map((foot) => ({
+      knee: kneeOf({ x: foot.x, y: foot.y - bob }, dir),
+      foot,
+    })) as [WalkerLeg, WalkerLeg];
+    return { phase, bob, legs };
+  }
   const legs = [phase, frac(phase + 0.5)].map((q) => {
     const foot = footAt(q, dir);
     return { knee: kneeOf(foot, dir), foot };

@@ -33,6 +33,7 @@ import { Graviton, BORE_LENGTH, BORE_RADIUS } from './entities/graviton';
 import { pulseAimDir, PulseGun, PULSE_DAMAGE, PULSE_SIZE, type Pulse } from './entities/pulse';
 import { Boss, BOSS_BEAM_DAMAGE, BOSS_H, BOSS_HP, BOSS_W, Flyer, Walker } from './entities/enemy';
 import { Turret, TurretShot } from './entities/turret';
+import { PART_BREAK_LABEL, type PartHit } from './entities/parts';
 import { beamHit } from './entities/beamHit';
 import { canAddSupply, canPickup, carryKindFor, DropItem, dropKindFor, pushDrop, pushSupply } from './entities/drop';
 import { dropFor } from './world/drop';
@@ -312,6 +313,21 @@ function onEnemyKilled(spawnId: string, centerX: number, centerY: number, kind: 
     pushSupply(drops, new DropItem(dropKind, centerX, centerY, true));
   }
   else pushDrop(drops, new DropItem(dropKind, centerX, centerY));
+}
+
+/**
+ * 通常敵へのパルス命中の反応(設計 2026-11-12-action-overhaul §2)。撃破はハプティクス(撃破音は onEnemyKilled)、
+ * 部位が壊れた瞬間は部位破壊音と取得ログと同じ左端の行への通知、それ以外は従来の命中音
+ */
+function onPulseHit(r: PartHit, kind: keyof typeof PART_BREAK_LABEL, now: number): void {
+  if (r.killed) {
+    hapticEnemyDown();
+  } else if (r.broke) {
+    audio.partBreak();
+    pickupLog.pushNotice(PART_BREAK_LABEL[kind], now);
+  } else {
+    audio.enemyHit(); // 命中音(§6.7)
+  }
 }
 
 /**
@@ -1028,7 +1044,9 @@ function applyBeamToEnemies(angle: number): void {
   let anyKill = false;
   for (const e of enemies) {
     if (!e.walker.dead && beamHit(ox, oy, angle, e.walker.centerX, e.walker.centerY, halfDiag(e.walker.body.w, e.walker.body.h))) {
-      e.walker.hit(e.walker.hp); // 現在 HP ぶんを与えて即死させる(通常の被弾経路を通す)
+      // 現在 HP ぶんを与えて即死させる(通常の被弾経路を通す)。部位の判定は通さず、部位破壊を上書きする切り札のまま
+      // (設計 2026-11-12-action-overhaul §2)
+      e.walker.hit(e.walker.hp);
       pushDebris(e.walker.centerX, e.walker.centerY, angle); // 命中点の破片
       anyKill = true;
     }
@@ -1382,13 +1400,15 @@ function update(dt: number): void {
   if ((enemies.length > 0 || flyers.length > 0 || turrets.length > 0 || boss) && pulseGun.pulses.length > 0) {
     const spent = new Set<Pulse>();
     for (const p of pulseGun.pulses) {
+      // 部位判定の被弾位置はパルス中心の高さ(設計 2026-11-12-action-overhaul §2)
+      const hitY = p.body.y + p.body.h / 2;
       for (const e of enemies) {
         const b = e.walker.body;
         if (
           p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
           p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
         ) {
-          if (e.walker.hit(PULSE_DAMAGE)) hapticEnemyDown(); else audio.enemyHit(); // 命中音(§6.7)
+          onPulseHit(e.walker.hitAt(PULSE_DAMAGE, hitY), 'walker', simTime);
           spent.add(p);
           break;
         }
@@ -1400,7 +1420,7 @@ function update(dt: number): void {
           p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
           p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
         ) {
-          if (e.flyer.hit(PULSE_DAMAGE)) hapticEnemyDown(); else audio.enemyHit(); // 命中音(§6.7)
+          onPulseHit(e.flyer.hitAt(PULSE_DAMAGE, hitY), 'flyer', simTime);
           spent.add(p);
           break;
         }
@@ -1412,7 +1432,7 @@ function update(dt: number): void {
           p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
           p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
         ) {
-          if (e.turret.hit(PULSE_DAMAGE)) hapticEnemyDown(); else audio.enemyHit(); // 命中音(§6.7)
+          onPulseHit(e.turret.hitAt(PULSE_DAMAGE, hitY), 'turret', simTime);
           spent.add(p);
           break;
         }
@@ -1734,6 +1754,7 @@ function frame(now: number): void {
         y: e.walker.centerY,
         flash: e.walker.flashT > 0,
         dir: e.walker.dir, // 脚の向きと目の側(設計 2026-11-10 §2)
+        broken: e.walker.legsBroken, // 脚破壊のよろけ歩行(設計 2026-11-12-action-overhaul §2)
       })),
       ...flyers.map((e) => ({
         x: e.flyer.centerX,
@@ -1745,6 +1766,7 @@ function frame(now: number): void {
         vy: e.flyer.body.vy,
         chase: e.flyer.mode === 'chase',
         phase: e.flyer.phase,
+        broken: e.flyer.rotorBroken, // ローターなしで地上を這う
       })),
       ...turrets.map((e) => ({
         x: e.turret.centerX,
@@ -1755,6 +1777,7 @@ function frame(now: number): void {
         // 警告灯と砲身の後退(見た目だけ)
         cooldown: e.turret.cooldown,
         aiming: e.turret.aiming,
+        broken: e.turret.sensorBroken, // センサー破損(発射停止)
       })),
       // ボス: 体格(w/h)と相を渡し、renderer 側で相の違い(予備動作の点滅・硬直の晒し)を読む
       ...(boss

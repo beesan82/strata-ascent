@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { TILE, type Tile } from './tiles';
 import { findFloorRuns, chooseSpawns, spawnRateForLayer, findAirPockets, chooseFlyerSpawns, flyerMulFor, chooseTurretSpawns, turretMulFor } from './spawn';
 import { BIOME_IDS } from './biomeCells';
+import { WALKER_H } from '../entities/enemy';
+import { TURRET_H } from '../entities/turret';
+
+/**
+ * 長さ 20 の床(y=10)を 60 間隔で 50 本並べた世界。ラン同士は密度上限(24×12)より離れている。
+ * 出現率を下げた(2.19)後も「何体か選ばれる」前提の検査が偶然 0 体にならないよう、
+ * 選定の有無を見る検査はこの世界で行う
+ */
+const manyFloors = (tx: number, ty: number): Tile =>
+  ty === 10 && tx >= 0 && tx < 3000 && tx % 60 < 20 ? TILE.SOLID : TILE.AIR;
 
 /** y=10 行が床。x が 0..19 で連続し、x=24..30 にも短い床 */
 const world = (tx: number, ty: number): Tile => {
@@ -51,7 +61,36 @@ describe('chooseSpawns / spawnRateForLayer', () => {
   it('第 0 層は出現率 0 で、層が進むと上がり上限がある', () => {
     expect(spawnRateForLayer(0)).toBe(0);
     expect(spawnRateForLayer(1)).toBeGreaterThan(0);
-    expect(spawnRateForLayer(50)).toBeLessThanOrEqual(0.7);
+    expect(spawnRateForLayer(50)).toBeLessThanOrEqual(0.35);
+  });
+
+  it('出現率は基礎 0.1 / 層ごとに +0.04 / 上限 0.35(2.19、設計 2026-11-12-action-overhaul §1)', () => {
+    expect(spawnRateForLayer(-1)).toBe(0);
+    expect(spawnRateForLayer(1)).toBeCloseTo(0.1, 10);
+    expect(spawnRateForLayer(2)).toBeCloseTo(0.14, 10);
+    expect(spawnRateForLayer(5)).toBeCloseTo(0.26, 10);
+    expect(spawnRateForLayer(7)).toBeCloseTo(0.34, 10);
+    expect(spawnRateForLayer(8)).toBe(0.35);
+    expect(spawnRateForLayer(100)).toBe(0.35);
+  });
+
+  it('どの層でも旧設定(基礎 0.2 / +0.08 / 上限 0.7)のちょうど半分', () => {
+    for (let layer = 1; layer <= 60; layer++) {
+      const old = Math.min(0.2 + (layer - 1) * 0.08, 0.7);
+      expect(spawnRateForLayer(layer)).toBeCloseTo(old / 2, 10);
+    }
+  });
+
+  it('歩行敵は体格(高さ WALKER_H)ぶん床の上に置かれる', () => {
+    const runs = findFloorRuns(manyFloors, 0, 0, 3000, 20);
+    const spawns = chooseSpawns(7, 10, runs, []);
+    expect(spawns.length).toBeGreaterThan(0);
+    for (const s of spawns) {
+      expect(s.y).toBeCloseTo(10 - WALKER_H);
+      // 幅 1.8 の体はラン内の床に収まる(ランの右端を越えない)
+      const run = runs.find((r) => r.x <= s.x && s.x < r.x + r.len)!;
+      expect(s.x + 1.8).toBeLessThanOrEqual(run.x + run.len);
+    }
   });
 
   it('第 0 層では何も選ばれない', () => {
@@ -78,7 +117,7 @@ describe('chooseSpawns / spawnRateForLayer', () => {
   });
 
   it('撃破済み(defeated)のスポーンは除外される(第2弾 §4 の記録保持)', () => {
-    const runs = findFloorRuns(world, 0, 0, 40, 20);
+    const runs = findFloorRuns(manyFloors, 0, 0, 3000, 20);
     const base = chooseSpawns(123, 5, runs, []);
     expect(base.length).toBeGreaterThan(0);
     const killed = new Set([base[0].id]);
@@ -220,7 +259,7 @@ describe('chooseFlyerSpawns / flyerMulFor', () => {
 });
 
 describe('chooseTurretSpawns / turretMulFor', () => {
-  const runs = findFloorRuns(world, 0, 0, 40, 20);
+  const runs = findFloorRuns(manyFloors, 0, 0, 3000, 20);
 
   it('地区ゲートは電力区 1.0 / 精錬区 0.8、他は 0', () => {
     expect(turretMulFor('power')).toBe(1);
@@ -248,7 +287,7 @@ describe('chooseTurretSpawns / turretMulFor', () => {
     expect(a.length).toBeGreaterThan(0);
     for (const s of a) {
       expect(s.id).toMatch(/^t:-?\d+,-?\d+$/);
-      expect(s.y).toBeCloseTo(10 - 0.9); // この世界の床行は 10、その上に左上が来る
+      expect(s.y).toBeCloseTo(10 - TURRET_H); // この世界の床行は 10、その上に左上が来る(2.19 で体格 1.2)
     }
   });
 
@@ -260,7 +299,7 @@ describe('chooseTurretSpawns / turretMulFor', () => {
   });
 
   it('大広間の矩形内には出さない', () => {
-    const everywhere = [{ x0: -100, x1: 200, y0: -100, y1: 200 }];
+    const everywhere = [{ x0: -100, x1: 4000, y0: -100, y1: 200 }];
     expect(chooseTurretSpawns(123, 5, runs, [], 'power', everywhere, [])).toHaveLength(0);
     const far = [{ x0: 500, x1: 700, y0: 500, y1: 700 }];
     expect(chooseTurretSpawns(123, 5, runs, [], 'power', far, []).length).toBeGreaterThan(0);

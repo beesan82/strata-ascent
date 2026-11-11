@@ -1,14 +1,22 @@
 import { isSolid } from '../world/tiles';
 import { moveBody, type Body, type TileLookup } from './physics';
+import { inLowerBand, inUpperBand, type PartHit } from './parts';
 
 /**
  * 歩行敵「歩行ドローン」(アクション化 第1弾・第3段、設計書 2026-11-04-action-phase1)。
  * 床を左右巡回し、壁と床の端で反転する。接触ダメージのみ(敵弾は持たない)。梯子は登らない。
+ * 2.19(設計 2026-11-12-action-overhaul): 体格を 1.8×1.6 へ大型化し、脚(下端の帯)を部位にした。
+ * 脚への被弾 2 回で脚破壊 → 速度が半分以下に落ち、よろけ歩行になる。本体 HP は 3 のまま別枠。
  */
 export const WALKER_SPEED = 2; // タイル/秒
 export const WALKER_HP = 3;
-export const WALKER_W = 0.9;
-export const WALKER_H = 0.9;
+/** 体格(タイル)。頭上 2 タイルの空きがある床ランにそのまま立てる高さに収める(出現位置は spawn.ts が床 - WALKER_H に置く) */
+export const WALKER_W = 1.8;
+export const WALKER_H = 1.6;
+/** 脚の耐久(本体 HP とは別枠) */
+export const WALKER_LEG_HP = 2;
+/** 脚破壊後の移動速度(タイル/秒)。WALKER_SPEED の半分以下 */
+export const WALKER_LEGLESS_SPEED = 0.8;
 const GRAVITY = 30;
 const MAX_FALL = 25;
 
@@ -16,6 +24,8 @@ export class Walker {
   body: Body;
   dir: 1 | -1;
   hp = WALKER_HP;
+  /** 脚の残り耐久。0 で脚破壊 */
+  legHp = WALKER_LEG_HP;
   /** 被弾直後の残りフラッシュ時間(描画側が色を変える) */
   flashT = 0;
 
@@ -36,16 +46,33 @@ export class Walker {
     return this.hp <= 0;
   }
 
-  /** ダメージを与える。倒れたら true */
+  get legsBroken(): boolean {
+    return this.legHp <= 0;
+  }
+
+  /** 本体へダメージを与える(重粒子砲の即死もここを通す)。倒れたら true */
   hit(damage: number): boolean {
     this.hp -= damage;
     this.flashT = 0.09;
     return this.dead;
   }
 
+  /**
+   * 被弾位置 hitY(タイル)つきのダメージ。脚が健在で下端の帯に当たれば脚の耐久だけを削る。
+   * 脚破壊後と帯の外は本体へ入る
+   */
+  hitAt(damage: number, hitY: number): PartHit {
+    if (!this.legsBroken && inLowerBand(this.body.y, this.body.h, hitY)) {
+      this.legHp -= damage;
+      this.flashT = 0.09;
+      return { killed: false, part: true, broke: this.legsBroken };
+    }
+    return { killed: this.hit(damage), part: false, broke: false };
+  }
+
   update(dt: number, tiles: TileLookup): void {
     const b = this.body;
-    b.vx = this.dir * WALKER_SPEED;
+    b.vx = this.dir * (this.legsBroken ? WALKER_LEGLESS_SPEED : WALKER_SPEED);
     b.vy = Math.min(b.vy + GRAVITY * dt, MAX_FALL);
     const intendedVx = b.vx;
     moveBody(b, dt, tiles);
@@ -67,10 +94,16 @@ export class Walker {
 /**
  * 飛行敵「飛行ドローン」(アクション化 第2弾・§1)。重力を受けない空中巡回機。
  * 攻撃手段は接触のみ。状態は巡回/追尾の 2 つだけ。
+ * 2.19(設計 2026-11-12-action-overhaul): 幅 1.5 へ大型化し、ローター(上端の帯)を部位にした。
+ * ローターへの被弾 1 回でローター破壊 → 重力で落下し、以後は地上を這う(飛ばない)。本体 HP は 2 のまま。
  */
 export const FLYER_HP = 2;
-export const FLYER_W = 0.8;
-export const FLYER_H = 0.8;
+export const FLYER_W = 1.5;
+export const FLYER_H = 1.0;
+/** ローターの耐久(本体 HP とは別枠) */
+export const FLYER_ROTOR_HP = 1;
+/** ローター破壊後に地上を這う速度(タイル/秒)。歩行敵(WALKER_SPEED)の半分以下 */
+export const FLYER_CRAWL_SPEED = 0.8;
 export const FLYER_PATROL_SPEED = 1.5;
 export const FLYER_CHASE_SPEED = 3.2;
 export const FLYER_SENSE_R = 7;
@@ -96,6 +129,8 @@ export function nextFlyerMode(mode: FlyerMode, dist: number): FlyerMode {
 export class Flyer {
   body: Body;
   hp = FLYER_HP;
+  /** ローターの残り耐久。0 でローター破壊(落下して地上を這う) */
+  rotorHp = FLYER_ROTOR_HP;
   /** 被弾直後の残りフラッシュ時間(描画側が色を変える) */
   flashT = 0;
   mode: FlyerMode = 'patrol';
@@ -138,14 +173,39 @@ export class Flyer {
     return this.hp <= 0;
   }
 
-  /** ダメージを与える。倒れたら true */
+  get rotorBroken(): boolean {
+    return this.rotorHp <= 0;
+  }
+
+  /** ダメージを与える(重粒子砲の即死もここを通す)。倒れたら true */
   hit(damage: number): boolean {
     this.hp -= damage;
     this.flashT = 0.09;
     return this.dead;
   }
 
+  /**
+   * 被弾位置 hitY(タイル)つきのダメージ。ローターが健在で上端の帯に当たればローターの耐久だけを削り、
+   * 壊れた瞬間に追尾をやめて落下を始める。ローター破壊後と帯の外は本体へ入る
+   */
+  hitAt(damage: number, hitY: number): PartHit {
+    if (!this.rotorBroken && inUpperBand(this.body.y, this.body.h, hitY)) {
+      this.rotorHp -= damage;
+      this.flashT = 0.09;
+      if (!this.rotorBroken) return { killed: false, part: true, broke: false };
+      this.mode = 'patrol';
+      this.body.vx = 0;
+      this.body.vy = 0;
+      return { killed: false, part: true, broke: true };
+    }
+    return { killed: this.hit(damage), part: false, broke: false };
+  }
+
   update(dt: number, tiles: TileLookup, playerX: number, playerY: number): void {
+    if (this.rotorBroken) {
+      this.crawl(dt, tiles);
+      return;
+    }
     const b = this.body;
     this.time += dt;
     const dist = Math.hypot(playerX - this.centerX, playerY - this.centerY);
@@ -197,6 +257,29 @@ export class Flyer {
       this.checkX = this.centerX;
       this.checkY = this.centerY;
       this.stuckT = 0;
+    }
+    this.flashT = Math.max(0, this.flashT - dt);
+  }
+
+  /**
+   * ローター破壊後: 重力で落ち、接地してからは巡回の向きへ FLYER_CRAWL_SPEED で這う(飛ばない・追尾しない)。
+   * 落下中は横に動かない。壁と床の端で反転するのは歩行敵と同じ
+   */
+  private crawl(dt: number, tiles: TileLookup): void {
+    const b = this.body;
+    this.mode = 'patrol';
+    b.vx = b.onGround ? this.dir * FLYER_CRAWL_SPEED : 0;
+    b.vy = Math.min(b.vy + GRAVITY * dt, MAX_FALL);
+    const intendedVx = b.vx;
+    moveBody(b, dt, tiles);
+    if (intendedVx !== 0 && b.vx === 0) {
+      this.dir = (this.dir * -1) as 1 | -1;
+    } else if (b.onGround) {
+      const aheadX = Math.floor(b.x + b.w / 2 + this.dir * (b.w / 2 + 0.15));
+      const belowY = Math.floor(b.y + b.h + 0.1);
+      if (!isSolid(tiles(aheadX, belowY))) {
+        this.dir = (this.dir * -1) as 1 | -1;
+      }
     }
     this.flashT = Math.max(0, this.flashT - dt);
   }

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { beamHit } from './beamHit';
 import { BORE_LENGTH, BORE_RADIUS } from './graviton';
 
-// 歩行敵(0.9×0.9)の半対角と、ボス(2.6×2.0)の半対角
+// 小型の敵(0.9×0.9。2.19 の大型化前の歩行敵)の半対角と、ボス(2.6×2.0)の半対角。
+// beamHit は半対角を受けるだけの純関数なので、ここでは検査用の基準寸法として固定する
 const WALKER_HALF = Math.hypot(0.9, 0.9) / 2;
 const BOSS_HALF = Math.hypot(2.6, 2.0) / 2;
 
