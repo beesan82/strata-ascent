@@ -7,6 +7,7 @@ import { grandHallAt, hallChimneyAt, hallChimneyForHall, type GrandHall } from '
 import { landmarkTileAt } from './landmark';
 import { restPointTileAt } from './restpoint';
 import { elevatorTileAt } from './elevator';
+import { grandTileAt } from './grandShaft';
 import { terrainProfileFor } from './biomeTerrain';
 import { hash2, valueNoise2 } from './noise';
 import { CHUNK_SIZE, isSolid, TILE, type Tile } from './tiles';
@@ -97,10 +98,13 @@ function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: T
 
 /**
  * 最終タイル。優先順位(設計書 §5.6):
- *   HARD(界面の板・塔・崩落斜路) > 孔(LADDER/AIR)・見晴らし台・大穴 > 前室の強制空洞 > 休憩点 >
+ *   HARD(界面の板・塔・崩落斜路) > 孔(LADDER/AIR)・見晴らし台・大穴 > 大昇降機 > 前室の強制空洞 > 休憩点 >
  *   ノイズ LADDER 保持 > 昇降機のシャフト(オーバーレイの梯子は残す) > メガ施設・施設・幹線オーバーレイ >
  *   躯体(地形変調込みのノイズ)。
  * 大構造は板の HARD にだけ勝つ(塔の縦坑が板を貫き、崩落が板を裂け目と斜路に置き換える)。
+ * 大昇降機(設計 2026-11-12-mega-structures)も大構造と同じ段で板の HARD にだけ勝つ(内側の AIR が板を貫く)。
+ * ただし大昇降機の SOLID(壁・板の上面の乗り場の床)が板に当たる位置は板の HARD を残す(不壊のまま)。
+ * 大構造・孔・前室の芯とは配置の段階で重ならない。
  * 孔・見晴らし台・大穴(LADDER/AIR)は大構造に勝つ(塔が板の下の見晴らし台の上に立っても塞がない)。
  * 不変条件: ノイズが LADDER のタイルは施設で上書きしない(上昇路を保持し到達可能性を守る)。
  * ただし大構造の中では成立しない(塔・崩落は自前の梯子・斜路が経路)。
@@ -133,8 +137,12 @@ function composeTile(seed: number, x: number, y: number): Tile {
   const iface = interfaceTileAt(seed, x, y);
   const lm = landmarkTileAt(seed, x, y);
   if (lm !== null && (iface === null || iface === TILE.HARD)) return lm;
-  if (iface !== null) return iface;
   const cell = biomeCellAt(seed, y);
+  const grand = grandTileAt(seed, x, y, cell);
+  if (grand !== null && (iface === null || iface === TILE.HARD)) {
+    return iface === TILE.HARD && grand === TILE.SOLID ? TILE.HARD : grand;
+  }
+  if (iface !== null) return iface;
   const mods = terrainModsAt(seed, x, y, cell);
   const hall = grandHallAt(seed, cell);
   const base = noiseTileWith(seed, x, y, cell, mods, hall);
@@ -210,6 +218,11 @@ export function isHardAt(seed: number, x: number, y: number): boolean {
   if (lm !== null || iface !== null) {
     // 界面・大構造がタイルを決める位置は tileAt と同じ優先順位で判定する(広間床より先)
     if (lm !== null && (iface === null || iface === TILE.HARD)) return lm === TILE.HARD;
+    // 大昇降機は板の HARD を貫く(内側の AIR・壁の出入口)。SOLID が板に当たる位置は HARD のまま
+    if (iface === TILE.HARD) {
+      const grand = grandTileAt(seed, x, y);
+      if (grand !== null) return grand === TILE.SOLID;
+    }
     return iface === TILE.HARD;
   }
   // 界面・大構造が無い位置でのみ、大広間の床の行を HARD と判定する(未生成チャンクへの

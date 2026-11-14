@@ -11,10 +11,13 @@ import {
   elevatorCallStop,
   elevatorPlatform,
   initialElevator,
+  liftWidth,
   type ElevatorState,
+  type LiftShaft,
 } from './entities/elevator';
 import { Builder, BUILDER_H, BUILDER_W } from './entities/builder';
-import { elevatorsNear, SHAFT_DOOR_ROWS, SHAFT_WIDTH, shaftBounds } from './world/elevator';
+import { elevatorsNear, SHAFT_DOOR_ROWS, shaftBounds } from './world/elevator';
+import { grandAmenitySpots, grandShaftBounds, grandShaftsNear, type GrandAmenitySpot, type GrandShaft } from './world/grandShaft';
 import {
   canonicalRun,
   chooseBuilder,
@@ -277,10 +280,21 @@ let armory: SupplyCache | null = null;
 let prevInRestBox = false;
 
 // ---- インフラ(設計 2026-11-10-infrastructure) ----
-/** 近傍の昇降機の足場。状態はセッション内のみで、範囲を離れると捨てる(再訪すると下の停止階から) */
+/**
+ * 近傍の昇降機の足場(通常の昇降機と大昇降機)。状態はセッション内のみで、範囲を離れると捨てる
+ * (再訪すると下の停止階から)。セーブの対象外(大昇降機も同じ扱い。設計 2026-11-12-mega-structures)
+ */
 let elevators: ElevatorState[] = [];
 const ELEVATOR_SCAN_X = 100;
 const ELEVATOR_SCAN_Y = 64;
+/** 近傍の大昇降機(敵スキャンごとに引き直す。途中駅の設備の候補と休憩所の判定に使う) */
+let grandShafts: GrandShaft[] = [];
+/** 近傍の大昇降機の途中駅の休憩所(立つと復活点が移る) */
+let grandRests: GrandAmenitySpot[] = [];
+/** 途中駅の設備(補給・端末)を候補に入れる距離(タイル)。キャッシュ・武器庫の保持半径と同じ */
+const GRAND_AMENITY_RADIUS = 48;
+/** 途中駅の休憩所の広さ(設備の中心から左右のタイル数) */
+const GRAND_REST_HALF = 2.5;
 /** 近傍のトラムの軌道(最大 1 本)と、前ステップの車両の左端 X(差分を屋根の乗り手へ運ぶ) */
 let tram: TramTrack | null = null;
 let tramX = 0;
@@ -460,7 +474,14 @@ function refreshEnemies(): void {
   // 開封済みは選定後の減算で差し引く(開封した候補の代わりは繰り上がらない)。
   // 選択は粘着(設計 2026-11-10 armory-stability §1): 前回の選択が未開封で保持半径内なら、
   // 窓の境界をまたいで候補から外れても維持する(箱が跳んだり消えたりして見えるのを防ぐ)
-  const caches = chooseSupplyCaches(seed, runs, protectedPoints, halls, claimedSupplyCaches);
+  // 大昇降機(設計 2026-11-12-mega-structures): 途中駅の補給は床ランの選定とは別の決定的な位置で、
+  // 近くにあれば同じ候補に並べる(近傍に最大 1 個の規則と開封済みの差し引きは既存のまま)
+  grandShafts = grandShaftsNear(seed, player.centerX, player.centerY, ELEVATOR_SCAN_X, ELEVATOR_SCAN_Y);
+  const nearSpot = (p: GrandAmenitySpot) => Math.hypot(p.x - player.centerX, p.floorY - player.centerY) <= GRAND_AMENITY_RADIUS;
+  const caches = [
+    ...chooseSupplyCaches(seed, runs, protectedPoints, halls, claimedSupplyCaches),
+    ...grandAmenitySpots(grandShafts, 'supply').filter((p) => nearSpot(p) && !claimedSupplyCaches.has(p.id)),
+  ];
   supplyCache = holdSpot(supplyCache, caches, player.centerX, player.centerY, claimedSupplyCaches);
   // 武器庫(弾薬設計 §2): キャッシュと同じ床ラン・保護点・広間除外に相乗りする別種の選定。
   // 密度は地区倍率で変わる。キャッシュと同じ場所に重ならないよう、キャッシュの位置も保護点に加える
@@ -490,10 +511,13 @@ function refreshInfra(
 ): void {
   const px = player.centerX;
   const py = player.centerY;
-  // 昇降機: 既知の足場の状態は ID で引き継ぐ
+  // 昇降機: 既知の足場の状態は ID で引き継ぐ。大昇降機も同じ仕組みの足場として並べる
+  // (grandShafts は refreshEnemies が同じ範囲で引き直したもの)
   const shafts = elevatorsNear(seed, px, py, ELEVATOR_SCAN_X, ELEVATOR_SCAN_Y);
-  elevators = shafts.map((s) => elevators.find((e) => e.shaft.id === s.id) ?? initialElevator(s));
-  const shaftRects = shafts.map(shaftBounds);
+  const lifts: LiftShaft[] = [...shafts, ...grandShafts];
+  elevators = lifts.map((s) => elevators.find((e) => e.shaft.id === s.id) ?? initialElevator(s));
+  const shaftRects = [...shafts.map(shaftBounds), ...grandShafts.map(grandShaftBounds)];
+  grandRests = grandAmenitySpots(grandShafts, 'rest');
   const excluded: SpawnRect[] = [...halls, ...shaftRects];
   const spawnGuard: ProtectedPoint = { x: spawn.x, y: spawn.y, r: 10 };
   const rp = nearestRestPoint(seed, px, py);
@@ -522,7 +546,12 @@ function refreshInfra(
   if (supplyCache) termGuard.push({ x: supplyCache.x, y: supplyCache.floorY, r: 2 });
   if (armory) termGuard.push({ x: armory.x, y: armory.floorY, r: 2 });
   const term = chooseTerminal(seed, canon, termGuard, excluded);
-  terminal = holdSpot(terminal, term ? [term] : [], px, py);
+  // 大昇降機の途中駅の端末も候補に並べる(近いほうを選び、既読でも残る挙動は既存のまま)
+  const termCands: SupplyCache[] = [
+    ...(term ? [term] : []),
+    ...grandAmenitySpots(grandShafts, 'terminal').filter((p) => Math.hypot(p.x - px, p.floorY - py) <= GRAND_AMENITY_RADIUS),
+  ];
+  terminal = holdSpot(terminal, termCands, px, py);
 }
 
 /** 今の足場の上面の一覧(昇降機の足場とトラムの屋根) */
@@ -552,7 +581,7 @@ function stepCarriers(s: PlayerInput, dt: number): void {
     if (next.arrived) {
       e.target = null;
       // 到着の小さな合図: 既存の着地音を鳴る最小の強さで相乗り(崖つかみと同じ)。乗っているか近いときだけ
-      const near = Math.abs(player.centerX - (e.shaft.x0 + SHAFT_WIDTH / 2)) < 16 && Math.abs(player.centerY - e.top) < 12;
+      const near = Math.abs(player.centerX - (e.shaft.x0 + liftWidth(e.shaft) / 2)) < 16 && Math.abs(player.centerY - e.top) < 12;
       if (riding || near) audio.land(LAND_MIN_VY);
     }
   }
@@ -1265,6 +1294,20 @@ function update(dt: number): void {
       }
     }
     prevInRestBox = inRestBox;
+    // 大昇降機の途中駅の休憩所(設計 2026-11-12-mega-structures): 乗り場の灯の下に立つと復活点がここへ移る。
+    // 確保・初回補給・満腹度の安全圏は休憩点の箱だけのまま(計画書の保留)
+    if (player.body.onGround) {
+      for (const r of grandRests) {
+        if (Math.abs(player.centerX - r.x) > GRAND_REST_HALF || Math.abs(feet - r.floorY) > 0.2) continue;
+        const nextRespawn = { x: r.x - player.body.w / 2, y: r.floorY - player.body.h };
+        if (nextRespawn.x !== respawnPoint.x || nextRespawn.y !== respawnPoint.y) {
+          respawnPoint = nextRespawn;
+          audio.respawnSet();
+          saveNow();
+        }
+        break;
+      }
+    }
     // 満腹度(サバイバル段階 1): 開放度と同じ 6 フレーム間隔で進める(毎フレームの休憩点探索は足さない)。
     // 安全圏は休憩点の箱の中とスポーン保護範囲(敵出現の保護点 r=10 と同じ範囲)
     const inSpawnProtection =
@@ -1811,8 +1854,8 @@ function frame(now: number): void {
       lifts: elevators.map((e) => ({
         x: e.shaft.x0,
         y: e.top,
-        w: SHAFT_WIDTH,
-        cableY: e.shaft.yTop - SHAFT_DOOR_ROWS, // シャフトの天井の行(yTop − 4)の下面
+        w: liftWidth(e.shaft),
+        cableY: e.shaft.yTop - SHAFT_DOOR_ROWS, // シャフトの天井の行(yTop − 4)の下面(大昇降機も同じ)
         moving: e.target !== null,
       })),
       trams: tram ? [{ x: tramX, y: tram.floorY - TRAM_ROOF, w: TRAM_W, h: TRAM_ROOF }] : [],
