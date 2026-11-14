@@ -1,10 +1,12 @@
-import { biomeCellAt } from '../world/biomeCells';
+import { biomeCellAt, biomeIdForCell } from '../world/biomeCells';
+import { GRAND_VISTA_REACH, GRAND_VISTA_ROWS, grandLampAt, grandShaftsNear } from '../world/grandShaft';
 import { PASSAGE_SLOT } from '../world/interface';
 import { isTowerFamily, landmarkAt, rampTopY, type Landmark } from '../world/landmark';
 import { hash2 } from '../world/noise';
 import { REST_HEIGHT, restPointAt } from '../world/restpoint';
 import { beaconPulse } from './beacon';
 import { biomeForCell, mixHex } from './biome';
+import { GRAND_REST_COLOR, grandLampColor, grandVistaColor } from './grandShaftColors';
 import { HALO_RAYS, LAMP_HALO_RAYS, type ColumnDir, type SolidAt } from './lightRays';
 import { castColumns, fillLitRect, fillPointLit, fillWorldRect, rectOnScreen, type LightView } from './occludedFill';
 
@@ -156,6 +158,54 @@ export function landmarkLightsInView(seed: number, camX: number, camY: number, s
   return out;
 }
 
+/**
+ * 大昇降機の眺望区間の光のアルファ(暗さの作り直し 2.17 の「光は例外」: 暗い縦坑の中で明るい例外として際立たせる)。
+ * 区間 1 つにつき 1 枚(壁の外の張り出しから反対側の張り出しまで)
+ */
+export const GRAND_VISTA_ALPHA = 0.14;
+/** 大昇降機の灯(壁の内側の面の点)と暈のアルファ */
+const GRAND_LAMP_ALPHA = 0.6;
+const GRAND_LAMP_HALO_ALPHA = 0.07;
+/** 途中駅の休憩所の暖色のアルファ */
+const GRAND_REST_ALPHA = 0.08;
+
+/**
+ * 視野に掛かる大昇降機の光(設計 2026-11-12-mega-structures): 眺望区間 1 枚、灯 1 つにつき点と暈の 2 枚、
+ * 休憩所のある途中駅 1 枚。灯は焼き込みの装飾と同じ行(grandLampAt)で、色は行の地区。
+ * どれも縦坑の内側と彫った空間に収まる矩形なので遮蔽は付けない(レイを飛ばさない)。
+ * 枚数は標準ズームで灯 2〜3 行 × 2 側 × 2 枚 + 眺望 0〜1 枚。新しい描画パスは足さない(LandmarkLights に相乗り)
+ */
+export function grandShaftLightsInView(seed: number, camX: number, camY: number, spanX: number, spanY: number): LightRect[] {
+  const out: LightRect[] = [];
+  const y0 = camY - spanY / 2;
+  const y1 = camY + spanY / 2;
+  for (const s of grandShaftsNear(seed, camX, camY, spanX / 2, spanY / 2 + 2)) {
+    const wallL = s.x0 - 1;
+    const wallR = s.x0 + s.width;
+    for (const vy of s.vistas) {
+      if (vy < y0 || vy - GRAND_VISTA_ROWS > y1) continue;
+      const color = grandVistaColor(biomeIdForCell(seed, biomeCellAt(seed, vy)));
+      out.push({ x0: wallL - GRAND_VISTA_REACH, y0: vy - GRAND_VISTA_ROWS, x1: wallR + 1 + GRAND_VISTA_REACH, y1: vy, alpha: GRAND_VISTA_ALPHA, color });
+    }
+    const r0 = Math.max(Math.floor(y0) - 1, s.yTop);
+    const r1 = Math.min(Math.ceil(y1) + 1, s.yBottom);
+    for (let wy = r0; wy < r1; wy++) {
+      if (!grandLampAt(seed, s, wy)) continue;
+      const color = grandLampColor(biomeIdForCell(seed, biomeCellAt(seed, wy)));
+      // 点は壁の内側の面、暈は内側へ 2 列・上下 1.5 行(壁の向こうへは漏らさない)
+      out.push({ x0: wallL + 0.7, y0: wy + 0.25, x1: wallL + 1.2, y1: wy + 0.75, alpha: GRAND_LAMP_ALPHA, color });
+      out.push({ x0: wallR - 0.2, y0: wy + 0.25, x1: wallR + 0.3, y1: wy + 0.75, alpha: GRAND_LAMP_ALPHA, color });
+      out.push({ x0: wallL + 1, y0: wy - 1, x1: wallL + 3, y1: wy + 2, alpha: GRAND_LAMP_HALO_ALPHA, color });
+      out.push({ x0: wallR - 2, y0: wy - 1, x1: wallR, y1: wy + 2, alpha: GRAND_LAMP_HALO_ALPHA, color });
+    }
+    for (const stn of s.stations) {
+      if (stn.amenity !== 'rest' || stn.upper < y0 || stn.upper - 3 > y1) continue;
+      out.push({ x0: stn.amenityX - 3, y0: stn.upper - 3, x1: stn.amenityX + 3, y1: stn.upper, alpha: GRAND_REST_ALPHA, color: GRAND_REST_COLOR });
+    }
+  }
+  return out;
+}
+
 /** 遮蔽の作業配列(列の到達位置と、点光源のレイの端点)。描画は 1 スレッドで順に呼ばれるので共有する */
 let columnBuf = new Float64Array(128);
 const pointBuf = new Float64Array(Math.max(HALO_RAYS, LAMP_HALO_RAYS) * 2);
@@ -211,6 +261,9 @@ export class LandmarkLights {
     timeSec: number,
     solidAt?: SolidAt,
   ): void {
-    drawLightRects(ctx, landmarkLightsInView(this.seed, cam.x, cam.y, w / ppt, h / ppt, timeSec), cam, w, h, ppt, solidAt);
+    const rects = landmarkLightsInView(this.seed, cam.x, cam.y, w / ppt, h / ppt, timeSec);
+    // 大昇降機の眺望区間・灯・休憩所(遮蔽なしの矩形なので同じ呼び出しに並べる)
+    for (const r of grandShaftLightsInView(this.seed, cam.x, cam.y, w / ppt, h / ppt)) rects.push(r);
+    drawLightRects(ctx, rects, cam, w, h, ppt, solidAt);
   }
 }

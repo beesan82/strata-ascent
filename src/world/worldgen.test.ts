@@ -25,6 +25,7 @@ import {
 import { girderY, isTowerFamily, landmarkAt, landmarkTileAt, rampTopY, shaftLadderX, towerSpec, type Landmark } from './landmark';
 import { restPointAt, restPointTileAt } from './restpoint';
 import { Destruction } from './destruction';
+import { grandTileAt } from './grandShaft';
 import { ANTECHAMBER_DEPTH, groupLadderX, interfaceBottom, interfaceTileAt, interfaceTop, passageX, terrainModsAt } from './interface';
 
 /** 界面の地物・前室の内側・大構造・休憩点の箱ではノイズ梯子の不変条件を適用しない(大構造は梯子列を切ってよい) */
@@ -397,6 +398,9 @@ describe('界面と前室の合成', () => {
         const iface = interfaceTileAt(seed, x, top + 3);
         expect(iface).not.toBe(null);
         if (landmarkTileAt(seed, x, top + 3) !== null) continue; // 崩落の裂け目・塔の縦坑は板に勝つ
+        // 大昇降機(2.20)の内側も板を貫く。壁(SOLID)は板の HARD のまま
+        const grand = grandTileAt(seed, x, top + 3);
+        if (grand !== null && grand !== TILE.SOLID) continue;
         expect(tileAt(seed, x, top + 3)).toBe(iface);
       }
     }

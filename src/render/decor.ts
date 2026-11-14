@@ -1,14 +1,19 @@
 import { biomeCellAt, biomeIdForCell, type BiomeId } from '../world/biomeCells';
 import { terrainProfileFor } from '../world/biomeTerrain';
 import {
-  ANTECHAMBER_DEPTH, ANTECHAMBER_FADE, ANTECHAMBER_HALF_WIDTH, interfaceBottom, nearestPassage,
+  ANTECHAMBER_DEPTH, ANTECHAMBER_FADE, ANTECHAMBER_HALF_WIDTH, interfaceBottom, interfaceTop, nearestPassage,
 } from '../world/interface';
+import {
+  GRAND_VISTA_REACH, GRAND_VISTA_ROWS, grandLampAt, grandShaftsNear, grandShaftTileAt,
+  type GrandShaft,
+} from '../world/grandShaft';
 import { hash2 } from '../world/noise';
 import { nearestRestPoint, REST_HEIGHT, restPointBand } from '../world/restpoint';
 import { stratumIndexAt } from '../world/strata';
 import { CHUNK_SIZE, TILE, isSolid } from '../world/tiles';
 import { findSpawn, tileAt } from '../world/worldgen';
 import { VISUAL_BIOME } from './biome';
+import { GRAND_REST_COLOR, GRAND_SHAFT_COLORS, grandLampColor, grandWallTint } from './grandShaftColors';
 import { STEEL, mixHex } from './steel';
 
 /**
@@ -422,7 +427,137 @@ export function decorateChunk(seed: number, cx: number, cy: number, pristine?: U
   segmentOps(ops, seed, bx, by, tw);
   // 歩く景色(2.17 後半): 床の残滓と頭上の桁渡り。既存装飾の上に重ねる
   sceneryOps(ops, seed, bx, by, tw);
+  // 大昇降機(設計 2026-11-12-mega-structures): 支柱・ケーブル・灯の列と地区の壁の帯。描画パスは足さない
+  grandShaftOps(ops, seed, bx, by);
   return ops;
+}
+
+/** 大昇降機の背面の筋交いの間隔(行) */
+export const GRAND_BRACE_EVERY = 6;
+/** 壁の質感のブロックの高さ(行)。地区バイアス(SCENERY_PROFILE)の錆・ステンシル・配管をこの単位で引く */
+const GRAND_WALL_BLOCK = 4;
+/** 壁の質感の基礎確率(地区の rust / stencil / pipes を掛ける) */
+const GRAND_RUST_RATE = 0.3;
+const GRAND_STENCIL_RATE = 0.12;
+const GRAND_PIPE_RATE = 0.6;
+
+/**
+ * 大昇降機の焼き込み装飾(設計 2026-11-12-mega-structures「乗っている間の景色」)。純粋関数。
+ * - 案内レール 2 本・釣り合いのケーブル 2 本は内側を縦に通し、背面の筋交いは GRAND_BRACE_EVERY 行ごと。
+ *   乗っている間はこれと灯の列が流れ続ける。
+ * - 灯は GRAND_LAMP_EVERY 行ごとに両側の壁の内側の面(grandLampAt)。色は行の地区(grandLampColor)。
+ * - 壁の内側の面に地区の色の帯(grandWallTint)を引き、壁の 4 行ブロックごとに地区バイアスの表
+ *   (sceneryProfileFor の rust / stencil / pipes)で錆筋・ステンシル・配管を引く。板の上面で地区が切り替わる。
+ * - 眺望区間は手すりと庇の縁、停止階は乗り場の縁の注意帯、休憩所のある途中駅は暖色の灯 3 つ。
+ * 判定はすべてシャフトの幾何と世界座標の行で決め、チャンクの範囲 [by−2, by+66) に掛かる分だけ出すので
+ * チャンク境界で食い違わない(はみ出しは焼き込みでクリップされる)。
+ */
+export function grandShaftOps(ops: DecorOp[], seed: number, bx: number, by: number): void {
+  const half = CHUNK_SIZE / 2;
+  for (const s of grandShaftsNear(seed, bx + half, by + half, half + 2, half + 2)) grandOpsFor(ops, seed, s, bx, by);
+}
+
+function grandOpsFor(ops: DecorOp[], seed: number, s: GrandShaft, bx: number, by: number): void {
+  const W = s.width;
+  const wallL = s.x0 - 1;
+  const wallR = s.x0 + W;
+  const ry0 = Math.max(s.yTop - 3, by - 2);
+  const ry1 = Math.min(s.yBottom, by + CHUNK_SIZE + 2);
+  if (ry0 >= ry1) return;
+  const X = (wx: number) => wx - bx;
+  const Y = (wy: number) => wy - by;
+  // 地区の区間(板の上面で切り替わる)ごとに: 案内レール・ケーブル・壁の内側の帯
+  for (let c = biomeCellAt(seed, ry0); ; c++) {
+    const y0 = Math.max(ry0, interfaceTop(seed, c));
+    const y1 = Math.min(ry1, interfaceTop(seed, c + 1));
+    if (y0 >= ry1) break;
+    if (y0 >= y1) continue;
+    const biome = biomeIdForCell(seed, c);
+    for (const rx of [s.x0 + 0.55, s.x0 + W - 0.85]) {
+      ops.push({ kind: 'rect', x: X(rx), y: Y(y0), w: 0.3, h: y1 - y0, color: GRAND_SHAFT_COLORS.rail });
+      ops.push({ kind: 'line', x1: X(rx + 0.3), y1: Y(y0), x2: X(rx + 0.3), y2: Y(y1), w: 0.05, color: GRAND_SHAFT_COLORS.railLit });
+    }
+    for (const cx of [s.x0 + 1.6, s.x0 + W - 1.6]) {
+      ops.push({ kind: 'line', x1: X(cx), y1: Y(y0), x2: X(cx), y2: Y(y1), w: 0.05, color: GRAND_SHAFT_COLORS.cable });
+    }
+    // 壁の内側の面の帯: 壁が固体の行の連なりごとに 1 枚(出入口・眺望区間では切れる)
+    const tint = grandWallTint(biome);
+    for (const [wx, fx] of [[wallL, 0.62], [wallR, 0.08]] as const) {
+      let run = -1;
+      for (let wy = y0; wy <= y1; wy++) {
+        const solidWall = wy < y1 && grandShaftTileAt(seed, s, wx, wy, c) === TILE.SOLID;
+        if (solidWall && run < 0) run = wy;
+        if (!solidWall && run >= 0) {
+          ops.push({ kind: 'rect', x: X(wx + fx), y: Y(run), w: 0.3, h: wy - run, color: tint });
+          run = -1;
+        }
+      }
+    }
+  }
+  // 背面の筋交い(X 字。区間をまたいでも 1 本の線なので、掛かる範囲の位相の行から引く)
+  const xl = s.x0 + 0.85;
+  const xr = s.x0 + W - 0.85;
+  const b0 = s.yTop + Math.max(0, Math.floor((ry0 - GRAND_BRACE_EVERY - s.yTop) / GRAND_BRACE_EVERY)) * GRAND_BRACE_EVERY;
+  for (let wy = b0; wy < ry1 && wy + GRAND_BRACE_EVERY <= s.yBottom; wy += GRAND_BRACE_EVERY) {
+    if (wy + GRAND_BRACE_EVERY < ry0) continue;
+    ops.push({ kind: 'line', x1: X(xl), y1: Y(wy), x2: X(xr), y2: Y(wy + GRAND_BRACE_EVERY), w: 0.06, color: GRAND_SHAFT_COLORS.brace });
+    ops.push({ kind: 'line', x1: X(xr), y1: Y(wy), x2: X(xl), y2: Y(wy + GRAND_BRACE_EVERY), w: 0.06, color: GRAND_SHAFT_COLORS.brace });
+  }
+  // 灯の列(行の地区の色)
+  for (let wy = ry0; wy < ry1; wy++) {
+    if (!grandLampAt(seed, s, wy)) continue;
+    const color = grandLampColor(biomeIdForCell(seed, biomeCellAt(seed, wy)));
+    for (const [hx, lx] of [[wallL + 0.7, wallL + 0.95], [wallR, wallR + 0.05]] as const) {
+      ops.push({ kind: 'rect', x: X(hx), y: Y(wy + 0.25), w: 0.3, h: 0.5, color: GRAND_SHAFT_COLORS.housing });
+      ops.push({ kind: 'rect', x: X(lx - 0.6), y: Y(wy - 0.1), w: 1.2, h: 1.2, color, alpha: 0.22 });
+      ops.push({ kind: 'dot', x: X(lx), y: Y(wy + 0.5), r: 0.13, color });
+    }
+  }
+  // 壁の質感(4 行ブロックごと。ブロックは上のチャンクから伸びてくるので 1 ブロックぶん上から見る)
+  for (let wy = Math.max(s.yTop - 3, ry0 - GRAND_WALL_BLOCK); wy < ry1; wy++) {
+    if (((wy - s.yTop) % GRAND_WALL_BLOCK + GRAND_WALL_BLOCK) % GRAND_WALL_BLOCK !== 0) continue;
+    const c = biomeCellAt(seed, wy);
+    const prof = sceneryProfileFor(biomeIdForCell(seed, c));
+    const block = Math.floor((wy - s.yTop) / GRAND_WALL_BLOCK);
+    for (const wx of [wallL, wallR]) {
+      if (grandShaftTileAt(seed, s, wx, wy, c) !== TILE.SOLID) continue;
+      if (hash2(seed + 9671, wx, block) < GRAND_RUST_RATE * prof.rust) {
+        ops.push({ kind: 'line', x1: X(wx + 0.45), y1: Y(wy + 0.2), x2: X(wx + 0.45), y2: Y(wy + 2.6), w: 0.1, color: GRAND_SHAFT_COLORS.rust });
+      }
+      if (hash2(seed + 9672, wx, block) < GRAND_STENCIL_RATE * prof.stencil) {
+        ops.push({ kind: 'rect', x: X(wx + 0.2), y: Y(wy + 0.8), w: 0.6, h: 1.4, color: GRAND_SHAFT_COLORS.stencil, alpha: 0.4 });
+      }
+      if (hash2(seed + 9673, wx, block) < GRAND_PIPE_RATE * prof.pipes) {
+        ops.push({ kind: 'line', x1: X(wx + 0.25), y1: Y(wy), x2: X(wx + 0.25), y2: Y(wy + GRAND_WALL_BLOCK), w: 0.12, color: GRAND_SHAFT_COLORS.pipe });
+      }
+    }
+  }
+  // 眺望区間: 張り出しの手すり(床の 1 行上)と庇の縁
+  for (const vy of s.vistas) {
+    if (vy < ry0 - 1 || vy - GRAND_VISTA_ROWS - 1 > ry1) continue;
+    for (const [a, b] of [[wallL - GRAND_VISTA_REACH, wallL], [wallR + 1, wallR + 1 + GRAND_VISTA_REACH]] as const) {
+      ops.push({ kind: 'line', x1: X(a), y1: Y(vy - 0.85), x2: X(b), y2: Y(vy - 0.85), w: 0.08, color: GRAND_SHAFT_COLORS.sill });
+      for (let px = a + 1; px < b; px += 3) {
+        ops.push({ kind: 'line', x1: X(px), y1: Y(vy - 0.85), x2: X(px), y2: Y(vy), w: 0.06, color: GRAND_SHAFT_COLORS.sill });
+      }
+      ops.push({ kind: 'line', x1: X(a), y1: Y(vy - GRAND_VISTA_ROWS + 0.05), x2: X(b), y2: Y(vy - GRAND_VISTA_ROWS + 0.05), w: 0.1, color: GRAND_SHAFT_COLORS.sill });
+    }
+  }
+  // 停止階: 乗り場の縁の注意帯(壁の出入口の両脇)
+  for (const st of s.stops) {
+    if (st < ry0 - 1 || st > ry1 + 1) continue;
+    ops.push({ kind: 'rect', x: X(wallL - 2), y: Y(st), w: 2, h: 0.12, color: GRAND_SHAFT_COLORS.stationEdge });
+    ops.push({ kind: 'rect', x: X(wallR + 1), y: Y(st), w: 2, h: 0.12, color: GRAND_SHAFT_COLORS.stationEdge });
+  }
+  // 休憩所のある途中駅: 暖色の灯 3 つ(床の 1.4 行上)
+  for (const stn of s.stations) {
+    if (stn.amenity !== 'rest' || stn.upper < ry0 - 2 || stn.upper > ry1 + 2) continue;
+    for (const d of [-1.5, 0, 1.5]) {
+      const lx = stn.amenityX + d;
+      ops.push({ kind: 'rect', x: X(lx - 0.5), y: Y(stn.upper - 1.9), w: 1, h: 1, color: GRAND_REST_COLOR, alpha: 0.25 });
+      ops.push({ kind: 'dot', x: X(lx), y: Y(stn.upper - 1.4), r: 0.14, color: GRAND_REST_COLOR });
+    }
+  }
 }
 
 /** 梯子1タイル分: レール2本+踏み桟+4タイルごとの背かご */
