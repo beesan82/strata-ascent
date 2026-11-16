@@ -6,6 +6,7 @@ import {
   elevatorPlatform,
   ELEVATOR_SPEED,
   initialElevator,
+  liftSpeed,
   liftStops,
   liftWidth,
   type ElevatorState,
@@ -127,5 +128,72 @@ describe('大昇降機の足場(停止階の列・設計 2026-11-12-mega-structu
     expect(elevatorCallStop(GRAND, 103, 320)).toBeNull();
     expect(commandElevator(g(520), { ...NONE, callStop: 300 })).toBe(300);
     expect(commandElevator(g(400, 520), { ...NONE, callStop: 300 })).toBe(520);
+  });
+});
+
+describe('足場の速さと初めの位置(2.20 原作準拠スケール)', () => {
+  // 大昇降機と同じく speed 3・callSpeed 40 を持つシャフト(上端 0、途中駅 1000 / 1040、下端 3000)
+  const LONG: LiftShaft = {
+    id: 'g:1,0', x0: 100, yTop: 0, yBottom: 3000, width: 6, stops: [0, 1000, 1040, 3000], landX0: 91, landX1: 121,
+    speed: 3, callSpeed: 40,
+  };
+  const l = (top: number, target: number | null = null): ElevatorState => ({ shaft: LONG, top, target });
+
+  it('速さを持たない通常の昇降機は、乗っていてもいなくても ELEVATOR_SPEED(従来どおり)', () => {
+    expect(liftSpeed(SHAFT, true)).toBe(ELEVATOR_SPEED);
+    expect(liftSpeed(SHAFT, false)).toBe(ELEVATOR_SPEED);
+    const dt = 1 / 60;
+    expect(advanceElevator(at(232, 200), dt, false).top).toBeCloseTo(232 - ELEVATOR_SPEED * dt, 9);
+    expect(advanceElevator(at(232, 200), dt, true).top).toBeCloseTo(232 - ELEVATOR_SPEED * dt, 9);
+  });
+
+  it('乗っているときはシャフトの speed、乗り手がいないときは callSpeed で動く', () => {
+    expect(liftSpeed(LONG, true)).toBe(3);
+    expect(liftSpeed(LONG, false)).toBe(40);
+    const dt = 1 / 60;
+    expect(advanceElevator(l(3000, 1040), dt).top).toBeCloseTo(3000 - 3 * dt, 9);
+    expect(advanceElevator(l(3000, 1040), dt, true).top).toBeCloseTo(3000 - 3 * dt, 9);
+    expect(advanceElevator(l(3000, 1040), dt, false).top).toBeCloseTo(3000 - 40 * dt, 9);
+  });
+
+  it('乗って下端から上端まで ↑ を押し続けると 3000 タイルを 3 タイル/秒で約 1000 秒(約 17 分)', () => {
+    const dt = 1 / 60;
+    let e = l(3000);
+    let steps = 0;
+    for (; steps < 60 * 1200; steps++) {
+      e = { ...e, target: commandElevator(e, { ...NONE, riding: true, up: true }) };
+      const r = advanceElevator(e, dt, true);
+      e = { ...e, top: r.top, target: r.arrived ? null : e.target };
+      if (e.top === 0 && e.target === null) break;
+    }
+    expect(e.top).toBe(0);
+    // 停止階ごとに到着の 1 ステップ(と浮動小数の誤差)の分だけ前後する
+    expect(steps / 60).toBeGreaterThan(995);
+    expect(steps / 60).toBeLessThan(1005);
+  });
+
+  it('乗り手のいない呼び戻しは下端から上端まで 75 秒で来る', () => {
+    const dt = 1 / 60;
+    let e = l(3000);
+    e = { ...e, target: commandElevator(e, { ...NONE, callStop: 0 }) };
+    let steps = 0;
+    for (; steps < 60 * 200; steps++) {
+      const r = advanceElevator(e, dt, false);
+      e = { ...e, top: r.top, target: r.arrived ? null : e.target };
+      if (r.arrived) break;
+    }
+    expect(e.top).toBe(0);
+    expect(steps / 60).toBeGreaterThan(74);
+    expect(steps / 60).toBeLessThan(76);
+  });
+
+  it('初めの位置: 行を渡すと最寄りの停止階、渡さなければ下端(通常の昇降機は従来どおり)', () => {
+    expect(initialElevator(SHAFT).top).toBe(232);
+    expect(initialElevator(LONG).top).toBe(3000);
+    expect(initialElevator(LONG, 10).top).toBe(0);
+    expect(initialElevator(LONG, 1010).top).toBe(1000);
+    expect(initialElevator(LONG, 1030).top).toBe(1040);
+    expect(initialElevator(LONG, 2900).top).toBe(3000);
+    expect(initialElevator(LONG, 1010).target).toBeNull();
   });
 });

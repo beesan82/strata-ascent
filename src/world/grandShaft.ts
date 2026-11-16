@@ -1,35 +1,42 @@
-import { biomeCellAt, biomeIdForCell } from './biomeCells';
+import { BIOME_CELL_BASE, BIOME_CELL_JITTER, biomeCellAt, biomeIdForCell } from './biomeCells';
 import { terrainProfileFor } from './biomeTerrain';
 import { elevatorShaftAt, SHAFT_DOOR_ROWS, SHAFT_FLOOR_CLEARANCE, SHAFT_REST_CLEARANCE, shaftBounds } from './elevator';
 import { grandHallAt, hallChimneyAt } from './grandhall';
+import { sectorAt, SECTOR_SIZE } from './hierarchy';
 import {
   ANTECHAMBER_DEPTH, ANTECHAMBER_HALF_WIDTH, COMPRESSION_DEPTH, groupLadderX, interfaceBottom, interfaceTop, mod,
   PASSAGE_SLOT, passageX,
 } from './interface';
 import { landmarkAt, spanOf } from './landmark';
-import { megaFacilityAt } from './megafacility';
+import { MEGA_SIZE } from './megafacility';
 import { hash2 } from './noise';
 import { REST_HEIGHT, restPointAt, restPointBand } from './restpoint';
 import { TILE, type Tile } from './tiles';
 
 /**
- * 大昇降機(グランドシャフト、設計 2026-11-12-mega-structures)。複数の層 cell を貫く 300〜600 タイル級の
- * 縦シャフトを、稀なランドマークとして決定論で置く。純粋関数のみ。
+ * 大昇降機(グランドシャフト、設計 2026-11-12-mega-structures、2.20 の原作準拠スケール 2026-11-16)。
+ * 開始点から 2400〜4800 タイル(6〜13 層程度)下へ貫き続ける縦シャフトを、世界の大物として稀に決定論で置く。
+ * 乗り通すのは非常識に長く(3 タイル/秒で約 13〜27 分)、各層の境界の途中駅で降りるのが前提。純粋関数のみ。
  *
  * 置き方の裁定:
- * - 抽選の単位は「列バンド(孔スロット GRAND_BAND_SLOTS 個ぶんの X の帯)× cell グループ(GRAND_GROUP_CELLS 個の
- *   連続する層)」。当たった組にだけ 1 本置く。グループの中で開始 cell を hash で選び、下向きに続く cell へ
- *   同じ列で貫く。外形はバンドとグループの内側に収めるので、タイルの判定は (x のバンド, y の cell のグループ)
- *   の 1 組だけを引けば足りる(シャフトどうしは重ならない)。
+ * - 抽選の単位は「列バンド(孔スロット GRAND_BAND_SLOTS 個ぶんの X の帯)× 開始 cell」。当たった組の開始 cell から
+ *   hash で決めた長さだけ下へ、同じ列で板を貫いて続く(cell グループに閉じない)。
+ * - 上から来ているシャフトの認識: 行の cell から上へ GRAND_LOOKBACK_CELLS 個の開始 cell を引き、終わりの cell が
+ *   行の cell に届くものを持ち主とする(grandShaftCovering)。最長のシャフトが貫く cell の数より遡るので取りこぼさない。
+ * - 並行の禁止: 同じ列バンドで、上の開始 cell の「候補」(抽選・縦の配置・横の配置まで通ったもの)の終わりの cell が
+ *   自分の開始 cell 以下なら棄却する。上の候補がさらに上の候補に棄却されていても棄却する(保守的)。こうすると判定は
+ *   上へ一定の範囲を見るだけで閉じ(棄却の連鎖を遡らない)、どの順で引いても同じ結果になる。
  * - 通常の昇降機(elevatorShaftAt)とは別の抽選(別の salt)。通常の昇降機と重なる候補は大昇降機の側で棄却する。
  * - 縦: 上の停止階は開始 cell の休憩点の帯・前室・圧縮帯より下、床の板より GRAND_TOP_CLEARANCE 以上上。
  *   長さは GRAND_MIN_LENGTH〜GRAND_MAX_LENGTH を hash で決め、下の停止階は終わりの cell の床帯の行に丸める
- *   (板の下から GRAND_BOTTOM_DEPTH 以上下、床の板の上面から SHAFT_FLOOR_CLEARANCE 以上上)。
+ *   (板の下から GRAND_BOTTOM_DEPTH 以上下、床の板の上面から SHAFT_FLOOR_CLEARANCE 以上上)。丸めで最長を超える
+ *   ときは 1 つ上の cell の底で止める。
  * - 途中駅: 貫く板(界面)ごとに 2 段。板の上面(上の層の底)と、板の下面の直下の床帯の行(下の層の頭)。
- * - 横: バンドの中から hash で選んだ 32 タイルグループに、梯子列を踏まない側へ壁ごと収める(通常の昇降機と
- *   同じ流儀)。候補は GRAND_TRIES 個まで順に試し、次の重なりがあれば棄却して次の候補へ進む:
- *   貫く板の孔(縦坑・見晴らし台・大穴・前室の芯 ±ANTECHAMBER_HALF_WIDTH)、各 cell の大構造の X 範囲・
- *   休憩点の箱・大広間と煙突・通常の昇降機、メガ施設(8 タイル格子の標本)。
+ * - 横: バンドの中の孔スロットの境目付近(スロットの 32 タイルグループ 9〜14 番)の候補を hash の順で
+ *   GRAND_TRIES 個まで試し、梯子列を踏まない側へ壁ごと収める(通常の昇降機と同じ流儀)。次の重なりがあれば
+ *   棄却して次の候補へ進む(既存の流儀のまま): 貫く板の孔(縦坑・見晴らし台・大穴・前室の芯 ±ANTECHAMBER_HALF_WIDTH)、
+ *   各 cell の大構造の X 範囲・休憩点の箱・大広間と煙突・通常の昇降機、メガ施設。
+ *   長いほど貫く板と大構造が増えて収まりにくいので、実際の長さの分布は短い側に寄る(計画書の裁定)。
  * - 詰みなし: 停止階の乗り場は、梯子列の側では自分のグループの梯子列まで延ばす(梯子列は層の高さ全体を
  *   通る上昇路なので、どの停止階からも層の経路網へ出られる)。壁は床帯の行ごとに出入口を空ける(通常の
  *   昇降機と同じ)。シャフトに落ちても足場か下の停止階に着き、落下の被害は無い。
@@ -37,6 +44,7 @@ import { TILE, type Tile } from './tiles';
  *   (worldgen の合成で、大昇降機の SOLID が板の HARD に当たる位置は HARD を残す)。
  * - 眺望区間: 一定間隔(GRAND_VISTA_EVERY)で両側の壁を GRAND_VISTA_ROWS 行ぶん抜き、外へ GRAND_VISTA_REACH 列の
  *   張り出し(床と庇)を彫る。空気の背後には遠景(超構造のシルエット)が透けて見える。板・停止階の近くには置かない。
+ * - 速さ: 足場は GRAND_SPEED(通常の昇降機は 5 のまま)。乗っていない足場(呼び戻し)は GRAND_CALL_SPEED で動く。
  *
  * 幾何(x0 は内側の左端列、yTop / yBottom は上下の停止階の床の行):
  *   内側 [x0, x0+W): 天井 yTop−4 は SOLID、[yTop−3, yBottom) は AIR、底 yBottom は SOLID
@@ -48,15 +56,25 @@ import { TILE, type Tile } from './tiles';
 /** 列バンドの幅(孔スロットの数)。バンドの X 範囲は [band × GRAND_BAND_WIDTH, (band+1) × GRAND_BAND_WIDTH) */
 export const GRAND_BAND_SLOTS = 8;
 export const GRAND_BAND_WIDTH = GRAND_BAND_SLOTS * PASSAGE_SLOT;
-/** cell グループの大きさ(連続する層の数)。グループ g は cell [g × 3, g × 3 + 2] */
-export const GRAND_GROUP_CELLS = 3;
-/** 列バンド × cell グループの組ごとの抽選の当たり率(さらに重なりで棄却される)。帯ごとに 1 本出るか出ないか */
+/**
+ * 列バンド × 開始 cell の組ごとの抽選の当たり率。当たっても横の配置が収まる組はさらに一部(長いほど少ない)で、
+ * 並行の棄却でも減る。世界の大物としての頻度の調整はまずこの値で行う
+ */
 export const GRAND_RATE = 0.5;
-/** 横の候補を何個まで試すか */
-export const GRAND_TRIES = 8;
-/** 長さ(上下の停止階の距離、タイル) */
-export const GRAND_MIN_LENGTH = 300;
-export const GRAND_MAX_LENGTH = 600;
+/** 横の候補を何個まで試すか(候補は最大 (GRAND_BAND_SLOTS − 1) × 6 = 42 個) */
+export const GRAND_TRIES = 42;
+/** 長さ(上下の停止階の距離、タイル)。原作準拠: 乗り通すのが非常識に長い */
+export const GRAND_MIN_LENGTH = 2400;
+export const GRAND_MAX_LENGTH = 4800;
+/**
+ * 上から来ているシャフトを探す範囲(開始 cell を何個遡るか)。層の最小の高さ(BIOME_CELL_BASE − BIOME_CELL_JITTER)で
+ * 最長を割った数 + 1。これより上で始まるシャフトは行の cell に届かない
+ */
+export const GRAND_LOOKBACK_CELLS = Math.ceil(GRAND_MAX_LENGTH / (BIOME_CELL_BASE - BIOME_CELL_JITTER)) + 1;
+/** 足場の速さ(タイル/秒)。通常の昇降機(ELEVATOR_SPEED = 5)より遅い */
+export const GRAND_SPEED = 3;
+/** 乗っていない足場の速さ(呼び戻し)。最長でも約 120 秒で来る(従来の最長の待ちと同じ) */
+export const GRAND_CALL_SPEED = 40;
 /** 内側の幅(足場の幅も同じ) */
 export const GRAND_WIDTH = 6;
 /** 梯子列の反対側の乗り場の長さ(壁の外の列数) */
@@ -85,6 +103,10 @@ const GRAND_SALT = 9551;
 /** バンドのスロットの中で候補にする 32 タイルグループ(9〜14 番 = スロットの境目付近。孔と大構造の間が空きやすい) */
 const CANDIDATE_GROUP_MIN = 9;
 const CANDIDATE_GROUP_COUNT = 6;
+/** 横の候補の総数(バンドの最後のスロットは使わない: 候補グループ + 張り出しがバンドの外へ出ないように) */
+const CANDIDATE_COUNT = (GRAND_BAND_SLOTS - 1) * CANDIDATE_GROUP_COUNT;
+/** 候補を巡る歩幅(CANDIDATE_COUNT と互いに素なので、hash の開始位置から全候補を 1 回ずつ巡る) */
+const CANDIDATE_STRIDE = 13;
 
 export type GrandAmenity = 'rest' | 'terminal' | 'supply';
 
@@ -103,10 +125,9 @@ export interface GrandStation {
 }
 
 export interface GrandShaft {
-  /** `g:band,group` */
+  /** `g:band,startCell` */
   id: string;
   band: number;
-  group: number;
   startCell: number;
   endCell: number;
   /** 内側の左端列 */
@@ -115,6 +136,9 @@ export interface GrandShaft {
   width: number;
   yTop: number;
   yBottom: number;
+  /** 足場の速さ(乗っているとき)と呼び戻しの速さ(entities/elevator の LiftShaft) */
+  speed: number;
+  callSpeed: number;
   /** 停止階の行(上から下へ昇順): 上端、途中駅(板ごとに上・下)、下端 */
   stops: number[];
   stations: GrandStation[];
@@ -168,11 +192,20 @@ interface Vertical {
 
 const AMENITY_KINDS: readonly GrandAmenity[] = ['rest', 'terminal', 'supply'];
 
-function verticalLayout(seed: number, band: number, group: number): Vertical | null {
-  const g0 = group * GRAND_GROUP_CELLS;
-  const lastCell = g0 + GRAND_GROUP_CELLS - 1;
-  // 開始 cell はグループの先頭から「少なくとも 1 枚の板を下に残す」範囲で選ぶ
-  const startCell = g0 + Math.floor(hash2(seed + GRAND_SALT + 1, band, group) * (GRAND_GROUP_CELLS - 1));
+/**
+ * cell の中で下の停止階に使える床帯の行のうち、target に最も近いもの(target を [lo, hi] へ寄せてから丸める)。
+ * lo は天井の板の下面から GRAND_BOTTOM_DEPTH、hi は床の板の上面から SHAFT_FLOOR_CLEARANCE。無ければ null
+ */
+function bottomRowIn(seed: number, cell: number, target: number): number | null {
+  const sp = spacingOf(seed, cell);
+  const lo = interfaceBottom(seed, cell) + GRAND_BOTTOM_DEPTH;
+  const hi = interfaceTop(seed, cell + 1) - SHAFT_FLOOR_CLEARANCE;
+  let y = Math.floor(Math.min(Math.max(target, lo), hi) / sp) * sp;
+  if (y < lo) y += sp;
+  return y > hi ? null : y;
+}
+
+function verticalLayout(seed: number, band: number, startCell: number): Vertical | null {
   const spS = spacingOf(seed, startCell);
   // 天井(yTop − 4)の上限: 休憩点の帯の下と、前室・圧縮帯の下のうち深い方(通常の昇降機と同じ)
   const ceilingMin = Math.max(
@@ -182,17 +215,19 @@ function verticalLayout(seed: number, band: number, group: number): Vertical | n
   const topMin = ceilingMin + SHAFT_DOOR_ROWS + 1;
   const topMax = interfaceTop(seed, startCell + 1) - GRAND_TOP_CLEARANCE;
   if (topMax < topMin) return null;
-  let yTop = Math.ceil((topMin + Math.floor(hash2(seed + GRAND_SALT + 2, band, group) * (topMax - topMin + 1))) / spS) * spS;
+  let yTop = Math.ceil((topMin + Math.floor(hash2(seed + GRAND_SALT + 2, band, startCell) * (topMax - topMin + 1))) / spS) * spS;
   if (yTop > topMax) yTop -= spS;
   if (yTop < topMin) return null;
-  const want = GRAND_MIN_LENGTH + Math.floor(hash2(seed + GRAND_SALT + 3, band, group) * (GRAND_MAX_LENGTH - GRAND_MIN_LENGTH + 1));
-  const endCell = Math.min(Math.max(biomeCellAt(seed, yTop + want), startCell + 1), lastCell);
-  const spE = spacingOf(seed, endCell);
-  const lo = interfaceBottom(seed, endCell) + GRAND_BOTTOM_DEPTH;
-  const hi = interfaceTop(seed, endCell + 1) - SHAFT_FLOOR_CLEARANCE;
-  let yBottom = Math.floor(Math.min(Math.max(yTop + want, lo), hi) / spE) * spE;
-  if (yBottom < lo) yBottom += spE;
-  if (yBottom > hi) return null;
+  // 長さ: 目標の行が落ちる cell を終わりの cell にし、その床帯の行へ丸める。目標が cell の頭(板の直下)に落ちて
+  // 丸めで最長を超えるとき(または収まる行が無いとき)は 1 つ上の cell の底で止める
+  const want = GRAND_MIN_LENGTH + Math.floor(hash2(seed + GRAND_SALT + 3, band, startCell) * (GRAND_MAX_LENGTH - GRAND_MIN_LENGTH + 1));
+  let endCell = biomeCellAt(seed, yTop + want);
+  let yBottom = bottomRowIn(seed, endCell, yTop + want);
+  if (yBottom === null || yBottom - yTop > GRAND_MAX_LENGTH) {
+    endCell -= 1;
+    yBottom = endCell > startCell ? bottomRowIn(seed, endCell, Number.POSITIVE_INFINITY) : null;
+  }
+  if (yBottom === null) return null;
   const length = yBottom - yTop;
   if (length < GRAND_MIN_LENGTH || length > GRAND_MAX_LENGTH) return null;
   const plates: Vertical['plates'] = [];
@@ -225,8 +260,17 @@ function verticalLayout(seed: number, band: number, group: number): Vertical | n
   return { startCell, endCell, yTop, yBottom, plates, spacing, stops, vistas, amenities };
 }
 
-/** 候補のグループ左端 gx に壁ごと収めたシャフト(重なりの判定前) */
-function build(seed: number, band: number, group: number, v: Vertical, gx: number): GrandShaft {
+/** 横の配置(候補のグループ左端 gx に壁ごと収めた位置と外形。重なりの判定前) */
+interface Horizontal {
+  ladderRight: boolean;
+  x0: number;
+  ladderX: number;
+  landL: number;
+  landR: number;
+  bounds: { x0: number; x1: number; y0: number; y1: number };
+}
+
+function placeX(seed: number, v: Vertical, gx: number): Horizontal {
   const W = GRAND_WIDTH;
   const l = groupLadderX(seed, gx) - gx;
   // 梯子列がグループの右半分なら左寄り([gx+2, gx+10) が壁と内側)、左半分なら右寄り([gx+22, gx+30))
@@ -235,6 +279,19 @@ function build(seed: number, band: number, group: number, v: Vertical, gx: numbe
   const ladderX = gx + l;
   const landL = ladderRight ? x0 - 1 - GRAND_LANDING_REACH : ladderX;
   const landR = ladderRight ? ladderX : x0 + W + GRAND_LANDING_REACH;
+  const bounds = {
+    x0: Math.min(landL, x0 - 1 - GRAND_VISTA_REACH),
+    x1: Math.max(landR, x0 + W + GRAND_VISTA_REACH) + 1,
+    y0: v.yTop - SHAFT_DOOR_ROWS - 1,
+    y1: v.yBottom + 1,
+  };
+  return { ladderRight, x0, ladderX, landL, landR, bounds };
+}
+
+/** 縦と横の配置からシャフトを組み立てる(重なりの判定を通った後にだけ呼ぶ) */
+function build(seed: number, band: number, v: Vertical, h: Horizontal): GrandShaft {
+  const W = GRAND_WIDTH;
+  const { ladderRight, x0, ladderX, landL, landR, bounds } = h;
   // 設備は梯子列の反対側の乗り場の中ほど。そこが隣のグループの梯子列なら壁の側へ 2 列寄せる
   let amenityX = ladderRight ? x0 - 5 : x0 + W + 5;
   if (groupLadderX(seed, Math.floor(amenityX)) === Math.floor(amenityX)) amenityX += ladderRight ? 2 : -2;
@@ -245,22 +302,17 @@ function build(seed: number, band: number, group: number, v: Vertical, gx: numbe
     amenity: v.amenities[i],
     amenityX: amenityX + 0.5,
   }));
-  const bounds = {
-    x0: Math.min(landL, x0 - 1 - GRAND_VISTA_REACH),
-    x1: Math.max(landR, x0 + W + GRAND_VISTA_REACH) + 1,
-    y0: v.yTop - SHAFT_DOOR_ROWS - 1,
-    y1: v.yBottom + 1,
-  };
   return {
-    id: `g:${band},${group}`,
+    id: `g:${band},${v.startCell}`,
     band,
-    group,
     startCell: v.startCell,
     endCell: v.endCell,
     x0,
     width: W,
     yTop: v.yTop,
     yBottom: v.yBottom,
+    speed: GRAND_SPEED,
+    callSpeed: GRAND_CALL_SPEED,
     stops: v.stops,
     stations,
     plates: v.plates,
@@ -275,9 +327,8 @@ function build(seed: number, band: number, group: number, v: Vertical, gx: numbe
   };
 }
 
-/** 重なりの棄却(安いものから順に見る) */
-function fits(seed: number, s: GrandShaft): boolean {
-  const b = s.bounds;
+/** 重なりの棄却(安いものから順に見る。長いシャフトは孔と大構造で落ちることが多いので先に見る) */
+function fits(seed: number, s: Vertical, b: Horizontal['bounds']): boolean {
   const k0 = Math.floor(b.x0 / PASSAGE_SLOT) - 1;
   const k1 = Math.floor((b.x1 - 1) / PASSAGE_SLOT) + 1;
   // 貫く板の孔: 界面の縦坑・見晴らし台・大穴と、前室の芯(梯子の抑止・連続床で合成が先に返る範囲)
@@ -287,14 +338,18 @@ function fits(seed: number, s: GrandShaft): boolean {
       if (b.x0 <= px + GRAND_PASSAGE_CLEAR && b.x1 > px - GRAND_PASSAGE_CLEAR) return false;
     }
   }
+  // 大構造(層の高さ全体を占め得るので X 範囲だけで除外する)
   for (let c = s.startCell; c <= s.endCell; c++) {
     for (let kk = k0; kk <= k1; kk++) {
-      // 大構造(層の高さ全体を占め得るので X 範囲だけで除外する)
       const lm = landmarkAt(seed, c, kk);
       if (lm) {
         const [lx0, lx1] = spanOf(lm);
         if (b.x0 < lx1 + GRAND_MARGIN && b.x1 + GRAND_MARGIN > lx0) return false;
       }
+    }
+  }
+  for (let c = s.startCell; c <= s.endCell; c++) {
+    for (let kk = k0; kk <= k1; kk++) {
       const rp = restPointAt(seed, c, kk);
       if (rectsOverlap(b, { x0: rp.left, x1: rp.right + 1, y0: rp.floorY - REST_HEIGHT - 1, y1: rp.floorY + 1 }, GRAND_MARGIN)) return false;
       const e = elevatorShaftAt(seed, c, kk);
@@ -307,51 +362,107 @@ function fits(seed: number, s: GrandShaft): boolean {
     const chim = hallChimneyAt(seed, c);
     if (chim && rectsOverlap(b, chim, GRAND_MARGIN)) return false;
   }
-  // メガ施設(一辺 192 > シャフトの幅なので、8 タイル刻みの格子と端の標本で重なりを見る)
-  for (let y = b.y0; ; y = Math.min(y + 8, b.y1 - 1)) {
-    for (let x = b.x0; ; x = Math.min(x + 8, b.x1 - 1)) {
-      if (megaFacilityAt(seed, x, y) !== null) return false;
-      if (x === b.x1 - 1) break;
+  // メガ施設: 外形が掛かるセクターのハブの矩形(一辺 MEGA_SIZE)と重ならないこと。megaFacilityAt はハブの矩形の
+  // 全タイルで非 null を返す(セクターの外へはみ出す分は隣のセクターの判定になるので、矩形全体で見るのは安全側)
+  const sx0 = Math.floor(b.x0 / SECTOR_SIZE);
+  const sx1 = Math.floor((b.x1 - 1) / SECTOR_SIZE);
+  const sy0 = Math.floor(b.y0 / SECTOR_SIZE);
+  const sy1 = Math.floor((b.y1 - 1) / SECTOR_SIZE);
+  for (let sy = sy0; sy <= sy1; sy++) {
+    for (let sx = sx0; sx <= sx1; sx++) {
+      const sec = sectorAt(seed, sx * SECTOR_SIZE, sy * SECTOR_SIZE);
+      const hx = sx * SECTOR_SIZE + sec.hubX - MEGA_SIZE / 2;
+      const hy = sy * SECTOR_SIZE + sec.hubY - MEGA_SIZE / 2;
+      if (rectsOverlap(b, { x0: hx, x1: hx + MEGA_SIZE, y0: hy, y1: hy + MEGA_SIZE }, 0)) return false;
     }
-    if (y === b.y1 - 1) break;
   }
   return true;
 }
 
-/** 抽選と除外の本体(メモ化なし) */
-function computeGrand(seed: number, band: number, group: number): GrandShaft | null {
-  if (hash2(seed + GRAND_SALT, band, group) >= GRAND_RATE) return null;
-  const v = verticalLayout(seed, band, group);
+/** 候補: 抽選・縦の配置・横の配置まで通ったもの(並行の棄却の前。メモ化なし) */
+function computeCandidate(seed: number, band: number, startCell: number): GrandShaft | null {
+  if (hash2(seed + GRAND_SALT, band, startCell) >= GRAND_RATE) return null;
+  const v = verticalLayout(seed, band, startCell);
   if (!v) return null;
   const groupsPerSlot = PASSAGE_SLOT / 32;
-  for (let i = 0; i < GRAND_TRIES; i++) {
-    // バンドの最後のスロットは使わない(候補グループ + 張り出しがバンドの外へ出ないように)
-    const k = band * GRAND_BAND_SLOTS + Math.floor(hash2(seed + GRAND_SALT + 10 + i, band, group) * (GRAND_BAND_SLOTS - 1));
-    const j = CANDIDATE_GROUP_MIN + Math.floor(hash2(seed + GRAND_SALT + 30 + i, band, group) * CANDIDATE_GROUP_COUNT);
-    const s = build(seed, band, group, v, (k * groupsPerSlot + j) * 32);
-    if (fits(seed, s)) return s;
+  const first = Math.floor(hash2(seed + GRAND_SALT + 10, band, startCell) * CANDIDATE_COUNT);
+  const tries = Math.min(GRAND_TRIES, CANDIDATE_COUNT);
+  for (let i = 0; i < tries; i++) {
+    const idx = (first + i * CANDIDATE_STRIDE) % CANDIDATE_COUNT;
+    const k = band * GRAND_BAND_SLOTS + Math.floor(idx / CANDIDATE_GROUP_COUNT);
+    const j = CANDIDATE_GROUP_MIN + (idx % CANDIDATE_GROUP_COUNT);
+    const h = placeX(seed, v, (k * groupsPerSlot + j) * 32);
+    if (fits(seed, v, h.bounds)) return build(seed, band, v, h);
   }
   return null;
 }
 
-/** メモ(チャンク生成はタイルごとに引くため)。キーは数値。溢れたら捨てる */
-const memo = new Map<number, GrandShaft | null>();
+/** メモ(チャンク生成はタイルごとに引くため)。キーは数値。溢れたら捨てる。seed が変わったら全部捨てる */
+const candidateMemo = new Map<number, GrandShaft | null>();
+const shaftMemo = new Map<number, GrandShaft | null>();
+const coverMemo = new Map<number, GrandShaft | null>();
 let memoSeed = NaN;
-const MEMO_LIMIT = 256;
+const MEMO_LIMIT = 4096;
+/** cell の値域(キーの下位 20 ビット)。cell は ±2^19 の範囲で一意 */
+const CELL_KEY_SPAN = 1048576;
 
-/** 列バンド band・cell グループ group の大昇降機。置かれない組では null */
-export function grandShaftAt(seed: number, band: number, group: number): GrandShaft | null {
-  if (seed !== memoSeed) {
-    memo.clear();
-    memoSeed = seed;
-  }
-  const key = band * 1048576 + group;
-  const hit = memo.get(key);
-  if (hit !== undefined) return hit;
-  const s = computeGrand(seed, band, group);
+function memoKey(band: number, cell: number): number {
+  return band * CELL_KEY_SPAN + mod(cell, CELL_KEY_SPAN);
+}
+
+function checkSeed(seed: number): void {
+  if (seed === memoSeed) return;
+  candidateMemo.clear();
+  shaftMemo.clear();
+  coverMemo.clear();
+  memoSeed = seed;
+}
+
+function remember(memo: Map<number, GrandShaft | null>, key: number, s: GrandShaft | null): GrandShaft | null {
   if (memo.size >= MEMO_LIMIT) memo.clear();
   memo.set(key, s);
   return s;
+}
+
+function candidateAt(seed: number, band: number, startCell: number): GrandShaft | null {
+  const key = memoKey(band, startCell);
+  const hit = candidateMemo.get(key);
+  if (hit !== undefined) return hit;
+  return remember(candidateMemo, key, computeCandidate(seed, band, startCell));
+}
+
+/**
+ * 列バンド band で開始 cell が startCell の大昇降機。置かれない組では null。
+ * 同じバンドで上に始まる候補が startCell まで届いていれば棄却する(並行の 2 本目を生やさない)
+ */
+export function grandShaftAt(seed: number, band: number, startCell: number): GrandShaft | null {
+  checkSeed(seed);
+  const key = memoKey(band, startCell);
+  const hit = shaftMemo.get(key);
+  if (hit !== undefined) return hit;
+  let s = candidateAt(seed, band, startCell);
+  for (let c = startCell - GRAND_LOOKBACK_CELLS; s && c < startCell; c++) {
+    const above = candidateAt(seed, band, c);
+    if (above && above.endCell >= startCell) s = null;
+  }
+  return remember(shaftMemo, key, s);
+}
+
+/**
+ * 列バンド band で層 cell を貫く(cell が開始 cell〜終わりの cell に入る)大昇降機。無ければ null。
+ * 下の層の側から「上から来ているシャフト」を決定論で引く入口。並行の棄却により持ち主は高々 1 本
+ */
+export function grandShaftCovering(seed: number, band: number, cell: number): GrandShaft | null {
+  checkSeed(seed);
+  const key = memoKey(band, cell);
+  const hit = coverMemo.get(key);
+  if (hit !== undefined) return hit;
+  let found: GrandShaft | null = null;
+  for (let c = cell; c >= cell - GRAND_LOOKBACK_CELLS && !found; c--) {
+    const s = grandShaftAt(seed, band, c);
+    if (s && s.endCell >= cell) found = s;
+  }
+  return remember(coverMemo, key, found);
 }
 
 /** 行 y が貫く板の中か */
@@ -413,9 +524,9 @@ export function grandShaftTileAt(seed: number, s: GrandShaft, x: number, y: numb
   return null;
 }
 
-/** 大昇降機のタイル(属さなければ null)。外形はバンドとグループの内側に収まるので 1 組だけを引けば足りる */
+/** 大昇降機のタイル(属さなければ null)。外形はバンドの内側に収まり、バンドの中で cell を貫くのは高々 1 本 */
 export function grandTileAt(seed: number, x: number, y: number, cell: number = biomeCellAt(seed, y)): Tile | null {
-  const s = grandShaftAt(seed, Math.floor(x / GRAND_BAND_WIDTH), Math.floor(cell / GRAND_GROUP_CELLS));
+  const s = grandShaftCovering(seed, Math.floor(x / GRAND_BAND_WIDTH), cell);
   return s ? grandShaftTileAt(seed, s, x, y, cell) : null;
 }
 
@@ -424,12 +535,13 @@ export function grandShaftsNear(seed: number, x: number, y: number, rx: number, 
   const out: GrandShaft[] = [];
   const b0 = Math.floor((x - rx) / GRAND_BAND_WIDTH);
   const b1 = Math.floor((x + rx) / GRAND_BAND_WIDTH);
-  const g0 = Math.floor(biomeCellAt(seed, Math.floor(y - ry)) / GRAND_GROUP_CELLS);
-  const g1 = Math.floor(biomeCellAt(seed, Math.floor(y + ry)) / GRAND_GROUP_CELLS);
-  for (let g = g0; g <= g1; g++) {
-    for (let band = b0; band <= b1; band++) {
-      const s = grandShaftAt(seed, band, g);
-      if (!s) continue;
+  const c0 = biomeCellAt(seed, Math.floor(y - ry));
+  const c1 = biomeCellAt(seed, Math.floor(y + ry));
+  for (let band = b0; band <= b1; band++) {
+    for (let c = c0; c <= c1; c++) {
+      const s = grandShaftCovering(seed, band, c);
+      // 同じシャフトは貫く cell の数だけ引ける(メモが溢れて作り直されても id は同じ)
+      if (!s || out.some((o) => o.id === s.id)) continue;
       const b = s.bounds;
       if (b.x1 > x - rx && b.x0 < x + rx && b.y1 > y - ry && b.y0 < y + ry) out.push(s);
     }
@@ -442,6 +554,13 @@ export function grandLampAt(seed: number, s: GrandShaft, wy: number): boolean {
   if (wy <= s.yTop - SHAFT_DOOR_ROWS || wy >= s.yBottom) return false;
   if (mod(wy - s.yTop, GRAND_LAMP_EVERY) !== GRAND_LAMP_EVERY / 2) return false;
   return grandShaftTileAt(seed, s, s.x0 - 1, wy) === TILE.SOLID;
+}
+
+/** 行 wy より下にある途中駅の数(貫く板のうち上面が wy より下のもの)。深度標識の目盛りに使う */
+export function grandStationsBelow(s: GrandShaft, wy: number): number {
+  let n = 0;
+  for (const p of s.plates) if (p.top > wy) n++;
+  return n;
 }
 
 /** 途中駅の設備の位置(識別子・中心 X・床の行)。識別子は補給キャッシュ・端末の既存の集合にそのまま入る */
