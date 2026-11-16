@@ -44,6 +44,7 @@ import { TILE, type Tile } from './tiles';
  *   (worldgen の合成で、大昇降機の SOLID が板の HARD に当たる位置は HARD を残す)。
  * - 眺望区間: 一定間隔(GRAND_VISTA_EVERY)で両側の壁を GRAND_VISTA_ROWS 行ぶん抜き、外へ GRAND_VISTA_REACH 列の
  *   張り出し(床と庇)を彫る。空気の背後には遠景(超構造のシルエット)が透けて見える。板・停止階の近くには置かない。
+ * - 灯: GRAND_LAMP_EVERY 行ごと。貫く板の内側だけ GRAND_LAMP_PLATE_EVERY 行ごとに間引く(2.21 §B-1)。
  * - 速さ: 足場は GRAND_SPEED(通常の昇降機は 5 のまま)。乗っていない足場(呼び戻し)は GRAND_CALL_SPEED で動く。
  *
  * 幾何(x0 は内側の左端列、yTop / yBottom は上下の停止階の床の行):
@@ -93,6 +94,11 @@ export const GRAND_VISTA_REACH = 12;
 export const GRAND_VISTA_CLEAR = 8;
 /** 灯の列の間隔(行)。灯は両側の壁の内側の面、間隔の半分の位相の行に置く */
 export const GRAND_LAMP_EVERY = 12;
+/**
+ * 貫く板の内側での灯の間隔(行)。板の中だけ 3 つに 1 つへ間引き、通過に暗転の一拍を作る(2.21 §B-1、裁定 J7)。
+ * 板を抜けた先は GRAND_LAMP_EVERY に戻る
+ */
+export const GRAND_LAMP_PLATE_EVERY = 36;
 /** 途中駅(板ごと)に設備(休憩所・端末・補給)が付く割合 */
 export const GRAND_AMENITY_RATE = 0.5;
 /** 孔からの離れ(外形の端まで)。前室の芯(梯子の抑止・連続床)と界面の縦坑・見晴らし台・大穴を避ける */
@@ -549,11 +555,94 @@ export function grandShaftsNear(seed: number, x: number, y: number, rx: number, 
   return out;
 }
 
-/** 行 wy に灯があるか(両側の壁の内側の面。壁が固体の行だけ。焼き込みの装飾と灯の矩形が共有する) */
+/**
+ * 行 wy に灯があるか(両側の壁の内側の面。壁が固体の行だけ。焼き込みの装飾と灯の矩形が共有する)。
+ * 板の外は GRAND_LAMP_EVERY 行ごと。貫く板の内側 [top, bottom) では GRAND_LAMP_PLATE_EVERY 行ごとに間引く:
+ * 板の中で最初の灯の行を残し、そこから 36 行ごと(従来の灯の 3 つに 1 つ)。位相を板ごとに取るので、
+ * 厚さ 32 行の板でも必ず 1 つは残る(真っ暗にはしない)
+ */
 export function grandLampAt(seed: number, s: GrandShaft, wy: number): boolean {
   if (wy <= s.yTop - SHAFT_DOOR_ROWS || wy >= s.yBottom) return false;
-  if (mod(wy - s.yTop, GRAND_LAMP_EVERY) !== GRAND_LAMP_EVERY / 2) return false;
+  const phase = GRAND_LAMP_EVERY / 2;
+  if (mod(wy - s.yTop, GRAND_LAMP_EVERY) !== phase) return false;
+  for (const p of s.plates) {
+    if (wy < p.top || wy >= p.bottom) continue;
+    // 板の中で最初の灯の行(p.top 以上で位相の合う最小の行)
+    const firstLamp = p.top + mod(s.yTop + phase - p.top, GRAND_LAMP_EVERY);
+    if ((wy - firstLamp) % GRAND_LAMP_PLATE_EVERY !== 0) return false;
+    break;
+  }
   return grandShaftTileAt(seed, s, s.x0 - 1, wy) === TILE.SOLID;
+}
+
+/** 板の行範囲(grandPlateCrossing の入力、y0 <= y1)。足場の上面 t が y0 < t < y1 のとき板の内側 */
+export interface GrandPlateRange {
+  cell: number;
+  y0: number;
+  y1: number;
+}
+
+/** 板を横切ったイベント: 板の行範囲へ入った(enter)/抜けた(exit) */
+export interface GrandPlateEvent {
+  type: 'enter' | 'exit';
+  cell: number;
+}
+
+/** シャフトが貫く板の行範囲(上面〜下面) */
+export function grandPlateRanges(s: GrandShaft): GrandPlateRange[] {
+  return s.plates.map((p) => ({ cell: p.cell, y0: p.top, y1: p.bottom }));
+}
+
+/** 足場の上面 t と板の位置関係: 0 = 上(t <= y0)、1 = 内側、2 = 下(t >= y1)。境界ちょうど(停止階)は外 */
+function plateSide(t: number, p: GrandPlateRange): 0 | 1 | 2 {
+  return t <= p.y0 ? 0 : t >= p.y1 ? 2 : 1;
+}
+
+/**
+ * 足場の上面が prevTop から top へ動いたときに横切った板のイベント(2.21 §B-1)。移動の順に並ぶ:
+ * 下りは上の板から、上りは下の板から。1 ステップで板を丸ごとまたげば、その板の enter・exit を続けて返す。
+ * 板の内側から内側、外から外(同じ側)へ動いただけなら何も返さない。板の上面・下面ちょうどは外に数えるので、
+ * 板の上面の途中駅から下りはじめた瞬間が enter、上りでそこへ着いた瞬間が exit になる。
+ * 足場の上面だけを見る純粋関数(カメラのズーム・先行とは無関係)
+ */
+export function grandPlateCrossing(prevTop: number, top: number, plates: readonly GrandPlateRange[]): GrandPlateEvent[] {
+  const out: GrandPlateEvent[] = [];
+  if (top === prevTop) return out;
+  const down = top > prevTop;
+  const ordered = [...plates].sort((a, b) => (down ? a.y0 - b.y0 : b.y0 - a.y0));
+  for (const p of ordered) {
+    const from = plateSide(prevTop, p);
+    const to = plateSide(top, p);
+    if (from === to) continue;
+    if (from !== 1) out.push({ type: 'enter', cell: p.cell });
+    if (to !== 1) out.push({ type: 'exit', cell: p.cell });
+  }
+  return out;
+}
+
+/**
+ * 板 cell を抜けた先の層の cell(階層字幕に出す層)。板 cell の上面は層 cell−1 の底、下面は層 cell の頭なので、
+ * 下りなら cell、上りなら cell−1
+ */
+export function grandCrossingEnteredCell(cell: number, down: boolean): number {
+  return down ? cell : cell - 1;
+}
+
+/** 足場の上面 top が終端(上端 yTop・下端 yBottom の停止階)にちょうど止まっているか。途中駅・移動中は偽(2.21 §B-3) */
+export function isTerminalStop(s: { yTop: number; yBottom: number }, top: number): boolean {
+  return top === s.yTop || top === s.yBottom;
+}
+
+/** 終端まわりの敵除外の半径(タイル、チェビシェフ距離。2.21 §B-3、裁定 J6) */
+export const GRAND_TERMINAL_GUARD = 24;
+
+/**
+ * 終端(上端・下端)の乗り場の中心。乗り場は停止階の行の [landL, landR](シャフトの内側を挟んで両側)で、
+ * 中心 X はその中点。y は停止階の床の行(休憩点の保護点と同じ流儀)
+ */
+export function grandTerminalPoints(s: GrandShaft): { x: number; y: number }[] {
+  const x = (s.landL + s.landR + 1) / 2;
+  return [{ x, y: s.yTop }, { x, y: s.yBottom }];
 }
 
 /** 行 wy より下にある途中駅の数(貫く板のうち上面が wy より下のもの)。深度標識の目盛りに使う */

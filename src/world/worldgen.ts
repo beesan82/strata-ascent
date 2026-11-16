@@ -8,6 +8,7 @@ import { landmarkTileAt } from './landmark';
 import { restPointTileAt } from './restpoint';
 import { elevatorTileAt } from './elevator';
 import { grandTileAt } from './grandShaft';
+import { pillarTileAt } from './pillar';
 import { terrainProfileFor } from './biomeTerrain';
 import { hash2, valueNoise2 } from './noise';
 import { CHUNK_SIZE, isSolid, TILE, type Tile } from './tiles';
@@ -111,9 +112,17 @@ function noiseTileWith(seed: number, x: number, y: number, cell: number, mods: T
  * 最後に、素の躯体の 2 タイル段差へ中間段を足す(設計 2026-11-09-steps-and-light §2、stairAt)。
  */
 export function tileAt(seed: number, x: number, y: number): Tile {
-  const t = composeTile(seed, x, y);
+  return steppedTileAt(seed, x, y, true);
+}
+
+/**
+ * 合成(composeTileCore)の結果へ中間段を足したタイル。withPillar で巨柱の段の有無を選ぶ。
+ * 段の近傍も同じ withPillar で合成する(最終タイルは柱あり、柱なし地形は柱なしの近傍だけを見る)
+ */
+function steppedTileAt(seed: number, x: number, y: number, withPillar: boolean): Tile {
+  const t = composeTileCore(seed, x, y, withPillar);
   if (t !== TILE.AIR || !composedPlain) return t;
-  return stairAt((ax, ay) => plainTileAt(seed, ax, ay), x, y) ? TILE.SOLID : TILE.AIR;
+  return stairAt((ax, ay) => plainTileAt(seed, ax, ay, withPillar), x, y) ? TILE.SOLID : TILE.AIR;
 }
 
 /** 段を足す前の合成(tileAt から中間段を除いたもの)。テストが段の差分を調べるために使う */
@@ -133,6 +142,20 @@ export const STAIR_CLAIMED = 255;
 
 /** 合成の本体(優先順位は tileAt のコメント)。返す前に composedPlain を立てる */
 function composeTile(seed: number, x: number, y: number): Tile {
+  return composeTileCore(seed, x, y, true);
+}
+
+/**
+ * 柱なし地形の最終タイル(巨柱の採択判定と到達可能性の検証が読む土台)。
+ * tileAt から巨柱の段だけを除いたもので、それ以外の優先順位は最終タイルと同じ。
+ * 素の躯体の 2 タイル段差へ足す中間段(stairAt)も含む。段の近傍は柱なしの合成で読むため、
+ * 柱の帯に接する位置では tileAt と段の有無が食い違いうる(柱が無かった場合の地形を返す)
+ */
+export function baseTileAt(seed: number, x: number, y: number): Tile {
+  return steppedTileAt(seed, x, y, false);
+}
+
+function composeTileCore(seed: number, x: number, y: number, withPillar: boolean): Tile {
   composedPlain = false;
   const iface = interfaceTileAt(seed, x, y);
   const lm = landmarkTileAt(seed, x, y);
@@ -167,14 +190,31 @@ function composeTile(seed: number, x: number, y: number): Tile {
   // 大広間・大構造・メガ施設・前室とは配置の段階で重ならない
   const elev = elevatorTileAt(seed, x, y, cell);
   if (elev !== null) return overlay === TILE.LADDER ? TILE.LADDER : elev;
+  // 巨柱(2.21 §A-3): 合成の段は大昇降機の直後。配置の段階で前室・休憩点・大広間・昇降機・
+  // 大構造とは重ならないよう棄却してあるため、ここで残りの段より後に判定しても結果は変わらない。
+  // 施設・幹線のオーバーレイの梯子は柱の中でも残す(既存の上昇路を切らない)
+  if (withPillar) {
+    // 採択判定の土台は柱なし地形の最終タイル(中間段込み、baseTileAt と同じ)。柱なし側は
+    // この分岐に入らないので再入は 1 段で止まる。composedPlain は土台の合成で書き換わるため退避する
+    const savedPlain = composedPlain;
+    const pt = pillarTileAt(seed, x, y, (gx, gy) => steppedTileAt(seed, gx, gy, false));
+    if (pt !== null) {
+      composedPlain = false;
+      return overlay === TILE.LADDER ? TILE.LADDER : pt;
+    }
+    composedPlain = savedPlain;
+  }
   if (overlay != null) return overlay;
   composedPlain = !carved;
   return base;
 }
 
-/** 段の判定に使う見え方: 素の躯体ならそのタイル、保護構造に属するなら STAIR_CLAIMED */
-function plainTileAt(seed: number, x: number, y: number): number {
-  const t = composeTile(seed, x, y);
+/**
+ * 段の判定に使う見え方: 素の躯体ならそのタイル、保護構造に属するなら STAIR_CLAIMED。
+ * withPillar は合成に巨柱の段を含めるか(既定は最終タイルと同じ柱あり)
+ */
+function plainTileAt(seed: number, x: number, y: number, withPillar = true): number {
+  const t = composeTileCore(seed, x, y, withPillar);
   return composedPlain ? t : STAIR_CLAIMED;
 }
 

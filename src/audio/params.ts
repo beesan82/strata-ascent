@@ -90,6 +90,15 @@ export function nearestPlateDistance(seed: number, y: number): number {
 export const PASSAGE_FREQ = 110;
 export const PASSAGE_DECAY = 1.8;
 
+/**
+ * 大昇降機の終端の一打(2.21 §B-3): 通過音と同じ作りを 1 オクターブ下・長い減衰・半分の音量で鳴らす。
+ * 立ち上がりは通過音(膨らむ 0.35 秒)より短くして「一打」にする
+ */
+export const TERMINAL_FREQ = PASSAGE_FREQ / 2;
+export const TERMINAL_DECAY = 2.5;
+export const TERMINAL_GAIN_MUL = 0.5;
+export const TERMINAL_ATTACK = 0.03;
+
 /** ボス予備動作の警告音: 短い矩形波の下降チャープ(Hz、秒)。音量は控えめに抑える */
 export const WARN_FREQ_START = 880;
 export const WARN_FREQ_END = 587;
