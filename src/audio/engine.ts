@@ -10,7 +10,7 @@ import {
   HURT_FREQ_END, HURT_FREQ_START, HURT_GAIN, HURT_SECONDS,
   JUMP_FREQ_END, JUMP_FREQ_START, JUMP_GAIN, JUMP_SECONDS,
   LADDER_FREQ_A, LADDER_FREQ_B, LADDER_GAIN, LADDER_SECONDS, landGain, LAND_NOISE_HZ, LAND_SECONDS,
-  MASTER_DB, PASSAGE_DECAY, PASSAGE_FREQ,
+  MASTER_DB, PASSAGE_DECAY, PASSAGE_FREQ, TERMINAL_ATTACK, TERMINAL_DECAY, TERMINAL_FREQ, TERMINAL_GAIN_MUL,
   PULSE_FREQ_END, PULSE_FREQ_START, PULSE_GAIN, PULSE_SECONDS, pulseDetune,
   REVIVE_DELAY, REVIVE_GAIN, REVIVE_NOTE_GAP, REVIVE_NOTES,
   CACHE_GAIN, CACHE_HZ_END, CACHE_HZ_START, CACHE_SECONDS,
@@ -53,7 +53,7 @@ import { AMBIENT_LOOPS, EAT_SAMPLES, FOOTSTEP_SAMPLES, HIT_SAMPLES, LADDER_SAMPL
  * - ドローン: 層のバイオームごとに倍音の OscillatorNode の組 1 つ。層が変わればクロスフェード(0.4 秒)。
  *   界面に近づくと基音 + 0.7 Hz の正弦波が足されてうなる(interfaceBeat)。
  * - 足音: 60 ms のノイズバースト(バンドパス 900 Hz)を dry と convolver の両方へ。残響長は開放度(6 段)。
- * - 通過音: 110 Hz の正弦波を 1.8 秒で指数減衰。
+ * - 通過音: 110 Hz の正弦波を 1.8 秒で指数減衰。大昇降機の終端の一打(grandTerminal)は同じ作りの 55 Hz・2.5 秒・半分の音量。
  * - 光柱のハム: 2200 Hz の正弦波 + 7 Hz の LFO、距離で減衰(beaconHum の値を受ける)。
  * - 重粒子砲: 溜め中は比率で pitch とゲインが上がる唸り(鋸波 + 微デチューン、ローパス連動)を
  *   保持し、比率が 0 に戻れば短いリリースで止める。発射音(cannonFire)はサブ正弦波の pitch 落下 +
@@ -1134,18 +1134,31 @@ export class AudioEngine {
 
   /** 通過音(見晴らし台に出た瞬間): 倍音パッドがフィルタを開きながら膨らむ「抜けた」音 */
   passage(): void {
+    this.passageVoice(PASSAGE_FREQ, PASSAGE_DECAY, 1, 0.35);
+  }
+
+  /**
+   * 大昇降機の終端の一打(2.21 §B-3): 通過音と同じ作りを 1 オクターブ下(55 Hz)・減衰 2.5 秒・音量 0.5 倍で。
+   * 乗ったまま上端・下端の停止階に着いた瞬間に main が 1 回呼ぶ(途中駅では呼ばない)
+   */
+  grandTerminal(): void {
+    this.passageVoice(TERMINAL_FREQ, TERMINAL_DECAY, TERMINAL_GAIN_MUL, TERMINAL_ATTACK);
+  }
+
+  /** 通過音の作り(倍音パッド + 開くローパス + 薄いノイズ)。基音・減衰・音量の倍率・立ち上がりだけを変えて共用する */
+  private passageVoice(freq: number, seconds: number, gainMul: number, attack: number): void {
     if (!this.ctx) return;
     this.voice({
       layers: [
-        { type: 'sine', from: PASSAGE_FREQ, gain: 0.8 },
-        { type: 'sine', from: PASSAGE_FREQ * 1.5, gain: 0.4 },
-        { type: 'sine', from: PASSAGE_FREQ * 2, gain: 0.3 },
+        { type: 'sine', from: freq, gain: 0.8 },
+        { type: 'sine', from: freq * 1.5, gain: 0.4 },
+        { type: 'sine', from: freq * 2, gain: 0.3 },
       ],
       filter: { type: 'lowpass', from: 250, to: 1500, q: 0.6 },
-      noise: { gain: 0.03, type: 'bandpass', from: 600, to: 1400, q: 0.8, seconds: PASSAGE_DECAY },
-      seconds: PASSAGE_DECAY,
-      gain: PASSAGE_GAIN * 0.8,
-      attack: 0.35,
+      noise: { gain: 0.03, type: 'bandpass', from: 600, to: 1400, q: 0.8, seconds },
+      seconds,
+      gain: PASSAGE_GAIN * 0.8 * gainMul,
+      attack,
       wet: 0.7,
     });
   }

@@ -17,7 +17,11 @@ import {
 } from './entities/elevator';
 import { Builder, BUILDER_H, BUILDER_W } from './entities/builder';
 import { elevatorsNear, SHAFT_DOOR_ROWS, shaftBounds } from './world/elevator';
-import { grandAmenitySpots, grandShaftBounds, grandShaftsNear, type GrandAmenitySpot, type GrandShaft } from './world/grandShaft';
+import {
+  GRAND_TERMINAL_GUARD, grandAmenitySpots, grandCrossingEnteredCell, grandPlateCrossing, grandPlateRanges, grandShaftBounds,
+  grandShaftsNear, grandTerminalPoints, isTerminalStop, type GrandAmenitySpot, type GrandShaft,
+} from './world/grandShaft';
+import { GrandRideTracker } from './world/grandRide';
 import {
   canonicalRun,
   chooseBuilder,
@@ -80,10 +84,12 @@ import { CHUNK_SIZE, TILE } from './world/tiles';
 import { DEBRIS_TTL } from './render/beamShape';
 import { addKillBurst, advanceKillBursts, killKey, type KillBurst, type KillKind } from './render/killFx';
 import { poseMotionOf, poseMuzzleWorld } from './render/playerPose';
-import { findSpawn, isHardAt } from './world/worldgen';
+import { baseTileAt, findSpawn, isHardAt } from './world/worldgen';
+import { pillarsInRect, type Pillar } from './world/pillar';
 import { sampleOpenness, targetZoomForOpenness, nextZoomStep, advanceZoom } from './core/zoom';
 import { lookahead } from './core/stick';
 import { PickupLog } from './core/pickupLog';
+import { LAMP_ON_SEC, LAMP_PERIOD_SEC, signalLampsInRect, type SignalLamp } from './render/decor';
 import {
   initialSatiety,
   MAX_RATIONS,
@@ -300,6 +306,19 @@ let tram: TramTrack | null = null;
 let tramX = 0;
 /** プレイヤーが上面に立っている足場の ID(前ステップの着地解決で決まる。昇降機は shaft.id、トラムは軌道 ID) */
 let ridingId: string | null = null;
+/**
+ * 大昇降機の余韻(2.21 §B-1・§B-3)。
+ * - 板の通過の合図(入った瞬間の通過音・抜けた瞬間の階層字幕)は、板ごと(シャフト ID + 板の cell)に
+ *   GRAND_PLATE_COOLDOWN 秒は再発火しない。時刻は通過音と字幕で共有する(板の中で折り返してすぐ出たときは出さない)。
+ *   板の厚さ 32 行 ÷ 足場の速さ 3 = 約 10.7 秒 > 8 秒なので、通り抜けでは通過音と字幕の両方が出る
+ * - 見晴らし台の自動眺望が同じ cell で字幕を出した直後(同じ秒数以内)は、板の合図を出さない
+ * - 乗車ログ: 同じ大昇降機に連続して 100 タイル以上乗って降りた瞬間に、取得ログへ 1 行
+ */
+const GRAND_PLATE_COOLDOWN = 8;
+const grandPlateCueAt = new Map<string, number>();
+let lastAutoViewCell: number | null = null;
+let lastAutoViewAt = -Infinity;
+const grandRide = new GrandRideTracker();
 /** 近傍の建設者(最大 1 体)。敵の配列とは別に持ち、命中判定・接触ダメージの対象にしない */
 let builder: { spawnId: string; builder: Builder } | null = null;
 /** 建設者をそのまま保つ距離(タイル)。これより離れたら選び直す */
@@ -399,6 +418,39 @@ function dropRemainsOnDeath(): void {
 }
 
 /** プレイヤー近傍の地形を走査して敵の出現集合を更新する(倒していない敵は範囲を離れると再出現する) */
+/**
+ * 床ランから巨柱の穴の帯(乗り場〜トンネル〜乗り場)を切り取る(2.21 §A-3)。
+ * 帯の前後に 1 列の余白を置き、残った断片が床ランの最小長(5)未満なら捨てる。
+ * 切り方はランの左端と帯だけで決まるため決定的(スポーン ID の揺れは無い)
+ */
+function splitRunsAtPillars(runs: readonly FloorRun[], pillars: readonly Pillar[]): FloorRun[] {
+  if (pillars.length === 0) return [...runs];
+  const bands = pillars.flatMap((p) => p.doors.map((d) => ({ y: d, x0: p.landL - 1, x1: p.landR + 1 })));
+  if (bands.length === 0) return [...runs];
+  const out: FloorRun[] = [];
+  for (const run of runs) {
+    let pieces: { x: number; len: number }[] = [{ x: run.x, len: run.len }];
+    for (const band of bands) {
+      if (band.y !== run.floorY) continue;
+      const next: { x: number; len: number }[] = [];
+      for (const piece of pieces) {
+        const px1 = piece.x + piece.len;
+        if (band.x1 <= piece.x || band.x0 >= px1) {
+          next.push(piece);
+          continue;
+        }
+        if (band.x0 > piece.x) next.push({ x: piece.x, len: band.x0 - piece.x });
+        if (band.x1 < px1) next.push({ x: band.x1, len: px1 - band.x1 });
+      }
+      pieces = next;
+    }
+    for (const piece of pieces) {
+      if (piece.len >= 5) out.push({ x: piece.x, floorY: run.floorY, len: piece.len });
+    }
+  }
+  return out;
+}
+
 function refreshEnemies(): void {
   const cell = biomeCellAt(seed, Math.floor(player.body.y));
   const layer = layerNumber(seed, cell);
@@ -409,17 +461,31 @@ function refreshEnemies(): void {
   const cy = Math.floor(player.centerY);
   const wx0 = cx - ENEMY_SCAN_X;
   const wx1 = cx + ENEMY_SCAN_X;
-  const runs = findFloorRuns(tiles, wx0, cy - ENEMY_SCAN_Y, wx1, cy + ENEMY_SCAN_Y);
+  const runsRaw = findFloorRuns(tiles, wx0, cy - ENEMY_SCAN_Y, wx1, cy + ENEMY_SCAN_Y);
+  // 巨柱(2.21 §A-3): 敵・補給・端末・インフラは柱の外形・トンネル・乗り場に出さない。
+  // 穴の行の床ランは乗り場の帯(梯子列〜梯子列)で切り取り、本体の矩形は広間と同じ
+  // 除外矩形として各選定へ渡す
+  const pillarsNear = pillarsInRect(seed, wx0, wx1, cy - ENEMY_SCAN_Y, cy + ENEMY_SCAN_Y, (gx, gy) => baseTileAt(seed, gx, gy));
+  const pillarRects = pillarsNear.map((p) => ({ x0: p.x0, x1: p.x0 + p.w, y0: p.yTop, y1: p.yBottom + 1 }));
+  const runs = splitRunsAtPillars(runsRaw, pillarsNear);
   // 窓の端で切れた床ランを本来の端へ揃える(設計 2026-11-11-enemy-stability §1)。敵とインフラ(建設者・端末)の
   // 選定はこれを使い、スポーン ID(ランの左端)とラン内の位置(ランの長さ)が窓の位置で揺れないようにする
   const canon = runs.map((r) => canonicalRun(tiles, r, wx0, wx1));
   const rp = nearestRestPoint(seed, player.centerX, player.centerY);
+  // 大昇降機(設計 2026-11-12-mega-structures): 近傍のシャフトは保護点(終端)と途中駅の設備の両方で使うので先に引く
+  grandShafts = grandShaftsNear(seed, player.centerX, player.centerY, ELEVATOR_SCAN_X, ELEVATOR_SCAN_Y);
   const protectedPoints = [
     { x: spawn.x, y: spawn.y, r: 10 },
     { x: rp.x, y: rp.floorY, r: 20 },
   ];
-  // スキャン範囲に重なるセルの大広間(砲台・飛行敵の除外とキャッシュの除外で共用)
-  const halls = [];
+  // 大昇降機の終端(2.21 §B-3、裁定 J6): 上端・下端の乗り場の中心から 24 タイルは敵を出さない(降りた後の余韻)。
+  // 保護点は補給・武器庫の選定にも効く(休憩点の保護点と同じ副作用として受ける。計画書の裁定)
+  for (const g of grandShafts) {
+    for (const t of grandTerminalPoints(g)) protectedPoints.push({ x: t.x, y: t.y, r: GRAND_TERMINAL_GUARD });
+  }
+  // スキャン範囲に重なるセルの大広間(砲台・飛行敵の除外とキャッシュの除外で共用)。
+  // 巨柱の本体も同じ除外矩形に並べる
+  const halls = [...pillarRects];
   const cellMin = biomeCellAt(seed, cy - ENEMY_SCAN_Y);
   const cellMax = biomeCellAt(seed, cy + ENEMY_SCAN_Y);
   for (let c = cellMin; c <= cellMax; c++) {
@@ -475,8 +541,8 @@ function refreshEnemies(): void {
   // 選択は粘着(設計 2026-11-10 armory-stability §1): 前回の選択が未開封で保持半径内なら、
   // 窓の境界をまたいで候補から外れても維持する(箱が跳んだり消えたりして見えるのを防ぐ)
   // 大昇降機(設計 2026-11-12-mega-structures): 途中駅の補給は床ランの選定とは別の決定的な位置で、
-  // 近くにあれば同じ候補に並べる(近傍に最大 1 個の規則と開封済みの差し引きは既存のまま)
-  grandShafts = grandShaftsNear(seed, player.centerX, player.centerY, ELEVATOR_SCAN_X, ELEVATOR_SCAN_Y);
+  // 近くにあれば同じ候補に並べる(近傍に最大 1 個の規則と開封済みの差し引きは既存のまま。
+  // grandShafts はこの関数の保護点の構築の前に引き直してある)
   const nearSpot = (p: GrandAmenitySpot) => Math.hypot(p.x - player.centerX, p.floorY - player.centerY) <= GRAND_AMENITY_RADIUS;
   const caches = [
     ...chooseSupplyCaches(seed, runs, protectedPoints, halls, claimedSupplyCaches),
@@ -580,7 +646,15 @@ function stepCarriers(s: PlayerInput, dt: number): void {
     const dy = next.top - e.top;
     if (dy === 0) continue;
     if (riding && carryRider(pb, 0, dy, tiles, dy < 0) === 'stalled') continue;
+    const prevTop = e.top;
     e.top = next.top;
+    // 大昇降機に乗っているときだけ: 板の通過の合図と、終端の一打(2.21 §B-1・§B-3)。
+    // 足場の上面の移動だけで決まる(カメラのズーム・先行では発火しない)。呼び戻しの到着では鳴らさない
+    const grand = riding ? grandShafts.find((g) => g.id === e.shaft.id) : undefined;
+    if (grand) {
+      cueGrandPlates(grand, prevTop, e.top);
+      if (next.arrived && isTerminalStop(grand, e.top)) audio.grandTerminal();
+    }
     if (next.arrived) {
       e.target = null;
       // 到着の小さな合図: 既存の着地音を鳴る最小の強さで相乗り(崖つかみと同じ)。乗っているか近いときだけ
@@ -593,6 +667,32 @@ function stepCarriers(s: PlayerInput, dt: number): void {
     const dx = nx - tramX;
     if (dx !== 0 && free && ridingId === tram.id) carryRider(pb, dx, 0, tiles, false);
     tramX = nx;
+  }
+}
+
+/**
+ * 大昇降機の足場の上面が prevTop から top へ動いたときの、板の通過の合図(2.21 §B-1)。乗っているときだけ呼ぶ。
+ * 板に入った瞬間に既存の通過音を 1 音、板を抜けた瞬間に既存の階層字幕(見晴らし台と同じ文言・保持 2 秒・
+ * フェード 0.5 秒)。字幕の層は入った先: 板の cell を c として、下りなら c、上りなら c−1。
+ * 地区名の併記の条件も見晴らし台と同じ(地区が変わったとき、または大界面)
+ */
+function cueGrandPlates(g: GrandShaft, prevTop: number, top: number): void {
+  const down = top > prevTop;
+  for (const ev of grandPlateCrossing(prevTop, top, grandPlateRanges(g))) {
+    const key = `${g.id}|${ev.cell}`;
+    if (simTime - (grandPlateCueAt.get(key) ?? -Infinity) < GRAND_PLATE_COOLDOWN) continue;
+    if (lastAutoViewCell === ev.cell && simTime - lastAutoViewAt < GRAND_PLATE_COOLDOWN) continue;
+    grandPlateCueAt.set(key, simTime);
+    if (ev.type === 'enter') {
+      audio.passage();
+      continue;
+    }
+    const entered = grandCrossingEnteredCell(ev.cell, down);
+    const left = down ? ev.cell - 1 : ev.cell;
+    const great = isGreatInterface(ev.cell);
+    const districtChanged = biomeIdForCell(seed, entered) !== biomeIdForCell(seed, left);
+    const district = districtChanged || great ? districtNameForCell(seed, entered) : undefined;
+    caption.show(captionText(layerNumber(seed, entered), great, district), simTime);
   }
 }
 
@@ -727,6 +827,38 @@ if (persistenceEnabled) {
   window.addEventListener('pagehide', saveNow);
 }
 const camera = new Camera(player.centerX, player.centerY);
+
+// 標識灯(2.21 §A-2): 配置は seed の純関数なので、32 タイルブロックごとに引いてキャッシュする。
+// 視野の周辺ブロックだけを都度引き、プレイヤーに近い順に上限 4 個を fx へ渡す
+const lampBlockCache = new Map<string, SignalLamp[]>();
+function lampsForFx(): { x: number; y: number; color: string; on: boolean; dead: boolean }[] {
+  const bx0 = Math.floor((camera.x - 48) / 32);
+  const bx1 = Math.floor((camera.x + 48) / 32);
+  const by0 = Math.floor((camera.y - 32) / 32);
+  const by1 = Math.floor((camera.y + 32) / 32);
+  const all: SignalLamp[] = [];
+  for (let bx = bx0; bx <= bx1; bx++) {
+    for (let by = by0; by <= by1; by++) {
+      const key = `${bx},${by}`;
+      let lamps = lampBlockCache.get(key);
+      if (!lamps) {
+        lamps = signalLampsInRect(seed, bx * 32, bx * 32 + 31, by * 32, by * 32 + 31);
+        lampBlockCache.set(key, lamps);
+        if (lampBlockCache.size > 600) lampBlockCache.clear();
+      }
+      all.push(...lamps);
+    }
+  }
+  const d2 = (l: SignalLamp): number => (l.x - player.centerX) ** 2 + (l.y - player.centerY) ** 2;
+  all.sort((a, b) => d2(a) - d2(b));
+  return all.slice(0, 4).map((l) => ({
+    x: l.x,
+    y: l.y,
+    color: l.color,
+    on: !l.dead && ((simTime + l.phase) % LAMP_PERIOD_SEC) < LAMP_ON_SEC,
+    dead: l.dead,
+  }));
+}
 const input = new Input();
 installTouchControls(input, () => toggleItemBox()); // タッチ端末でのみ画面ボタンが出る(それ以外は何もしない)。箱ボタンはアイテムボックスの開閉
 const renderer = new Renderer(canvas, seed);
@@ -1143,6 +1275,12 @@ function update(dt: number): void {
   const prevBottom = player.body.y + player.body.h;
   player.update(s, dt, tiles);
   resolvePlatforms(prevBottom);
+  // 乗車ログ(2.21 §B-3): 大昇降機に連続して 100 タイル以上乗って降りた瞬間に、取得ログへ 1 行
+  const grandRiding = ridingId !== null && grandShafts.some((g) => g.id === ridingId)
+    ? elevators.find((e) => e.shaft.id === ridingId)
+    : undefined;
+  const rideNotice = grandRide.update(grandRiding ? { shaftId: grandRiding.shaft.id, top: grandRiding.top } : null);
+  if (rideNotice) pickupLog.pushNotice(rideNotice, simTime);
   // ジャンプ・着地・梯子の音(§6.7): 物理の遷移から拾う(ゲームの数値・判定には触らない)。
   // ノックバックの跳ね上がりはジャンプと誤認しないよう knocked 中は除く
   const groundedNow = player.body.onGround;
@@ -1235,6 +1373,9 @@ function update(dt: number): void {
     const district = districtChanged || great ? districtNameForCell(seed, entered) : undefined;
     caption.show(captionText(layerNumber(seed, entered), great, district), simTime);
     audio.passage(); // 通過音(§6.7): 見晴らし台に出た瞬間に 1 音
+    // 大昇降機の板の合図(2.21 §B-1)と重ねないよう、眺望字幕の cell と時刻を残す
+    lastAutoViewCell = cell;
+    lastAutoViewAt = simTime;
   }
   view = next;
   // カメラ先行(視線 = 照準方向): 狙った先が画面に入るよう、照準方向へ中心を寄せる。
@@ -1872,6 +2013,7 @@ function frame(now: number): void {
           }]
         : [],
       terminals: terminal ? [{ x: terminal.x, floorY: terminal.floorY, read: readTerminals.has(terminal.id) }] : [],
+      lamps: lampsForFx(),
     },
     // 室内の暗さ(設計 2026-11-11-light-occlusion-ambient §2): ズーム用の開放度(時間平滑済み)をそのまま渡す
     openness: opennessEma ?? undefined,

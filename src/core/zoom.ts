@@ -1,8 +1,8 @@
 import { isSolid } from '../world/tiles';
 
-/** ズーム下限(最大ズームアウト)。0.5 = 標準の2倍のタイルが横に入る(≒横88タイル) */
+/** ズーム下限(最大ズームアウト)。0.5 = 標準の2倍のタイルが横に入る(内部幅 427 px ÷ 15 px で ≒横 57 タイル) */
 export const MIN_ZOOM = 0.5;
-/** ズーム上限(標準表示。横44タイル) */
+/** ズーム上限(標準表示。内部幅 427 px ÷ タイル 15 px で横 約 28.5 タイル) */
 export const MAX_ZOOM = 1;
 /**
  * 眺望専用の段(§6.4)。targetZoomForOpenness は [MIN_ZOOM, MAX_ZOOM] にクランプするので

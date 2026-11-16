@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { BIOME_IDS, biomeCellAt, biomeIdForCell } from '../world/biomeCells';
-import { GRAND_LAMP_EVERY, grandLampAt, grandShaftAt, grandStationsBelow, type GrandShaft } from '../world/grandShaft';
-import { CHUNK_SIZE } from '../world/tiles';
+import {
+  GRAND_LAMP_EVERY, GRAND_LAMP_PLATE_EVERY, grandLampAt, grandShaftAt, grandShaftTileAt, grandStationsBelow, type GrandShaft,
+} from '../world/grandShaft';
+import { CHUNK_SIZE, TILE } from '../world/tiles';
 import {
   decorateChunk, GRAND_MARKER_EVERY, GRAND_MARKER_MAX_TICKS, GRAND_MARKER_PHASE, GRAND_VISTA_VARIANTS, grandShaftOps,
   grandVistaVariant, type DecorOp,
@@ -34,6 +36,20 @@ function opsAlong(seed: number, s: GrandShaft, wy0: number, wy1: number): { op: 
     for (const op of ops) out.push({ op, bx: cx * CHUNK_SIZE, by: cy * CHUNK_SIZE });
   }
   return out;
+}
+
+/** 行 [wy0, wy1) のうち、灯の位相(GRAND_LAMP_EVERY 行ごと、間隔の半分)に当たる行 */
+function lampPhaseRows(s: GrandShaft, wy0: number, wy1: number): number[] {
+  const out: number[] = [];
+  for (let wy = wy0; wy < wy1; wy++) {
+    if (((wy - s.yTop) % GRAND_LAMP_EVERY + GRAND_LAMP_EVERY) % GRAND_LAMP_EVERY === GRAND_LAMP_EVERY / 2) out.push(wy);
+  }
+  return out;
+}
+
+/** 行 wy が貫く板の内側 [top, bottom) か */
+function inAnyPlate(s: GrandShaft, wy: number): boolean {
+  return s.plates.some((p) => wy >= p.top && wy < p.bottom);
 }
 
 describe('大昇降機の焼き込み装飾', () => {
@@ -84,6 +100,67 @@ describe('大昇降機の焼き込み装飾', () => {
     expect(above.length).toBeGreaterThan(0);
     expect(below.length).toBeGreaterThan(0);
     expect(above[0]).not.toBe(below[0]);
+    // 板の内側(2.21 §B-1): 残る行(3 つに 1 つ)には灯の装飾があり、間引かれた行には無い
+    const inside = lampPhaseRows(s, p.top, p.bottom);
+    expect(inside.length).toBeGreaterThan(1);
+    inside.forEach((wy, i) => expect(seen.has(wy)).toBe(i % 3 === 0));
+    // 焼き込まれた灯の行は grandLampAt の行と過不足なく一致する(板の外は従来どおり)
+    for (let wy = s.yTop - 3; wy < s.yBottom; wy++) expect(seen.has(wy)).toBe(grandLampAt(seed, s, wy));
+  });
+
+  it('板の内側の灯は 36 行ごと: 板の中で最初の灯の行を残し、3 つに 1 つへ間引く', () => {
+    const { seed, s } = firstGrand();
+    expect(GRAND_LAMP_PLATE_EVERY).toBe(GRAND_LAMP_EVERY * 3);
+    expect(s.plates.length).toBeGreaterThan(0);
+    for (const p of s.plates) {
+      const rows = lampPhaseRows(s, p.top, p.bottom);
+      // 厚さ 32 行以上の板には、従来の灯の行(12 行ごと)が 2 つ以上入る
+      expect(rows.length).toBeGreaterThan(1);
+      const kept = rows.filter((wy) => grandLampAt(seed, s, wy));
+      expect(kept).toEqual(rows.filter((_, i) => i % 3 === 0));
+      // 残った灯どうしの間隔は 36 行。真っ暗にはしない(板ごとに 1 つ以上残る)
+      expect(kept.length).toBeGreaterThan(0);
+      for (let i = 1; i < kept.length; i++) expect(kept[i] - kept[i - 1]).toBe(GRAND_LAMP_PLATE_EVERY);
+      // 間引かれた行(従来は灯があった行)には灯が無い
+      const thinned = rows.filter((_, i) => i % 3 !== 0);
+      expect(thinned.length).toBeGreaterThan(0);
+      for (const wy of thinned) expect(grandLampAt(seed, s, wy)).toBe(false);
+    }
+  });
+
+  it('板の外の灯は 12 行ごとのまま: 位相の行で壁が固体なら必ず灯がある(板を抜けた先で戻る)', () => {
+    const { seed, s } = firstGrand();
+    let lit = 0;
+    for (let wy = s.yTop - 3; wy < s.yBottom; wy++) {
+      if (inAnyPlate(s, wy)) continue;
+      const phase = ((wy - s.yTop) % GRAND_LAMP_EVERY + GRAND_LAMP_EVERY) % GRAND_LAMP_EVERY === GRAND_LAMP_EVERY / 2;
+      const want = phase && wy > s.yTop - 3 && grandShaftTileAt(seed, s, s.x0 - 1, wy) === TILE.SOLID;
+      expect(grandLampAt(seed, s, wy)).toBe(want);
+      if (want) lit++;
+    }
+    expect(lit).toBeGreaterThan(0);
+    // 板の上面の直前・下面の直後の位相の行は、板の間引きの対象にならない(板の行範囲の外)
+    for (const p of s.plates) {
+      const before = lampPhaseRows(s, p.top - GRAND_LAMP_EVERY, p.top)[0];
+      const after = lampPhaseRows(s, p.bottom, p.bottom + GRAND_LAMP_EVERY)[0];
+      for (const wy of [before, after]) {
+        expect(grandLampAt(seed, s, wy)).toBe(grandShaftTileAt(seed, s, s.x0 - 1, wy) === TILE.SOLID);
+      }
+    }
+  });
+
+  it('板の中の灯の数は従来の 3 分の 1(切り上げ)になり、シャフト全体の灯の位相は変わらない', () => {
+    const { seed, s } = firstGrand();
+    for (const p of s.plates) {
+      const rows = lampPhaseRows(s, p.top, p.bottom);
+      const kept = rows.filter((wy) => grandLampAt(seed, s, wy));
+      expect(kept.length).toBe(Math.ceil(rows.length / 3));
+    }
+    // 灯のある行は、板の内外を問わず従来の位相(12 行ごと、間隔の半分)の行だけ
+    for (let wy = s.yTop - 3; wy < s.yBottom; wy++) {
+      if (!grandLampAt(seed, s, wy)) continue;
+      expect(((wy - s.yTop) % GRAND_LAMP_EVERY + GRAND_LAMP_EVERY) % GRAND_LAMP_EVERY).toBe(GRAND_LAMP_EVERY / 2);
+    }
   });
 
   it('decorateChunk にシャフトの装飾が載る(描画パスは足さず既存の装飾リストへ相乗り)', () => {

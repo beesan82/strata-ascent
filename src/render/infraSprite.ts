@@ -18,6 +18,11 @@ export interface InfraFx {
   builders: readonly { x: number; y: number; w: number; h: number; dir: 1 | -1 }[];
   /** 端末。x は柱の中心、floorY は床の行、read は読んだ後(画面を暗くする) */
   terminals: readonly { x: number; floorY: number; read: boolean }[];
+  /**
+   * 標識灯(2.21 §A-2)。x・y は灯の中心、color は地区の accent、on はこのフレームで
+   * 点灯しているか(周期と位相の判定は呼び出し側)、dead は点かない灯(台座だけ描く)
+   */
+  lamps: readonly { x: number; y: number; color: string; on: boolean; dead: boolean }[];
 }
 
 /** ワールド → 内部バッファの変換(renderer の renderCam と同じ式) */
@@ -184,5 +189,17 @@ export function drawInfra(ctx: CanvasRenderingContext2D, m: ScreenMap, fx: Infra
     wrect(ctx, m, lx0, top + 0.45, lx0 + 0.3, top + 0.75);
     ctx.fillStyle = '#c7d0ce';
     wrect(ctx, m, lx0 + 0.06, top + 0.51, lx0 + 0.24, top + 0.69);
+  }
+
+  // 標識灯(2.21 §A-2): 台座の暗い矩形は常時、点灯は平坦な矩形 2 枚(2×1px と 1×1px 相当)。
+  // lighter は使わない。色は灯のある地区の accent をそのまま使う(新しい色は足さない)
+  for (const l of fx.lamps) {
+    if (offscreen(m, l.x - 0.2, l.y - 0.2, l.x + 0.2, l.y + 0.2)) continue;
+    ctx.fillStyle = '#14161c';
+    wrect(ctx, m, l.x - 0.15, l.y + 0.06, l.x + 0.15, l.y + 0.15);
+    if (l.dead || !l.on) continue;
+    ctx.fillStyle = l.color;
+    wrect(ctx, m, l.x - 0.14, l.y - 0.04, l.x + 0.14, l.y + 0.04);
+    wrect(ctx, m, l.x - 0.07, l.y - 0.13, l.x + 0.07, l.y - 0.04);
   }
 }

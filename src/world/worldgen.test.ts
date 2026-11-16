@@ -289,7 +289,8 @@ describe('孔の到達可能性', () => {
 
 describe('tileAt 合成(段階2)', () => {
   it('施設が無い座標では tileAt は noiseTileAt と一致する', () => {
-    for (const [x, y] of [[0, 0], [63, -8], [200, -520], [-40, 130]] as const) {
+    // 座標は巨柱の帯の外から選ぶ(帯の中は柱の埋め立てで SOLID になり、ノイズと一致しない)。
+    for (const [x, y] of [[0, 0], [63, -8], [200, -520], [150, 130]] as const) {
       expect(tileAt(42, x, y)).toBe(noiseTileAt(42, x, y));
     }
   });
