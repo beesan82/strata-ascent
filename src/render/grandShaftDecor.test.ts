@@ -1,18 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { BIOME_IDS, biomeCellAt, biomeIdForCell } from '../world/biomeCells';
-import { GRAND_LAMP_EVERY, grandLampAt, grandShaftAt, type GrandShaft } from '../world/grandShaft';
+import { GRAND_LAMP_EVERY, grandLampAt, grandShaftAt, grandStationsBelow, type GrandShaft } from '../world/grandShaft';
 import { CHUNK_SIZE } from '../world/tiles';
-import { decorateChunk, grandShaftOps, type DecorOp } from './decor';
+import {
+  decorateChunk, GRAND_MARKER_EVERY, GRAND_MARKER_MAX_TICKS, GRAND_MARKER_PHASE, GRAND_VISTA_VARIANTS, grandShaftOps,
+  grandVistaVariant, type DecorOp,
+} from './decor';
 import { GRAND_SHAFT_COLORS, grandLampColor, grandVistaColor } from './grandShaftColors';
 import { GRAND_VISTA_ALPHA, grandShaftLightsInView } from './landmarkLight';
 
-/** 最初に見つかる大昇降機(world/grandShaft.test.ts と同じ走査範囲の一部) */
+let first: { seed: number; s: GrandShaft } | null = null;
+/** 最初に見つかる大昇降機(world/grandShaft.test.ts と同じ走査範囲。列バンド × 開始 cell) */
 function firstGrand(): { seed: number; s: GrandShaft } {
+  if (first) return first;
   for (const seed of [1, 42, 20260711, 7, 99]) {
-    for (const g of [-2, -1, 0, 1]) {
-      for (let band = -3; band <= 3; band++) {
-        const s = grandShaftAt(seed, band, g);
-        if (s) return { seed, s };
+    for (let band = -3; band <= 3; band++) {
+      for (let c = -30; c < 30; c++) {
+        const s = grandShaftAt(seed, band, c);
+        if (s) return (first = { seed, s });
       }
     }
   }
@@ -88,6 +93,63 @@ describe('大昇降機の焼き込み装飾', () => {
     const ops = decorateChunk(seed, cx, cy);
     expect(ops.some((op) => op.kind === 'rect' && op.color === GRAND_SHAFT_COLORS.rail)).toBe(true);
     expect(ops.some((op) => op.kind === 'line' && op.color === GRAND_SHAFT_COLORS.cable)).toBe(true);
+  });
+
+  it('深度標識の目盛りはこの先の途中駅の数(上限つき)で、降りるほど減る', () => {
+    const { seed, s } = firstGrand();
+    // 標識の板の行 → 目盛りの本数
+    const ticks = new Map<number, number>();
+    const boards = new Set<number>();
+    for (const { op, by } of opsAlong(seed, s, s.yTop - 3, s.yBottom)) {
+      if (op.kind !== 'rect') continue;
+      if (op.color === GRAND_SHAFT_COLORS.marker) boards.add(Math.round(op.y + by - 0.3));
+    }
+    for (const { op, by } of opsAlong(seed, s, s.yTop - 3, s.yBottom)) {
+      if (op.kind !== 'rect' || op.color !== GRAND_SHAFT_COLORS.markerTick) continue;
+      const wy = [...boards].find((b) => op.y + by >= b && op.y + by < b + 3);
+      expect(wy).toBeDefined();
+      ticks.set(wy!, (ticks.get(wy!) ?? 0) + 1);
+    }
+    expect(boards.size).toBeGreaterThan(2);
+    const rows = [...boards].sort((a, b) => a - b);
+    let prev = Infinity;
+    for (const wy of rows) {
+      expect(((wy - s.yTop - GRAND_MARKER_PHASE) % GRAND_MARKER_EVERY + GRAND_MARKER_EVERY) % GRAND_MARKER_EVERY).toBe(0);
+      // チャンク境界をまたぐ標識は上下のチャンクで同じ目盛りが 2 回出るので、本数は 1 枚ぶんに割って見る
+      const n = ticks.get(wy) ?? 0;
+      const want = Math.min(grandStationsBelow(s, wy), GRAND_MARKER_MAX_TICKS);
+      expect(n === want || n === want * 2).toBe(true);
+      expect(want).toBeLessThanOrEqual(prev);
+      prev = want;
+    }
+  });
+
+  it('眺望区間の変種は決定論で、長いシャフトでは複数の変種が現れる', () => {
+    const { seed, s } = firstGrand();
+    const kinds = new Set<number>();
+    for (const vy of s.vistas) {
+      const v = grandVistaVariant(seed, s, vy);
+      expect(v).toBe(grandVistaVariant(seed, s, vy));
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThan(GRAND_VISTA_VARIANTS);
+      kinds.add(v);
+    }
+    expect(kinds.size).toBeGreaterThan(1);
+    // 渡り桁の変種の区間には渡り桁の装飾が載る
+    const vy = s.vistas.find((y) => grandVistaVariant(seed, s, y) === 1);
+    if (vy !== undefined) {
+      const found = opsAlong(seed, s, vy - 12, vy + 1).some(({ op }) => op.kind === 'rect' && op.color === GRAND_SHAFT_COLORS.gantry);
+      expect(found).toBe(true);
+    }
+  });
+
+  it('貫く板ごとに通過帯が載る(板の上面の行)', () => {
+    const { seed, s } = firstGrand();
+    for (const p of s.plates.slice(0, 3)) {
+      const bands = opsAlong(seed, s, p.top - 1, p.top + 2)
+        .filter(({ op, by }) => op.kind === 'rect' && op.color === GRAND_SHAFT_COLORS.plateBand && Math.abs(op.y + by - (p.top + 0.1)) < 1e-9);
+      expect(bands.length).toBeGreaterThan(0);
+    }
   });
 });
 

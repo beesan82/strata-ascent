@@ -28,6 +28,16 @@ export const GRAND_SHAFT_COLORS = {
   stencil: mixHex(STEEL.bayEdge, STEEL.railTop, 0.45),
   /** 壁の縦配管(地区の pipes で密度が変わる) */
   pipe: mixHex(STEEL.rib, STEEL.hanger, 0.6),
+  /** 板の通過帯(貫く板の上面・下面の行で背面に引く警戒の縞) */
+  plateBand: mixHex('#b8923e', STEEL.shadow, 0.4),
+  /** 深度標識の板(壁の内側の面) */
+  marker: mixHex(STEEL.black, STEEL.bayEdge, 0.55),
+  /** 深度標識の目盛り(この先の途中駅の数) */
+  markerTick: mixHex('#caa64a', STEEL.railTop, 0.6),
+  /** 眺望区間の渡り桁(張り出しの上を横切る梁) */
+  gantry: mixHex(STEEL.shadow, STEEL.flange, 0.5),
+  /** 眺望区間の垂れケーブル */
+  droop: mixHex(STEEL.hanger, STEEL.black, 0.35),
 } as const;
 
 /** 灯の基準色(淡い白熱)。地区の accent へ寄せて、通過する地区の境目で灯の色が切り替わる */

@@ -4,7 +4,7 @@ import {
   ANTECHAMBER_DEPTH, ANTECHAMBER_FADE, ANTECHAMBER_HALF_WIDTH, interfaceBottom, interfaceTop, nearestPassage,
 } from '../world/interface';
 import {
-  GRAND_VISTA_REACH, GRAND_VISTA_ROWS, grandLampAt, grandShaftsNear, grandShaftTileAt,
+  GRAND_VISTA_REACH, GRAND_VISTA_ROWS, grandLampAt, grandShaftsNear, grandShaftTileAt, grandStationsBelow,
   type GrandShaft,
 } from '../world/grandShaft';
 import { hash2 } from '../world/noise';
@@ -440,6 +440,22 @@ const GRAND_WALL_BLOCK = 4;
 const GRAND_RUST_RATE = 0.3;
 const GRAND_STENCIL_RATE = 0.12;
 const GRAND_PIPE_RATE = 0.6;
+/**
+ * 深度標識の間隔と位相(行、上の停止階から)。3 タイル/秒で約 40 秒ごとに 1 枚。位相は灯の行(12 の半分の位相)と
+ * 筋交いの交点を避ける。目盛りは「この先(下)の途中駅の数」で、上限 GRAND_MARKER_MAX_TICKS
+ */
+export const GRAND_MARKER_EVERY = 120;
+export const GRAND_MARKER_PHASE = 60;
+export const GRAND_MARKER_MAX_TICKS = 6;
+/** 板の通過帯の間隔(行)。板の上面・下面の行と、厚い板(大界面)ではその間にもこの間隔で引く */
+export const GRAND_PLATE_BAND_EVERY = 32;
+/** 眺望区間の変種: 0 = 手すりだけ、1 = 渡り桁、2 = 垂れケーブル */
+export const GRAND_VISTA_VARIANTS = 3;
+
+/** 眺望区間 vy の変種(シャフトと床の行の hash で決める) */
+export function grandVistaVariant(seed: number, s: GrandShaft, vy: number): number {
+  return Math.floor(hash2(seed + 9681, s.x0, vy) * GRAND_VISTA_VARIANTS);
+}
 
 /**
  * 大昇降機の焼き込み装飾(設計 2026-11-12-mega-structures「乗っている間の景色」)。純粋関数。
@@ -449,6 +465,9 @@ const GRAND_PIPE_RATE = 0.6;
  * - 壁の内側の面に地区の色の帯(grandWallTint)を引き、壁の 4 行ブロックごとに地区バイアスの表
  *   (sceneryProfileFor の rust / stencil / pipes)で錆筋・ステンシル・配管を引く。板の上面で地区が切り替わる。
  * - 眺望区間は手すりと庇の縁、停止階は乗り場の縁の注意帯、休憩所のある途中駅は暖色の灯 3 つ。
+ * - 長い乗車の変化(2.20 原作準拠スケール): 眺望区間ごとに変種(手すりだけ・渡り桁・垂れケーブル)、
+ *   GRAND_MARKER_EVERY 行ごとの深度標識(この先の途中駅の数の目盛り。降りるほど減る)、貫く板の行の通過帯
+ *   (背面の警戒の縞。厚い大界面ほど本数が多い)。どれも既存の装飾リストへの相乗りで、描画パスは足さない。
  * 判定はすべてシャフトの幾何と世界座標の行で決め、チャンクの範囲 [by−2, by+66) に掛かる分だけ出すので
  * チャンク境界で食い違わない(はみ出しは焼き込みでクリップされる)。
  */
@@ -541,6 +560,55 @@ function grandOpsFor(ops: DecorOp[], seed: number, s: GrandShaft, bx: number, by
         ops.push({ kind: 'line', x1: X(px), y1: Y(vy - 0.85), x2: X(px), y2: Y(vy), w: 0.06, color: GRAND_SHAFT_COLORS.sill });
       }
       ops.push({ kind: 'line', x1: X(a), y1: Y(vy - GRAND_VISTA_ROWS + 0.05), x2: X(b), y2: Y(vy - GRAND_VISTA_ROWS + 0.05), w: 0.1, color: GRAND_SHAFT_COLORS.sill });
+      const variant = grandVistaVariant(seed, s, vy);
+      if (variant === 1) {
+        // 渡り桁: 庇の 2.5 行下を横切る梁と、庇から梁への吊り材(4 列ごと)
+        const gy = vy - GRAND_VISTA_ROWS + 2.5;
+        ops.push({ kind: 'rect', x: X(a), y: Y(gy), w: b - a, h: 0.35, color: GRAND_SHAFT_COLORS.gantry });
+        for (let hx = a + 2; hx < b; hx += 4) {
+          ops.push({ kind: 'line', x1: X(hx), y1: Y(vy - GRAND_VISTA_ROWS), x2: X(hx), y2: Y(gy), w: 0.06, color: GRAND_SHAFT_COLORS.gantry });
+        }
+      } else if (variant === 2) {
+        // 垂れケーブル: 庇の下に弛んだケーブル 2 本(折れ線)
+        for (const [dy, sag] of [[0.6, 2.2], [1.4, 1.5]] as const) {
+          const cy = vy - GRAND_VISTA_ROWS + dy;
+          const midX = (a + b) / 2;
+          ops.push({
+            kind: 'poly',
+            pts: [X(a), Y(cy), X((a + midX) / 2), Y(cy + sag * 0.75), X(midX), Y(cy + sag), X((midX + b) / 2), Y(cy + sag * 0.75), X(b), Y(cy)],
+            w: 0.06,
+            color: GRAND_SHAFT_COLORS.droop,
+          });
+        }
+      }
+    }
+  }
+  // 深度標識: 内側の背面の中央(2 本のケーブルの間)に板 1 枚と、この先(下)の途中駅の数の目盛り
+  // (0 なら終点の注意帯)。壁は床帯の行ごとに出入口が空くので、背面に掛けて間隔を崩さない
+  const mx = s.x0 + W / 2 - 0.45;
+  const m0 = s.yTop + GRAND_MARKER_PHASE + Math.max(0, Math.ceil((ry0 - 3 - s.yTop - GRAND_MARKER_PHASE) / GRAND_MARKER_EVERY)) * GRAND_MARKER_EVERY;
+  for (let wy = m0; wy < ry1 && wy + 3 < s.yBottom; wy += GRAND_MARKER_EVERY) {
+    ops.push({ kind: 'rect', x: X(mx), y: Y(wy + 0.3), w: 0.9, h: 2.5, color: GRAND_SHAFT_COLORS.marker });
+    const n = Math.min(grandStationsBelow(s, wy), GRAND_MARKER_MAX_TICKS);
+    if (n === 0) {
+      ops.push({ kind: 'rect', x: X(mx + 0.15), y: Y(wy + 2.3), w: 0.6, h: 0.25, color: GRAND_SHAFT_COLORS.stationEdge });
+    }
+    for (let i = 0; i < n; i++) {
+      ops.push({ kind: 'rect', x: X(mx + 0.2), y: Y(wy + 0.5 + i * 0.36), w: 0.5, h: 0.18, color: GRAND_SHAFT_COLORS.markerTick });
+    }
+  }
+  // 板の通過帯: 貫く板の上面・下面の行(厚い板はその間にも)で、内側の背面に帯と斜めの縞
+  for (const p of s.plates) {
+    if (p.bottom < ry0 - 1 || p.top > ry1 + 1) continue;
+    const rows: number[] = [];
+    for (let wy = p.top; wy < p.bottom - 1; wy += GRAND_PLATE_BAND_EVERY) rows.push(wy + 0.1);
+    rows.push(p.bottom - 0.4);
+    for (const yb of rows) {
+      if (yb < ry0 - 1 || yb > ry1 + 1) continue;
+      ops.push({ kind: 'rect', x: X(s.x0), y: Y(yb), w: W, h: 0.3, color: GRAND_SHAFT_COLORS.plateBand });
+      for (let i = 0; i < W; i++) {
+        ops.push({ kind: 'line', x1: X(s.x0 + i + 0.15), y1: Y(yb + 0.3), x2: X(s.x0 + i + 0.45), y2: Y(yb), w: 0.08, color: GRAND_SHAFT_COLORS.housing });
+      }
     }
   }
   // 停止階: 乗り場の縁の注意帯(壁の出入口の両脇)

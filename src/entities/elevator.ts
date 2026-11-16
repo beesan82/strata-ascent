@@ -15,9 +15,14 @@ import type { Platform } from './platform';
  * - 大昇降機(設計 2026-11-12-mega-structures、world/grandShaft)も同じ仕組みを使う。停止階の列(stops)・
  *   幅(width)・呼び戻しの X 範囲(landX0/landX1)を持つシャフトとして扱い、持たない通常の昇降機は
  *   上下 2 つの停止階・幅 SHAFT_WIDTH・乗り場 LANDING_REACH の既定で読む。
+ * - 速さ(2.20 原作準拠スケール 2026-11-16): シャフトが speed を持てばその速さ(大昇降機は 3)、無ければ
+ *   ELEVATOR_SPEED。callSpeed を持つシャフトでは、乗り手のいない足場(呼び戻し・降りた後の残りの移動)は
+ *   その速さで動く(数千タイルの呼び戻しで何十分も待たせないため)。通常の昇降機はどちらも持たず従来どおり。
+ * - 初めて出会ったときの位置: 既定は下の停止階。大昇降機は main がプレイヤーの行を渡し、最寄りの停止階に置く
+ *   (4800 タイル下の最下端から呼ぶことにならないように)。
  */
 
-/** 足場の速さ(タイル/秒) */
+/** 足場の速さ(タイル/秒)。シャフトが speed を持たないときの既定 */
 export const ELEVATOR_SPEED = 5;
 
 /** 足場が動くシャフト(通常の昇降機 ElevatorShaft と大昇降機 GrandShaft の共通部分) */
@@ -36,6 +41,16 @@ export interface LiftShaft {
   /** 呼び戻しの X 範囲 [landX0, landX1](既定は壁の外 LANDING_REACH 列まで) */
   landX0?: number;
   landX1?: number;
+  /** 足場の速さ(タイル/秒。既定 ELEVATOR_SPEED) */
+  speed?: number;
+  /** 乗り手のいない足場の速さ(既定は speed と同じ) */
+  callSpeed?: number;
+}
+
+/** 足場の速さ。riding が偽なら乗り手のいない足場の速さ */
+export function liftSpeed(s: LiftShaft, riding: boolean): number {
+  const speed = s.speed ?? ELEVATOR_SPEED;
+  return riding ? speed : s.callSpeed ?? speed;
 }
 
 /** 内側の幅(= 足場の幅) */
@@ -56,9 +71,15 @@ export interface ElevatorState {
   target: number | null;
 }
 
-/** セッションで初めて出会ったときの状態: 下の停止階で止まっている */
-export function initialElevator(shaft: LiftShaft): ElevatorState {
-  return { shaft, top: shaft.yBottom, target: null };
+/**
+ * セッションで初めて出会ったときの状態: 下の停止階で止まっている。
+ * nearY を渡すと、その行に最も近い停止階で止まっている(同じ距離なら下の停止階)
+ */
+export function initialElevator(shaft: LiftShaft, nearY?: number): ElevatorState {
+  if (nearY === undefined) return { shaft, top: shaft.yBottom, target: null };
+  let best = shaft.yBottom;
+  for (const st of liftStops(shaft)) if (Math.abs(st - nearY) < Math.abs(best - nearY)) best = st;
+  return { shaft, top: best, target: null };
 }
 
 /** 足場の上面(運ぶ物理の Platform) */
@@ -118,12 +139,12 @@ export function commandElevator(e: ElevatorState, c: ElevatorControl): number | 
 
 /**
  * 1 ステップの移動: 次の上面の Y と到着したか。到着のときは上面を目標の行ちょうどに置く
- * (浮動小数の誤差で停止階の床面とずれないように)
+ * (浮動小数の誤差で停止階の床面とずれないように)。riding は乗り手がいるか(既定 true = 乗っているときの速さ)
  */
-export function advanceElevator(e: ElevatorState, dt: number): { top: number; arrived: boolean } {
+export function advanceElevator(e: ElevatorState, dt: number, riding = true): { top: number; arrived: boolean } {
   if (e.target === null) return { top: e.top, arrived: false };
   const d = e.target - e.top;
-  const m = ELEVATOR_SPEED * dt;
+  const m = liftSpeed(e.shaft, riding) * dt;
   if (Math.abs(d) <= m) return { top: e.target, arrived: true };
   return { top: e.top + Math.sign(d) * m, arrived: false };
 }

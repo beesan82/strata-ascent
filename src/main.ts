@@ -515,7 +515,9 @@ function refreshInfra(
   // (grandShafts は refreshEnemies が同じ範囲で引き直したもの)
   const shafts = elevatorsNear(seed, px, py, ELEVATOR_SCAN_X, ELEVATOR_SCAN_Y);
   const lifts: LiftShaft[] = [...shafts, ...grandShafts];
-  elevators = lifts.map((s) => elevators.find((e) => e.shaft.id === s.id) ?? initialElevator(s));
+  // 大昇降機の足場は初めて出会ったとき最寄りの停止階に置く(数千タイル下の最下端から呼ばせない)。通常の昇降機は従来どおり下端
+  const grandIds = new Set(grandShafts.map((g) => g.id));
+  elevators = lifts.map((s) => elevators.find((e) => e.shaft.id === s.id) ?? initialElevator(s, grandIds.has(s.id) ? py : undefined));
   const shaftRects = [...shafts.map(shaftBounds), ...grandShafts.map(grandShaftBounds)];
   grandRests = grandAmenitySpots(grandShafts, 'rest');
   const excluded: SpawnRect[] = [...halls, ...shaftRects];
@@ -573,7 +575,8 @@ function stepCarriers(s: PlayerInput, dt: number): void {
     const riding = free && ridingId === e.shaft.id;
     const callStop = !riding && free && pb.onGround ? elevatorCallStop(e.shaft, player.centerX, pb.y + pb.h) : null;
     e.target = commandElevator(e, { riding, up: s.up, down: s.down, callStop });
-    const next = advanceElevator(e, dt);
+    // 乗り手のいない足場は callSpeed(大昇降機の呼び戻し)で動く
+    const next = advanceElevator(e, dt, riding);
     const dy = next.top - e.top;
     if (dy === 0) continue;
     if (riding && carryRider(pb, 0, dy, tiles, dy < 0) === 'stalled') continue;
