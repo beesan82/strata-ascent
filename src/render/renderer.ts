@@ -108,11 +108,12 @@ export interface GravitonFx {
    *  turret は固定砲台(angle が照準方向)、w/h と bossPhase がある要素はボス(体格と相で描き分ける)。
    *  ポーズの入力(見た目だけに使う): 歩行敵は dir(進行方向)、飛行敵は vx/vy(速度)・chase(追尾中)・
    *  phase(個体の位相)、砲台は cooldown(次の発射までの秒)・aiming(狙えているか)。
-   *  broken は部位破壊(歩行敵の脚・飛行敵のローター・砲台のセンサー、設計 2026-11-12-action-overhaul §2) */
+   *  broken は部位破壊(歩行敵の脚・飛行敵のローター・砲台のセンサー、設計 2026-11-12-action-overhaul §2。
+   *  2.22 からボスの脚も)。damaged は部位の破損(歩行敵の脚・砲台のセンサーに 1 回当たった状態、2.22 §2) */
   enemies?: readonly {
     x: number; y: number; flash: boolean; flyer?: boolean; turret?: boolean; angle?: number;
     dir?: 1 | -1; vx?: number; vy?: number; chase?: boolean; phase?: number; cooldown?: number; aiming?: boolean;
-    broken?: boolean;
+    broken?: boolean; damaged?: boolean;
     w?: number; h?: number; bossPhase?: BossPhase; bossPhaseT?: number; bossDir?: 1 | -1;
   }[];
   /** ドロップ(ワールド座標の中心)。hidden は点滅の消灯側フレーム */
@@ -631,8 +632,19 @@ export class Renderer {
           }
           ctx.fillRect(x0, Math.round(top + bh / 2 - seamW / 2), bw, seamW);
           ctx.globalAlpha = 1;
-          ctx.fillStyle = '#3d2618';
+          // 足元の帯。脚破壊(2.22 §1)は焦げた暗色にし、後ろ寄りを 1 段欠いて、欠けの上に金の火花を明滅させる
+          // (歩行敵の脚破壊と同じ文法。時刻だけで決まる。矩形 2〜3 個で、新規パスなし)
+          ctx.fillStyle = e.broken ? '#16202b' : '#3d2618';
           ctx.fillRect(x0, bottom - band, bw, band);
+          if (e.broken) {
+            const gap = Math.max(2, Math.round(bw * 0.12));
+            const gx = Math.round(cx - (e.bossDir ?? 1) * bw * 0.2 - gap / 2);
+            ctx.fillRect(gx, bottom - band * 2, gap, band);
+            if (!e.flash && Math.floor(timeSec * 6) % 3 === 0) {
+              ctx.fillStyle = '#caa64a';
+              ctx.fillRect(gx, bottom - band * 3, Math.max(1, gap >> 1), band);
+            }
+          }
           // 目の灯(向き側の上部 1 点)。歩行敵と同じ文法で、フラッシュ中は色を反転して残す。
           // 予備動作中は pose の色(金→終盤は白)で明るくする
           const eye = Math.max(1, Math.round(0.16 * ppt));
@@ -658,7 +670,7 @@ export class Renderer {
         // 2.19 の大型化: スプライトは旧体格(0.9 四方)の寸法のまま、体格比の倍率を ppt に掛けて描く
         const broken = e.broken ?? false;
         if (e.turret) {
-          const pose = turretPose(e.cooldown ?? 1, e.aiming ?? false, timeSec);
+          const pose = turretPose(e.cooldown ?? 1, e.aiming ?? false, timeSec, (e.damaged ?? false) && !broken);
           drawTurret(ctx, sx, sy, ppt * TURRET_DRAW_SCALE, e.angle ?? 0, pose, e.flash, broken);
           continue;
         }
@@ -672,7 +684,7 @@ export class Renderer {
         }
         const dir = e.dir ?? 1;
         // 歩行位相も同じ倍率で割る(描く歩幅が倍率ぶん伸びるので、足を床に対して滑らせない)
-        const wPose = walkerPose(e.x / WALKER_DRAW_SCALE, dir, broken);
+        const wPose = walkerPose(e.x / WALKER_DRAW_SCALE, dir, broken, e.damaged ?? false);
         drawWalker(ctx, sx, sy, ppt * WALKER_DRAW_SCALE, dir, wPose, e.flash, broken);
       }
     }

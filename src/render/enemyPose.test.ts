@@ -5,6 +5,7 @@ import {
   flyerPose, kneeOf, turretPose, walkerPose, walkPhase,
   NAV_DUTY, NAV_HZ, TURRET_RECOIL_TIME, TURRET_WARN_WINDOW, WALKER_HIP_TO_GROUND, WALKER_STRIDE,
   WALKER_SWING, WALKER_THIGH, WALKER_LIMP_LURCH, WALKER_LIMP_SINK,
+  TURRET_DAMAGED_SPARK_DUTY, TURRET_DAMAGED_SPARK_HZ, WALKER_DAMAGED_SPARK_DUTY,
 } from './enemyPose';
 
 const PALETTE_LIGHTS = ['#5a3a24', '#9a6d32', '#caa64a', '#c7d0ce'];
@@ -202,7 +203,9 @@ describe('flyerPose(飛行ドローンのポーズ)', () => {
 
 describe('turretPose(固定砲台のポーズ)', () => {
   it('狙えていなければ警告 0・暗い灯・後退なし', () => {
-    expect(turretPose(0.1, false, 1)).toEqual({ warn: 0, lightColor: '#5a3a24', halo: false, recoil: 0 });
+    expect(turretPose(0.1, false, 1)).toEqual({
+      warn: 0, lightColor: '#5a3a24', halo: false, recoil: 0, damaged: false, spark: false,
+    });
     expect(turretPose(TURRET_FIRE_INTERVAL, false, 1).recoil).toBe(0);
   });
 
@@ -250,5 +253,55 @@ describe('turretPose(固定砲台のポーズ)', () => {
     expect(turretPose(TURRET_FIRE_INTERVAL - TURRET_RECOIL_TIME / 2, true, 0).recoil).toBeCloseTo(0.5);
     expect(turretPose(TURRET_FIRE_INTERVAL - TURRET_RECOIL_TIME, true, 0).recoil).toBe(0);
     expect(turretPose(0.3, true, 0).recoil).toBe(0);
+  });
+});
+
+describe('破損の描き分け(2.22、設計 2026-11-17-parts-overhaul §2)', () => {
+  it('歩行敵: 既定は破損なし。破損は damaged だけが立ち、歩き方(位相・沈み・脚)は健在と同じ', () => {
+    for (const x of [0, 0.37, 3.21, 12.5]) {
+      const healthy = walkerPose(x, 1);
+      const damaged = walkerPose(x, 1, false, true);
+      expect(healthy.damaged).toBe(false);
+      expect(healthy.spark).toBe(false);
+      expect(damaged.damaged).toBe(true);
+      expect(damaged.phase).toBe(healthy.phase);
+      expect(damaged.bob).toBe(healthy.bob);
+      expect(damaged.legs).toEqual(healthy.legs);
+    }
+  });
+
+  it('歩行敵: 火花は歩行位相の最初の WALKER_DAMAGED_SPARK_DUTY だけ灯る(時刻を使わず決定的)', () => {
+    const on = walkerPose(WALKER_STRIDE * (WALKER_DAMAGED_SPARK_DUTY / 2), 1, false, true);
+    const off = walkerPose(WALKER_STRIDE * (WALKER_DAMAGED_SPARK_DUTY + 0.1), 1, false, true);
+    expect(on.spark).toBe(true);
+    expect(off.spark).toBe(false);
+    expect(walkerPose(3.21, -1, false, true)).toEqual(walkerPose(3.21, -1, false, true));
+  });
+
+  it('歩行敵: 脚破壊が優先(壊れた後は damaged にならず、ポーズは脚破壊と同じ)', () => {
+    const both = walkerPose(3.21, 1, true, true);
+    expect(both.damaged).toBe(false);
+    expect(both.spark).toBe(false);
+    expect(both).toEqual(walkerPose(3.21, 1, true));
+  });
+
+  it('砲台: 破損は警告灯の読み(warn・色・暈・後退)を変えず、damaged だけが立つ', () => {
+    for (const aiming of [true, false]) {
+      for (let c = 0; c <= TURRET_FIRE_INTERVAL; c += 0.1) {
+        const a = turretPose(c, aiming, c * 7.3);
+        const b = turretPose(c, aiming, c * 7.3, true);
+        expect(a.damaged).toBe(false);
+        expect(a.spark).toBe(false);
+        expect(b.damaged).toBe(true);
+        expect({ ...b, damaged: false, spark: false }).toEqual(a);
+      }
+    }
+  });
+
+  it('砲台: 火花は時刻で明滅する(周期の最初の TURRET_DAMAGED_SPARK_DUTY だけ灯る)', () => {
+    const period = 1 / TURRET_DAMAGED_SPARK_HZ;
+    expect(turretPose(1, true, period * (TURRET_DAMAGED_SPARK_DUTY / 2), true).spark).toBe(true);
+    expect(turretPose(1, true, period * (TURRET_DAMAGED_SPARK_DUTY + 0.2), true).spark).toBe(false);
+    expect(turretPose(1, false, period * (TURRET_DAMAGED_SPARK_DUTY / 2), true).spark).toBe(true);
   });
 });

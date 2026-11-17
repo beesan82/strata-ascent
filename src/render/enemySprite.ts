@@ -49,7 +49,8 @@ function segment(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: numb
  * 歩行敵: 錆の胴(上蓋・パネルライン・暗い腹帯)+ 背のセンサー + 進行方向側の暗いバイザーと
  * 発光する金の目(淡色の芯)+ 関節付きの 2 本脚(奥は暗く、手前は茶)。
  * 基準体格(0.9 四方)の寸法で書き、上半分強を胴、下 1/3 を脚にする。
- * legsBroken(脚破壊)は奥の脚を焦げた暗色で引きずり、その付け根に金の火花を明滅させる
+ * legsBroken(脚破壊)は奥の脚を焦げた暗色で引きずり、その付け根に金の火花を明滅させる。
+ * pose.damaged(脚の破損、2.22 §2)は手前の脚の膝を焦げた暗色で欠き、pose.spark のフレームだけ膝に金の火花を出す
  */
 export function drawWalker(
   ctx: CanvasRenderingContext2D, sx: number, sy: number, ppt: number,
@@ -77,6 +78,16 @@ export function drawWalker(
     const fw = Math.max(legTh, Math.round(0.14 * ppt));
     const fl = Math.round(fx - (dir > 0 ? 0.04 * ppt : fw - 0.04 * ppt));
     ctx.fillRect(fl, Math.round(fy - legTh / 2), fw, legTh);
+    // 脚の破損(2.22 §2): 手前の脚の膝に焦げた欠け(脚より 1 px 大きい暗色)+ 明滅する金の火花
+    if (pose.damaged && i === 1) {
+      const c = legTh + 1;
+      ctx.fillStyle = '#16202b';
+      ctx.fillRect(Math.round(kx - c / 2), Math.round(ky - c / 2), c, c);
+      if (pose.spark && !flash) {
+        ctx.fillStyle = '#caa64a';
+        ctx.fillRect(Math.round(kx - c / 2 - dir * c), Math.round(ky - c / 2 - c), c, c);
+      }
+    }
   }
   const body = flash ? '#c7d0ce' : '#9a6d32';
   ctx.fillStyle = body;
@@ -179,7 +190,8 @@ export function drawFlyer(
 /**
  * 固定砲台: 2 段の台座(暗い足 + 暗青の首、鋲)+ 鋼の砲塔(上蓋・継ぎ目)+ 照準方向へ回る砲身
  * (発射直後に後退)+ 上蓋の警告灯(撃つ前に強まり、直前は白く灯って暈が出る)。
- * sensorBroken(センサー破壊)は警告灯の代わりに暗い割れ目と金の火花を描き、暈を出さない
+ * sensorBroken(センサー破壊)は警告灯の代わりに暗い割れ目と金の火花を描き、暈を出さない。
+ * pose.damaged(センサーの破損、2.22 §2)は警告灯を残したまま上蓋にひびと火花を足す
  */
 export function drawTurret(
   ctx: CanvasRenderingContext2D, sx: number, sy: number, ppt: number,
@@ -236,4 +248,15 @@ export function drawTurret(
   }
   ctx.fillStyle = pose.lightColor;
   rect(ctx, sx, sy, ppt, -0.08, -0.38, 0.08, -0.3);
+  if (pose.damaged) {
+    // センサーの破損(2.22 §2): 警告灯の脇から上蓋を斜めに下る暗いひび 2 段(破壊時の割れ目より細く、灯は残す)
+    // + pose.spark のフレームだけ、ひびの上に金の火花
+    ctx.fillStyle = '#16202b';
+    rect(ctx, sx, sy, ppt, 0.1, -0.38, 0.15, -0.32);
+    rect(ctx, sx, sy, ppt, 0.13, -0.32, 0.18, -0.26);
+    if (pose.spark && !flash) {
+      ctx.fillStyle = '#caa64a';
+      rect(ctx, sx, sy, ppt, 0.14, -0.44, 0.2, -0.38);
+    }
+  }
 }

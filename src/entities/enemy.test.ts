@@ -4,7 +4,10 @@ import {
   Walker, Flyer, nextFlyerMode, Boss, stepBossPhase, BOSS_HP, BOSS_BEAM_DAMAGE, type BossPhase,
   WALKER_W, WALKER_H, WALKER_HP, WALKER_LEG_HP, WALKER_SPEED, WALKER_LEGLESS_SPEED,
   FLYER_W, FLYER_HP, FLYER_ROTOR_HP, FLYER_CRAWL_SPEED,
+  BOSS_LEG_HP, BOSS_CHARGE_SPEED, BOSS_LEGLESS_CHARGE_SPEED, BOSS_STUN_TIME, BOSS_LEGLESS_STUN_TIME,
+  bossChargeSpeed, bossStunTime,
 } from './enemy';
+import { PART_EXPOSED_DAMAGE_MUL } from './parts';
 
 const noTiles = (): Tile => TILE.AIR;
 /** y=10 行が床(x は全面) */
@@ -40,10 +43,10 @@ describe('Walker(歩行敵)', () => {
     expect(w.dir).toBe(-1); // 端で折り返した
   });
 
-  it('3 発で倒れる(hit のたびに HP が減る)', () => {
+  it('本体 HP は 6 で、6 発で倒れる(2.22。hit のたびに HP が減る)', () => {
+    expect(WALKER_HP).toBe(6);
     const w = new Walker(0, 0, 1);
-    expect(w.hit(1)).toBe(false);
-    expect(w.hit(1)).toBe(false);
+    for (let i = 0; i < WALKER_HP - 1; i++) expect(w.hit(1)).toBe(false);
     expect(w.hit(1)).toBe(true);
     expect(w.dead).toBe(true);
   });
@@ -70,7 +73,7 @@ describe('Walker の大型化と脚の部位破壊(2.19、設計 2026-11-12-acti
     expect(WALKER_H).toBeLessThan(2);
   });
 
-  it('脚(下端の帯)への被弾 2 回で脚破壊。本体 HP 3 は減らない', () => {
+  it('脚(下端の帯)への被弾 2 回で脚破壊。本体 HP は減らない', () => {
     const w = standing();
     expect(WALKER_LEG_HP).toBe(2);
     const r1 = w.hitAt(1, legY(w));
@@ -91,7 +94,7 @@ describe('Walker の大型化と脚の部位破壊(2.19、設計 2026-11-12-acti
     expect(w.legHp).toBe(WALKER_LEG_HP);
   });
 
-  it('脚破壊後は下端への被弾も本体へ入り、3 発で倒れる', () => {
+  it('脚破壊後は下端への被弾も本体へ入り、露出の 2 倍で 3 発で倒れる(HP 6)', () => {
     const w = standing();
     w.hitAt(1, legY(w));
     w.hitAt(1, legY(w));
@@ -131,6 +134,60 @@ describe('Walker の大型化と脚の部位破壊(2.19、設計 2026-11-12-acti
   });
 });
 
+describe('Walker の露出倍率と破損(2.22、設計 2026-11-17-parts-overhaul §1・§2)', () => {
+  const standing = (): Walker => new Walker(2, 10 - WALKER_H, 1);
+  const legY = (w: Walker): number => w.body.y + w.body.h - 0.1;
+  const torsoY = (w: Walker): number => w.body.y + 0.2;
+
+  it('脚が健在のうちは本体への被ダメージは等倍(胴だけを撃つと 6 発)', () => {
+    const w = standing();
+    let shots = 0;
+    while (!w.dead) {
+      w.hitAt(1, torsoY(w));
+      shots++;
+    }
+    expect(shots).toBe(6);
+    expect(w.legsBroken).toBe(false);
+  });
+
+  it('脚破壊後は本体への被ダメージが PART_EXPOSED_DAMAGE_MUL 倍(脚 2 発 + 露出後 3 発 = 5 発)', () => {
+    expect(PART_EXPOSED_DAMAGE_MUL).toBe(2);
+    const w = standing();
+    let shots = 0;
+    while (!w.legsBroken) {
+      w.hitAt(1, legY(w));
+      shots++;
+    }
+    expect(shots).toBe(2);
+    expect(w.hp).toBe(WALKER_HP); // 壊した 1 発そのものは部位に入り、本体は減らない
+    w.hitAt(1, torsoY(w));
+    shots++;
+    expect(w.hp).toBe(WALKER_HP - PART_EXPOSED_DAMAGE_MUL);
+    while (!w.dead) {
+      w.hitAt(1, torsoY(w));
+      shots++;
+    }
+    expect(shots).toBe(5);
+  });
+
+  it('脚に 1 回当たると破損(legsDamaged)。壊れた後は破損ではなく破壊', () => {
+    const w = standing();
+    expect(w.legsDamaged).toBe(false);
+    w.hitAt(1, legY(w));
+    expect(w.legsDamaged).toBe(true);
+    expect(w.legsBroken).toBe(false);
+    w.hitAt(1, legY(w));
+    expect(w.legsDamaged).toBe(false);
+    expect(w.legsBroken).toBe(true);
+  });
+
+  it('胴への被弾では破損にならない', () => {
+    const w = standing();
+    w.hitAt(1, torsoY(w));
+    expect(w.legsDamaged).toBe(false);
+  });
+});
+
 describe('nextFlyerMode(飛行敵の状態遷移)', () => {
   it('感知半径 7 以内に入ると追尾へ移る', () => {
     expect(nextFlyerMode('patrol', 7)).toBe('chase');
@@ -150,8 +207,10 @@ describe('nextFlyerMode(飛行敵の状態遷移)', () => {
 });
 
 describe('Flyer(飛行ドローン)', () => {
-  it('2 発で倒れる', () => {
+  it('本体 HP は 3 で、3 発で倒れる(2.22)', () => {
+    expect(FLYER_HP).toBe(3);
     const f = new Flyer(10, 10, 0);
+    expect(f.hit(1)).toBe(false);
     expect(f.hit(1)).toBe(false);
     expect(f.hit(1)).toBe(true);
     expect(f.dead).toBe(true);
@@ -235,7 +294,7 @@ describe('Flyer の大型化とローターの部位破壊(2.19、設計 2026-11
     expect(f.centerY).toBeCloseTo(10);
   });
 
-  it('ローター(上端の帯)への被弾 1 回でローター破壊。本体 HP 2 は減らない', () => {
+  it('ローター(上端の帯)への被弾 1 回でローター破壊。本体 HP は減らない', () => {
     const f = new Flyer(10, 10, 0);
     expect(FLYER_ROTOR_HP).toBe(1);
     const r = f.hitAt(1, rotorY(f));
@@ -244,10 +303,11 @@ describe('Flyer の大型化とローターの部位破壊(2.19、設計 2026-11
     expect(f.hp).toBe(FLYER_HP);
   });
 
-  it('帯の外(胴の下側)への被弾は本体に入り、2 発で倒れる', () => {
+  it('帯の外(胴の下側)への被弾は本体に入り、3 発で倒れる', () => {
     const f = new Flyer(10, 10, 0);
     expect(f.hitAt(1, bodyY(f))).toEqual({ killed: false, part: false, broke: false });
     expect(f.rotorBroken).toBe(false);
+    expect(f.hitAt(1, bodyY(f)).killed).toBe(false);
     expect(f.hitAt(1, bodyY(f)).killed).toBe(true);
   });
 
@@ -304,12 +364,45 @@ describe('Flyer の大型化とローターの部位破壊(2.19、設計 2026-11
   });
 });
 
+describe('Flyer の露出倍率(2.22、設計 2026-11-17-parts-overhaul §1)', () => {
+  const rotorY = (f: Flyer): number => f.body.y + 0.1;
+  const bodyY = (f: Flyer): number => f.body.y + f.body.h - 0.1;
+
+  it('飛んでいる間は露出していない(等倍)', () => {
+    const f = new Flyer(10, 10, 0);
+    expect(f.exposed).toBe(false);
+    f.hitAt(1, bodyY(f));
+    expect(f.hp).toBe(FLYER_HP - 1);
+  });
+
+  it('ローター破壊後でも、落下中の被弾は等倍', () => {
+    const f = new Flyer(10, 5, 0);
+    f.hitAt(1, rotorY(f));
+    for (let i = 0; i < 5; i++) f.update(1 / 60, floorTiles, 1000, 1000); // まだ空中
+    expect(f.body.onGround).toBe(false);
+    expect(f.exposed).toBe(false);
+    f.hitAt(1, bodyY(f));
+    expect(f.hp).toBe(FLYER_HP - 1);
+  });
+
+  it('接地した後は被ダメージが 2 倍(ローター 1 発 + 接地後 2 発 = 3 発)', () => {
+    const f = new Flyer(10, 5, 0);
+    expect(f.hitAt(1, rotorY(f)).broke).toBe(true);
+    expect(f.hp).toBe(FLYER_HP); // 壊した 1 発は本体を減らさない
+    for (let i = 0; i < 120; i++) f.update(1 / 60, floorTiles, 1000, 1000); // 着地まで
+    expect(f.exposed).toBe(true);
+    expect(f.hitAt(1, bodyY(f)).killed).toBe(false);
+    expect(f.hp).toBe(FLYER_HP - PART_EXPOSED_DAMAGE_MUL);
+    expect(f.hitAt(1, bodyY(f)).killed).toBe(true);
+  });
+});
+
 describe('stepBossPhase(ボスの状態遷移、第2弾 §2)', () => {
   const inside = { playerInHall: true, hitWall: false };
   const stepN = (
     phase: BossPhase,
     t: number,
-    ctx: { playerInHall: boolean; hitWall: boolean },
+    ctx: { playerInHall: boolean; hitWall: boolean; legsBroken?: boolean },
     frames: number,
   ): { phase: BossPhase; t: number } => {
     let s = { phase, t };
@@ -349,6 +442,17 @@ describe('stepBossPhase(ボスの状態遷移、第2弾 §2)', () => {
     expect(stepN('stunned', 0, inside, 60).phase).toBe('stunned');
     expect(stepN('stunned', 0, inside, 90).phase).toBe('approach');
     expect(stepN('stunned', 0, { ...inside, playerInHall: false }, 90).phase).toBe('patrol');
+  });
+
+  it('脚破壊後の硬直は 1.6 秒に伸びる(2.22 §1)。legsBroken 未指定は従来どおり 1.2 秒', () => {
+    expect(BOSS_STUN_TIME).toBe(1.2);
+    expect(BOSS_LEGLESS_STUN_TIME).toBe(1.6);
+    expect(bossStunTime(false)).toBe(BOSS_STUN_TIME);
+    expect(bossStunTime(true)).toBe(BOSS_LEGLESS_STUN_TIME);
+    const legless = { ...inside, legsBroken: true };
+    expect(stepN('stunned', 0, legless, 90).phase).toBe('stunned'); // 1.5 秒: 健在なら明けている
+    expect(stepN('stunned', 0, legless, 102).phase).toBe('approach'); // 1.7 秒
+    expect(stepN('stunned', 0, { ...inside, legsBroken: false }, 90).phase).toBe('approach');
   });
 
   it('予備動作〜硬直の突進シーケンスは、プレイヤーが広間を出ても中断しない', () => {
@@ -473,5 +577,101 @@ describe('Boss(広間番人、第2弾 §2)', () => {
     expect(s.hit(BOSS_BEAM_DAMAGE)).toBe(false);
     expect(s.hp).toBe(BOSS_HP - 20); // 硬直中は hit() の一律 2 倍で 20
     expect(s.hit(BOSS_BEAM_DAMAGE)).toBe(true);
+  });
+});
+
+describe('Boss の脚の部位破壊(2.22、設計 2026-11-17-parts-overhaul §1)', () => {
+  const makeBoss = () => new Boss(50, 10, 0, 200);
+  /** 脚の帯は矩形の下 45% */
+  const legY = (b: Boss): number => b.body.y + b.body.h - 0.1;
+  const torsoY = (b: Boss): number => b.body.y + 0.2;
+
+  it('脚(下端の帯)への被弾 4 回で脚破壊。本体 HP 30 は減らない', () => {
+    const b = makeBoss();
+    expect(BOSS_LEG_HP).toBe(4);
+    expect(BOSS_HP).toBe(30);
+    for (let i = 0; i < 3; i++) {
+      expect(b.hitAt(1, legY(b))).toEqual({ killed: false, part: true, broke: false });
+      expect(b.legsBroken).toBe(false);
+    }
+    expect(b.hitAt(1, legY(b))).toEqual({ killed: false, part: true, broke: true });
+    expect(b.legsBroken).toBe(true);
+    expect(b.hp).toBe(BOSS_HP);
+    expect(b.flashT).toBeGreaterThan(0);
+  });
+
+  it('帯の外(胴)への被弾は本体に入り、脚の耐久は減らない', () => {
+    const b = makeBoss();
+    expect(b.hitAt(1, torsoY(b))).toEqual({ killed: false, part: false, broke: false });
+    expect(b.hp).toBe(BOSS_HP - 1);
+    expect(b.legHp).toBe(BOSS_LEG_HP);
+  });
+
+  it('脚破壊後は下端への被弾も本体へ入る。脚破壊にダメージ倍率は付かない(等倍)', () => {
+    const b = makeBoss();
+    for (let i = 0; i < BOSS_LEG_HP; i++) b.hitAt(1, legY(b));
+    expect(b.hitAt(1, legY(b))).toEqual({ killed: false, part: false, broke: false });
+    expect(b.hp).toBe(BOSS_HP - 1);
+  });
+
+  it('硬直中の 2 倍は脚の耐久には掛からない(被弾 4 回で数える)。本体には従来どおり掛かる', () => {
+    const b = makeBoss();
+    b.phase = 'stunned';
+    b.hitAt(1, legY(b));
+    expect(b.legHp).toBe(BOSS_LEG_HP - 1);
+    b.hitAt(1, torsoY(b));
+    expect(b.hp).toBe(BOSS_HP - 2);
+  });
+
+  it('重粒子砲(hit)は脚を壊さず、ダメージ 10 も変わらない(脚破壊後も同じ)', () => {
+    const b = makeBoss();
+    expect(BOSS_BEAM_DAMAGE).toBe(10);
+    b.hit(BOSS_BEAM_DAMAGE);
+    expect(b.legHp).toBe(BOSS_LEG_HP);
+    expect(b.legsBroken).toBe(false);
+    expect(b.hp).toBe(BOSS_HP - 10);
+    const broken = makeBoss();
+    broken.legHp = 0;
+    broken.hit(BOSS_BEAM_DAMAGE);
+    expect(broken.hp).toBe(BOSS_HP - 10);
+  });
+
+  it('突進速度は 9 → 5.5(純関数)', () => {
+    expect(BOSS_CHARGE_SPEED).toBe(9);
+    expect(BOSS_LEGLESS_CHARGE_SPEED).toBe(5.5);
+    expect(bossChargeSpeed(false)).toBe(9);
+    expect(bossChargeSpeed(true)).toBe(5.5);
+  });
+
+  it('脚破壊後の突進は 1 フレームの変位が 5.5/60 になる(接近 2.6 よりは速い)', () => {
+    const b = makeBoss();
+    b.legHp = 0;
+    let maxStep = 0;
+    for (let i = 0; i < 60 * 8; i++) {
+      const prevX = b.body.x;
+      const wasCharge = b.phase === 'charge';
+      b.update(1 / 60, floorTiles, b.centerX + 30, 9, true);
+      if (wasCharge) maxStep = Math.max(maxStep, Math.abs(b.body.x - prevX));
+    }
+    // 突進 5.5 → 約 0.092(健在の 9 → 0.15、接近 2.6 → 約 0.043)
+    expect(maxStep).toBeGreaterThan(0.08);
+    expect(maxStep).toBeLessThan(0.1);
+  });
+
+  it('脚破壊後の硬直は 1.6 秒続く(update を通した長さ。健在は 1.2 秒)', () => {
+    const stunnedFrames = (legless: boolean): number => {
+      const b = makeBoss();
+      if (legless) b.legHp = 0;
+      let stunned = 0;
+      for (let i = 0; i < 60 * 12; i++) {
+        b.update(1 / 60, floorTiles, b.centerX + 30, 9, true);
+        if (b.phase === 'stunned') stunned++;
+        else if (stunned > 0) break;
+      }
+      return stunned;
+    };
+    // フレーム数は 秒 × 60 の前後 1 フレーム以内(浮動小数の積み上げぶん)
+    expect(Math.abs(stunnedFrames(false) - BOSS_STUN_TIME * 60)).toBeLessThanOrEqual(1);
+    expect(Math.abs(stunnedFrames(true) - BOSS_LEGLESS_STUN_TIME * 60)).toBeLessThanOrEqual(1);
   });
 });

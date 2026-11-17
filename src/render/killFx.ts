@@ -6,9 +6,25 @@ import { spawnIdHash } from '../world/drop';
  * 撃破の瞬間に「破片バースト(パレット色の小矩形が重力で落ちて縮む)+中心の閃光+広がる輪」を出す。
  * 位置・大きさは撃破キー(実体 ID と撃破時刻のハッシュ)と経過秒だけから閉じた式で決まり、
  * Math.random は使わない。描画は renderer の fx 相乗りの中で平坦色の矩形だけ(新規パスなし、lighter なし)。
+ * 2.22(設計 2026-11-17-parts-overhaul §2): 同じ仕組み・同じ描画経路に、パルス命中の火花(本体と部位で色を分ける)と
+ * 部位破壊の破片バーストを種別として足した。描画側(renderer)は種別を見ないので、描画パスも分岐も増えない。
  */
 
 export type KillKind = 'walker' | 'flyer' | 'turret' | 'boss';
+/** パルス命中の火花(2.22 §2)。hitBody は本体、hitPart は部位に入った被弾 */
+export type HitFxKind = 'hitBody' | 'hitPart';
+/** 部位破壊の破片バースト(2.22 §2)。火花より大きく、撃破より小さい */
+export type BreakFxKind = 'breakWalker' | 'breakFlyer' | 'breakTurret' | 'breakBoss';
+/** 撃破エフェクトの経路に乗る種別のすべて */
+export type FxKind = KillKind | HitFxKind | BreakFxKind;
+
+/** 部位破壊の対象(walker / flyer / turret / boss)から破片バーストの種別へ */
+export const BREAK_FX_KIND: Record<KillKind, BreakFxKind> = {
+  walker: 'breakWalker',
+  flyer: 'breakFlyer',
+  turret: 'breakTurret',
+  boss: 'breakBoss',
+};
 
 export interface KillFxSpec {
   /** バースト全体の寿命(秒)。破片はこの間に落ちて縮み、後半で薄れる */
@@ -44,7 +60,7 @@ export interface KillFxSpec {
  * 種別ごとの差: 歩行敵は錆と金(胴と目)、ドローンは鋼と淡色、砲台は鋼・暗い紺と警告灯の金。
  * ボスは破片の数・速さ・大きさ・輪を大きくし、画面シェイクを足す(行動・数値は変えない)。
  */
-export const KILL_FX: Record<KillKind, KillFxSpec> = {
+export const KILL_FX: Record<FxKind, KillFxSpec> = {
   walker: {
     ttl: 0.6, count: 14, colors: ['#9a6d32', '#caa64a', '#5a3a24', '#3d2618'],
     speedMin: 2.5, speedMax: 6, lift: 3, sizeMin: 0.1, sizeMax: 0.2,
@@ -73,6 +89,53 @@ export const KILL_FX: Record<KillKind, KillFxSpec> = {
     ringTtl: 0.45, ringR0: 0.6, ringR1: 4, ringSegs: 24, ringThick: 0.16, ringColor: '#caa64a',
     shakePx: 3, shakeTtl: 0.4,
   },
+  // ---- 2.22: パルス命中の火花。数個の小片だけで、閃光・輪・シェイクは持たない(画素数を増やさない) ----
+  // 本体ヒットは淡色と鋼(冷たい色)。従来の被弾フラッシュ(胴が淡色に光る)と同じ色相
+  hitBody: {
+    ttl: 0.18, count: 4, colors: ['#c7d0ce', '#51728d'],
+    speedMin: 2, speedMax: 4.5, lift: 1, sizeMin: 0.06, sizeMax: 0.1,
+    flashTtl: 0, flashSize: 0,
+    ringTtl: 0, ringR0: 0, ringR1: 0, ringSegs: 0, ringThick: 0, ringColor: '#c7d0ce',
+    shakePx: 0, shakeTtl: 0,
+  },
+  // 部位ヒットは金と紫(熱い色)。紫は敵の体にも撃破の破片にも無い色で、部位に入ったことだけを示す
+  hitPart: {
+    ttl: 0.22, count: 6, colors: ['#caa64a', '#8d62cb'],
+    speedMin: 2.5, speedMax: 5.5, lift: 1.5, sizeMin: 0.07, sizeMax: 0.12,
+    flashTtl: 0, flashSize: 0,
+    ringTtl: 0, ringR0: 0, ringR1: 0, ringSegs: 0, ringThick: 0, ringColor: '#caa64a',
+    shakePx: 0, shakeTtl: 0,
+  },
+  // ---- 2.22: 部位破壊の破片バースト。壊れた部位の色(脚の茶・ローターの暗色と淡色・センサーの金)+ 紫の輪 ----
+  breakWalker: {
+    ttl: 0.45, count: 9, colors: ['#5a3a24', '#3d2618', '#caa64a'],
+    speedMin: 2.5, speedMax: 6, lift: 2.5, sizeMin: 0.1, sizeMax: 0.2,
+    flashTtl: 0.07, flashSize: 0.6,
+    ringTtl: 0.2, ringR0: 0.2, ringR1: 1.0, ringSegs: 8, ringThick: 0.1, ringColor: '#8d62cb',
+    shakePx: 0, shakeTtl: 0,
+  },
+  breakFlyer: {
+    ttl: 0.45, count: 8, colors: ['#16202b', '#c7d0ce', '#51728d'],
+    speedMin: 3, speedMax: 6.5, lift: 2, sizeMin: 0.08, sizeMax: 0.18,
+    flashTtl: 0.07, flashSize: 0.6,
+    ringTtl: 0.2, ringR0: 0.2, ringR1: 1.0, ringSegs: 8, ringThick: 0.1, ringColor: '#8d62cb',
+    shakePx: 0, shakeTtl: 0,
+  },
+  breakTurret: {
+    ttl: 0.45, count: 9, colors: ['#caa64a', '#16202b', '#51728d'],
+    speedMin: 2.5, speedMax: 6, lift: 3, sizeMin: 0.08, sizeMax: 0.18,
+    flashTtl: 0.07, flashSize: 0.6,
+    ringTtl: 0.2, ringR0: 0.2, ringR1: 1.0, ringSegs: 8, ringThick: 0.1, ringColor: '#8d62cb',
+    shakePx: 0, shakeTtl: 0,
+  },
+  // ボスの脚: 見せ場なので通常敵の部位より多く・大きく(撃破の 36 個よりは少ない)。シェイクは撃破だけに残す
+  breakBoss: {
+    ttl: 0.7, count: 18, colors: ['#3d2618', '#5a3a24', '#9a6d32', '#caa64a'],
+    speedMin: 3, speedMax: 8, lift: 3.5, sizeMin: 0.12, sizeMax: 0.28,
+    flashTtl: 0.1, flashSize: 1.2,
+    ringTtl: 0.3, ringR0: 0.4, ringR1: 2.2, ringSegs: 14, ringThick: 0.14, ringColor: '#8d62cb',
+    shakePx: 0, shakeTtl: 0,
+  },
 };
 
 /** 破片の重力(タイル/秒²)。手応えを出すため掘削の破片(16)より少し重い */
@@ -97,7 +160,7 @@ export function killKey(spawnId: string, timeSec: number): number {
 export interface KillBurst {
   x: number;
   y: number;
-  kind: KillKind;
+  kind: FxKind;
   key: number;
   age: number;
 }
@@ -106,6 +169,14 @@ export interface KillBurst {
 export function addKillBurst<T extends KillBurst>(bursts: readonly T[], b: T, max: number = MAX_KILL_BURSTS): T[] {
   const out = [...bursts, b];
   return out.length > max ? out.slice(out.length - max) : out;
+}
+
+/**
+ * 命中の火花を足す(純粋関数、2.22 §2)。火花は撃破・部位破壊のバーストを押し出さない:
+ * 上限に達しているときは足さず、元の配列をそのまま返す(連射で見せ場のバーストが途中で消えない)
+ */
+export function addSparkBurst<T extends KillBurst>(bursts: T[], b: T, max: number = MAX_KILL_BURSTS): T[] {
+  return bursts.length >= max ? bursts : [...bursts, b];
 }
 
 /** 撃破エフェクトの更新(純粋関数): 経過秒を dt 進め、寿命を過ぎたものを捨てる */
@@ -132,7 +203,7 @@ export interface KillFragment {
  * 破片の位置・大きさ・色(閉じた式)。向きはほぼ全周(真下の扇だけ空ける)で上向きの持ち上げを足し、
  * 重力で落ちる。大きさは寿命の終わりに 25% まで縮み、寿命の後半 40% で薄れる。寿命の外は空。
  */
-export function killFragments(kind: KillKind, key: number, age: number): KillFragment[] {
+export function killFragments(kind: FxKind, key: number, age: number): KillFragment[] {
   const s = KILL_FX[kind];
   if (age < 0 || age > s.ttl) return [];
   const u = age / s.ttl;
@@ -165,10 +236,10 @@ export interface KillFlash {
   alpha: number;
 }
 
-/** 中心の閃光。寿命の間に一辺が 60% まで縮み、線形に薄れる。寿命の外は null */
-export function killFlash(kind: KillKind, age: number): KillFlash | null {
+/** 中心の閃光。寿命の間に一辺が 60% まで縮み、線形に薄れる。寿命の外と、閃光を持たない種別(火花)は null */
+export function killFlash(kind: FxKind, age: number): KillFlash | null {
   const s = KILL_FX[kind];
-  if (age < 0 || age > s.flashTtl) return null;
+  if (s.flashTtl <= 0 || age < 0 || age > s.flashTtl) return null;
   const u = age / s.flashTtl;
   return { size: s.flashSize * (1 - 0.4 * u), alpha: 1 - u };
 }
@@ -185,11 +256,11 @@ export interface KillRing {
 
 /**
  * 広がる輪。半径は ease-out で ringR0 → ringR1、細い矩形を等角度に並べた円環で表す
- * (回転の初期位相だけキーで変える)。線形に薄れる。寿命の外は null。
+ * (回転の初期位相だけキーで変える)。線形に薄れる。寿命の外と、輪を持たない種別(火花)は null。
  */
-export function killRing(kind: KillKind, key: number, age: number): KillRing | null {
+export function killRing(kind: FxKind, key: number, age: number): KillRing | null {
   const s = KILL_FX[kind];
-  if (age < 0 || age > s.ringTtl) return null;
+  if (s.ringTtl <= 0 || s.ringSegs <= 0 || age < 0 || age > s.ringTtl) return null;
   const u = age / s.ringTtl;
   const ease = 1 - (1 - u) * (1 - u);
   const radius = s.ringR0 + (s.ringR1 - s.ringR0) * ease;
@@ -206,7 +277,7 @@ export function killRing(kind: KillKind, key: number, age: number): KillRing | n
  * 画面シェイクの平行移動(内部バッファ px の整数)。シェイクのある種別(ボス)だけ、寿命の間に
  * 振幅が線形に 0 へ落ちる。向きは 30 Hz で切り替わる決定論ハッシュ(Math.random は使わない)。
  */
-export function killShake(kind: KillKind, key: number, age: number): { x: number; y: number } {
+export function killShake(kind: FxKind, key: number, age: number): { x: number; y: number } {
   const s = KILL_FX[kind];
   if (s.shakePx <= 0 || age < 0 || age > s.shakeTtl) return { x: 0, y: 0 };
   const mag = s.shakePx * (1 - age / s.shakeTtl);

@@ -50,8 +50,8 @@ describe('hasLineOfSight(視線判定)', () => {
 });
 
 describe('Turret(固定砲台)', () => {
-  it('定数の初期値: HP 4・射程 10・間隔 1.6・初回遅延 0.8・弾速 12・弾 0.3・寿命約 1.1', () => {
-    expect(TURRET_HP).toBe(4);
+  it('定数の初期値: HP 5(2.22 で 4 から)・射程 10・間隔 1.6・初回遅延 0.8・弾速 12・弾 0.3・寿命約 1.1', () => {
+    expect(TURRET_HP).toBe(5);
     expect(TURRET_RANGE).toBe(10);
     expect(TURRET_FIRE_INTERVAL).toBe(1.6);
     expect(TURRET_FIRST_DELAY).toBe(0.8);
@@ -72,10 +72,11 @@ describe('Turret(固定砲台)', () => {
     expect(t.body.y).toBe(10 - TURRET_H);
   });
 
-  it('4 発で倒れる(hit のたびに HP が減り flashT が立つ)', () => {
+  it('5 発で倒れる(hit のたびに HP が減り flashT が立つ)', () => {
     const t = new Turret(0, 0);
     expect(t.hit(1)).toBe(false);
     expect(t.flashT).toBeGreaterThan(0);
+    expect(t.hit(1)).toBe(false);
     expect(t.hit(1)).toBe(false);
     expect(t.hit(1)).toBe(false);
     expect(t.hit(1)).toBe(true);
@@ -162,7 +163,7 @@ describe('Turret のセンサー部位破壊(2.19、設計 2026-11-12-action-ove
   const sensorY = 0.1;
   const bodyY = 1.0;
 
-  it('センサー(上端の帯)への被弾 2 回でセンサー破壊。本体 HP 4 は減らない', () => {
+  it('センサー(上端の帯)への被弾 2 回でセンサー破壊。本体 HP は減らない', () => {
     const t = new Turret(0, 0);
     expect(TURRET_SENSOR_HP).toBe(2);
     expect(t.hitAt(1, sensorY)).toEqual({ killed: false, part: true, broke: false });
@@ -206,12 +207,30 @@ describe('Turret のセンサー部位破壊(2.19、設計 2026-11-12-action-ove
     expect(shots).toBe(0);
   });
 
-  it('センサー破壊後は上端への被弾も本体へ入り、4 発で倒れる', () => {
+  it('センサー破壊後は上端への被弾も本体へ入り、等倍の 5 発で倒れる(露出倍率なし。部位ルートは 2 + 5 = 7 発)', () => {
     const t = new Turret(0, 0);
     t.hitAt(1, sensorY);
     t.hitAt(1, sensorY);
-    for (let i = 0; i < TURRET_HP - 1; i++) expect(t.hitAt(1, sensorY).killed).toBe(false);
+    t.hitAt(1, bodyY);
+    expect(t.hp).toBe(TURRET_HP - 1); // 2.22 §1: 砲台には露出の 2 倍を掛けない
+    for (let i = 0; i < TURRET_HP - 2; i++) expect(t.hitAt(1, sensorY).killed).toBe(false);
     expect(t.hitAt(1, sensorY).killed).toBe(true);
+  });
+
+  it('センサーに 1 回当たると破損(sensorDamaged)。発射は止まらず、壊れた後は破損ではなく破壊(2.22 §2)', () => {
+    const t = new Turret(0, 0);
+    expect(t.sensorDamaged).toBe(false);
+    t.hitAt(1, bodyY);
+    expect(t.sensorDamaged).toBe(false); // 本体への被弾では破損にならない
+    t.hitAt(1, sensorY);
+    expect(t.sensorDamaged).toBe(true);
+    expect(t.sensorBroken).toBe(false);
+    let shots = 0;
+    for (let i = 0; i < 60 * 3; i++) shots += t.update(1 / 60, noTiles, 5.45, t.centerY).length;
+    expect(shots).toBeGreaterThan(0); // 破損は見た目だけ(挙動は変えない)
+    t.hitAt(1, sensorY);
+    expect(t.sensorDamaged).toBe(false);
+    expect(t.sensorBroken).toBe(true);
   });
 });
 

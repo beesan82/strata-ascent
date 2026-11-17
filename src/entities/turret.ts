@@ -6,9 +6,11 @@ import { inUpperBand, type PartHit } from './parts';
  * 新敵「固定砲台」(v2.0 Task 6)。床の上に据え置きで動かず、射程内に
  * プレイヤーがいて視線が通ると一定間隔で狙撃する。接触ダメージは持たない。
  * 2.19(設計 2026-11-12-action-overhaul): 体格を 1.2 四方へ一回り大きくし、センサー(上端の帯)を部位にした。
- * センサーへの被弾 2 回でセンサー破壊 → 照準も発射もしない(盲目化)。本体 HP は 4 のまま。
+ * センサーへの被弾 2 回でセンサー破壊 → 照準も発射もしない(盲目化)。本体 HP は別枠。
+ * 2.22(設計 2026-11-17-parts-overhaul §1): 本体 HP を 4 → 5 に上げた。露出倍率は掛けない
+ * (センサー経由は発数が増える代わりに被弾が止む、という選択にする)。
  */
-export const TURRET_HP = 4;
+export const TURRET_HP = 5;
 /** 体格(タイル)。頭上 2 タイルの空きがある床ランに収まる高さ(出現位置は spawn.ts が床 - TURRET_H に置く) */
 export const TURRET_W = 1.2;
 export const TURRET_H = 1.2;
@@ -135,6 +137,11 @@ export class Turret {
 
   get sensorBroken(): boolean {
     return this.sensorHp <= 0;
+  }
+
+  /** センサーが当たって傷んでいるが、まだ壊れていない(2.22 §2 の破損表示) */
+  get sensorDamaged(): boolean {
+    return this.sensorHp > 0 && this.sensorHp < TURRET_SENSOR_HP;
   }
 
   /** ダメージを与える。他敵と同じ(重粒子砲の即死もここを通す)。倒れたら true */

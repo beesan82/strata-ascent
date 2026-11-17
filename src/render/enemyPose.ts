@@ -40,6 +40,10 @@ export interface WalkerPose {
   bob: number;
   /** [奥の脚, 手前の脚]。2 本は半周期ずらす */
   legs: [WalkerLeg, WalkerLeg];
+  /** 脚が破損している(1 回当たったが、まだ壊れていない。2.22 §2)。歩き方は変えず、ひびと火花だけ描き分ける */
+  damaged: boolean;
+  /** 破損のひびから火花が出ているフレームか(歩行位相で明滅する。時刻を使わず決定的) */
+  spark: boolean;
 }
 
 function frac(v: number): number {
@@ -95,14 +99,20 @@ function footAt(q: number, dir: 1 | -1): Joint {
 export const WALKER_LIMP_SINK = 0.08;
 /** 脚破壊後のよろけ(1 周期に 1 回、片脚へ倒れ込む沈みの振幅、タイル) */
 export const WALKER_LIMP_LURCH = 0.06;
+/** 脚の破損(2.22 §2): ひびの火花が出る歩行位相の割合(1 周期のうち最初のこの割合だけ灯る) */
+export const WALKER_DAMAGED_SPARK_DUTY = 0.25;
 
 /**
  * 歩行敵のポーズ。x は中心の x 座標、dir は進行方向。
  * legsBroken(脚破壊)のときはよろけ歩行: 胴が沈み、1 周期に 1 回大きく倒れ込む。奥の脚は壊れて
- * 後ろへ引きずられ(床に着いたまま動かない)、手前の脚だけが半分の振り幅で踏み出す
+ * 後ろへ引きずられ(床に着いたまま動かない)、手前の脚だけが半分の振り幅で踏み出す。
+ * legsDamaged(脚の破損、2.22 §2)は脚に 1 回当たった状態。歩き方は健在のままで、damaged と spark だけが立つ
+ * (脚破壊のほうが優先で、壊れた後は damaged にならない)
  */
-export function walkerPose(x: number, dir: 1 | -1, legsBroken = false): WalkerPose {
+export function walkerPose(x: number, dir: 1 | -1, legsBroken = false, legsDamaged = false): WalkerPose {
   const phase = walkPhase(x, dir);
+  const damaged = legsDamaged && !legsBroken;
+  const spark = damaged && phase < WALKER_DAMAGED_SPARK_DUTY;
   if (legsBroken) {
     const bob = WALKER_LIMP_SINK + (WALKER_LIMP_LURCH * (1 - Math.cos(Math.PI * 2 * phase))) / 2;
     // 足は床基準(描画側で胴の沈みを乗せない)、膝は沈んだ腰から見た足の位置で解く
@@ -113,7 +123,7 @@ export function walkerPose(x: number, dir: 1 | -1, legsBroken = false): WalkerPo
       knee: kneeOf({ x: foot.x, y: foot.y - bob }, dir),
       foot,
     })) as [WalkerLeg, WalkerLeg];
-    return { phase, bob, legs };
+    return { phase, bob, legs, damaged, spark };
   }
   const legs = [phase, frac(phase + 0.5)].map((q) => {
     const foot = footAt(q, dir);
@@ -123,6 +133,8 @@ export function walkerPose(x: number, dir: 1 | -1, legsBroken = false): WalkerPo
     phase,
     bob: (WALKER_BOB * (1 - Math.cos(Math.PI * 4 * phase))) / 2,
     legs,
+    damaged,
+    spark,
   };
 }
 
@@ -216,20 +228,33 @@ export interface TurretPose {
   halo: boolean;
   /** 砲身の後退(0..1。発射直後に 1 → 0) */
   recoil: number;
+  /** センサーが破損している(1 回当たったが、まだ壊れていない。2.22 §2)。警告灯と発射は健在のまま */
+  damaged: boolean;
+  /** 破損のひびから火花が出ているフレームか(時刻で明滅する) */
+  spark: boolean;
 }
+
+/** センサーの破損(2.22 §2): ひびの火花の明滅周波数(Hz)と点灯の割合 */
+export const TURRET_DAMAGED_SPARK_HZ = 3;
+export const TURRET_DAMAGED_SPARK_DUTY = 0.3;
 
 /**
  * 固定砲台のポーズ。cooldown は次の発射までの残り秒(Turret.cooldown)、aiming は今フレーム狙えているか。
  * 狙えていないときは消灯寄りの錆色で、照準中は金に灯り、発射の TURRET_WARN_WINDOW 秒前から
- * 加速する点滅(金/錆)、最後は白く灯り続ける。点滅は時刻だけから決まる
+ * 加速する点滅(金/錆)、最後は白く灯り続ける。点滅は時刻だけから決まる。
+ * sensorDamaged(センサーの破損、2.22 §2)は警告灯の読み(warn・色・暈・後退)を変えず、damaged と spark だけが立つ
  */
-export function turretPose(cooldown: number, aiming: boolean, timeSec: number): TurretPose {
-  if (!aiming) return { warn: 0, lightColor: '#5a3a24', halo: false, recoil: 0 };
+export function turretPose(
+  cooldown: number, aiming: boolean, timeSec: number, sensorDamaged = false,
+): TurretPose {
+  const damaged = sensorDamaged;
+  const spark = damaged && frac(timeSec * TURRET_DAMAGED_SPARK_HZ) < TURRET_DAMAGED_SPARK_DUTY;
+  if (!aiming) return { warn: 0, lightColor: '#5a3a24', halo: false, recoil: 0, damaged, spark };
   const warn = clamp01(1 - cooldown / TURRET_WARN_WINDOW);
   const recoil = clamp01((cooldown - (TURRET_FIRE_INTERVAL - TURRET_RECOIL_TIME)) / TURRET_RECOIL_TIME);
-  if (warn >= TURRET_WARN_SOLID) return { warn, lightColor: '#c7d0ce', halo: true, recoil };
-  if (warn <= 0) return { warn, lightColor: '#9a6d32', halo: false, recoil };
+  if (warn >= TURRET_WARN_SOLID) return { warn, lightColor: '#c7d0ce', halo: true, recoil, damaged, spark };
+  if (warn <= 0) return { warn, lightColor: '#9a6d32', halo: false, recoil, damaged, spark };
   const hz = 4 + 10 * warn;
   const on = frac(timeSec * hz) < 0.5;
-  return { warn, lightColor: on ? '#caa64a' : '#5a3a24', halo: false, recoil };
+  return { warn, lightColor: on ? '#caa64a' : '#5a3a24', halo: false, recoil, damaged, spark };
 }
