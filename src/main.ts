@@ -40,7 +40,10 @@ import { Graviton, BORE_LENGTH, BORE_RADIUS } from './entities/graviton';
 import { pulseAimDir, PulseGun, PULSE_DAMAGE, PULSE_SIZE, type Pulse } from './entities/pulse';
 import { Boss, BOSS_BEAM_DAMAGE, BOSS_H, BOSS_HP, BOSS_W, Flyer, Walker } from './entities/enemy';
 import { Turret, TurretShot } from './entities/turret';
-import { PART_BREAK_LABEL, type PartHit } from './entities/parts';
+import {
+  clampToSpan, hitPitchFor, PART_BREAK_LABEL, PART_SIDE, partBreakBonus, partCenterY, type PartHit, type PartKind,
+} from './entities/parts';
+import { hitStopMsFor, requestHitStop, runFixedSteps } from './core/hitstop';
 import { beamHit } from './entities/beamHit';
 import { canAddSupply, canPickup, carryKindFor, DropItem, dropKindFor, pushDrop, pushSupply } from './entities/drop';
 import { dropFor } from './world/drop';
@@ -82,7 +85,10 @@ import { biomeCellAt } from './world/biomeCells';
 import { towerTopFloorAt } from './world/landmark';
 import { CHUNK_SIZE, TILE } from './world/tiles';
 import { DEBRIS_TTL } from './render/beamShape';
-import { addKillBurst, advanceKillBursts, killKey, type KillBurst, type KillKind } from './render/killFx';
+import {
+  addKillBurst, addSparkBurst, advanceKillBursts, BREAK_FX_KIND, killKey,
+  type FxKind, type HitFxKind, type KillBurst, type KillKind,
+} from './render/killFx';
 import { poseMotionOf, poseMuzzleWorld } from './render/playerPose';
 import { baseTileAt, findSpawn, isHardAt } from './world/worldgen';
 import { pillarsInRect, type Pillar } from './world/pillar';
@@ -331,11 +337,19 @@ const readTerminals = new Set<string>();
  * 敵 1 体の撃破処理: 記録保持への登録と、ドロップ抽選を 1 回だけ行う。
  * 地区は撃破位置のセルで決める。ドロップは敵の中心から落下する。
  * 撃破エフェクト(設計 2026-11-10 §2)も種別 kind の色と量でここから出す(演出だけ。数値・ドロップは変えない)。
+ * partBroken(2.22、設計 2026-11-17-parts-overhaul §3): 部位が壊れた状態で倒したら、通常の抽選とは別に
+ * 素材を確定で落とす(抽選の入力 killCount・spawnId は変えないので、通常の抽選の出方は従来と同じ)。
  */
-function onEnemyKilled(spawnId: string, centerX: number, centerY: number, kind: KillKind): void {
+function onEnemyKilled(
+  spawnId: string, centerX: number, centerY: number, kind: KillKind, partBroken = false,
+): void {
   audio.enemyDown(); // 撃破音(§6.7): パルスでもビームでも撃破処理はここに集約される
   pushKillFx(kind, spawnId, centerX, centerY);
   recordDefeated(spawnId);
+  // 確定の素材は抽選のドロップ(中心)と重ならないよう横へずらす(補給品 = 寿命なし。地面の上限は pushSupply)
+  partBreakBonus(partBroken).forEach((bonus, i) => {
+    pushSupply(drops, new DropItem(bonus, centerX - PART_BONUS_OFFSET * (i + 1), centerY, true));
+  });
   const biomeId = biomeIdForCell(seed, biomeCellAt(seed, Math.floor(centerY)));
   const dropKind = dropFor(seed, spawnId, killCount, biomeId);
   killCount++;
@@ -348,18 +362,39 @@ function onEnemyKilled(spawnId: string, centerX: number, centerY: number, kind: 
   else pushDrop(drops, new DropItem(dropKind, centerX, centerY));
 }
 
+/** 部位破壊の確定ドロップを敵の中心から横へずらす距離(タイル)。抽選のドロップ(中心)と重ねない */
+const PART_BONUS_OFFSET = 0.6;
+
 /**
- * 通常敵へのパルス命中の反応(設計 2026-11-12-action-overhaul §2)。撃破はハプティクス(撃破音は onEnemyKilled)、
- * 部位が壊れた瞬間は部位破壊音と取得ログと同じ左端の行への通知、それ以外は従来の命中音
+ * この update の中で要求されたヒットストップ(ミリ秒、2.22 §2)。frame の固定ステップ消化(runFixedSteps)が
+ * update のたびに 0 へ戻してから読む。同じ update で複数壊れても長いほうだけ残る
  */
-function onPulseHit(r: PartHit, kind: keyof typeof PART_BREAK_LABEL, now: number): void {
+let pendingHitStopMs = 0;
+
+/**
+ * 敵(通常敵とボス)へのパルス命中の反応(設計 2026-11-12-action-overhaul §2、2.22 で拡張)。
+ * - 撃破: ハプティクスだけ(撃破音と撃破エフェクトは onEnemyKilled / onBossKilled)
+ * - 部位が壊れた瞬間: 部位破壊音、左端の通知、部位の位置に破片バースト、ヒットストップの要求
+ * - それ以外: 命中音(部位に入ったら音程を変える)と、被弾位置の火花(本体と部位で色が違う)
+ * body は敵の矩形、hitX / hitY はパルスの中心(矩形の外なら端へ寄せて、火花を体の上に出す)
+ */
+function onPulseHit(
+  r: PartHit, kind: PartKind, spawnId: string,
+  body: { x: number; y: number; w: number; h: number }, hitX: number, hitY: number,
+): void {
   if (r.killed) {
     hapticEnemyDown();
   } else if (r.broke) {
     audio.partBreak();
-    pickupLog.pushNotice(PART_BREAK_LABEL[kind], now);
+    pickupLog.pushNotice(PART_BREAK_LABEL[kind], simTime);
+    pushKillFx(BREAK_FX_KIND[kind], spawnId, body.x + body.w / 2, partCenterY(body.y, body.h, PART_SIDE[kind]));
+    pendingHitStopMs = requestHitStop(pendingHitStopMs, hitStopMsFor(kind));
   } else {
-    audio.enemyHit(); // 命中音(§6.7)
+    audio.enemyHit(hitPitchFor(kind, r.part)); // 命中音(§6.7)
+    pushHitSpark(
+      r.part ? 'hitPart' : 'hitBody', spawnId,
+      clampToSpan(body.x, body.w, hitX), clampToSpan(body.y, body.h, hitY),
+    );
   }
 }
 
@@ -1140,8 +1175,13 @@ function pushDebris(x: number, y: number, angle: number): void {
 // 種別・撃破キー・経過秒から決める。キーは実体のスポーン ID と撃破時刻の決定論ハッシュ
 let killBursts: KillBurst[] = [];
 
-function pushKillFx(kind: KillKind, spawnId: string, x: number, y: number): void {
+function pushKillFx(kind: FxKind, spawnId: string, x: number, y: number): void {
   killBursts = addKillBurst(killBursts, { x, y, kind, key: killKey(spawnId, simTime), age: 0 });
+}
+
+/** パルス命中の火花(2.22 §2)。同じ経路・同じプールに乗せる。満杯のときは出さない(撃破のバーストを押し出さない) */
+function pushHitSpark(kind: HitFxKind, spawnId: string, x: number, y: number): void {
+  killBursts = addSparkBurst(killBursts, { x, y, kind, key: killKey(spawnId, simTime), age: 0 });
 }
 
 /**
@@ -1230,11 +1270,11 @@ function applyBeamToEnemies(angle: number): void {
     }
   }
   if (anyKill) hapticEnemyDown();
-  for (const e of enemies) if (e.walker.dead) onEnemyKilled(e.spawnId, e.walker.centerX, e.walker.centerY, 'walker');
+  for (const e of enemies) if (e.walker.dead) onEnemyKilled(e.spawnId, e.walker.centerX, e.walker.centerY, 'walker', e.walker.legsBroken);
   enemies = enemies.filter((e) => !e.walker.dead);
-  for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY, 'flyer');
+  for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY, 'flyer', e.flyer.rotorBroken);
   flyers = flyers.filter((e) => !e.flyer.dead);
-  for (const e of turrets) if (e.turret.dead) onEnemyKilled(e.spawnId, e.turret.centerX, e.turret.centerY, 'turret');
+  for (const e of turrets) if (e.turret.dead) onEnemyKilled(e.spawnId, e.turret.centerX, e.turret.centerY, 'turret', e.turret.sensorBroken);
   turrets = turrets.filter((e) => !e.turret.dead);
   if (boss && beamHit(ox, oy, angle, boss.boss.centerX, boss.boss.centerY, halfDiag(BOSS_W, BOSS_H))) {
     pushDebris(boss.boss.centerX, boss.boss.centerY, angle); // 命中点の破片(撃破でなくても出す)
@@ -1589,13 +1629,14 @@ function update(dt: number): void {
     for (const p of pulseGun.pulses) {
       // 部位判定の被弾位置はパルス中心の高さ(設計 2026-11-12-action-overhaul §2)
       const hitY = p.body.y + p.body.h / 2;
+      const hitX = p.body.x + p.body.w / 2; // 火花の発生点(横)。部位判定には使わない
       for (const e of enemies) {
         const b = e.walker.body;
         if (
           p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
           p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
         ) {
-          onPulseHit(e.walker.hitAt(PULSE_DAMAGE, hitY), 'walker', simTime);
+          onPulseHit(e.walker.hitAt(PULSE_DAMAGE, hitY), 'walker', e.spawnId, b, hitX, hitY);
           spent.add(p);
           break;
         }
@@ -1607,7 +1648,7 @@ function update(dt: number): void {
           p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
           p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
         ) {
-          onPulseHit(e.flyer.hitAt(PULSE_DAMAGE, hitY), 'flyer', simTime);
+          onPulseHit(e.flyer.hitAt(PULSE_DAMAGE, hitY), 'flyer', e.spawnId, b, hitX, hitY);
           spent.add(p);
           break;
         }
@@ -1619,7 +1660,7 @@ function update(dt: number): void {
           p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
           p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
         ) {
-          onPulseHit(e.turret.hitAt(PULSE_DAMAGE, hitY), 'turret', simTime);
+          onPulseHit(e.turret.hitAt(PULSE_DAMAGE, hitY), 'turret', e.spawnId, b, hitX, hitY);
           spent.add(p);
           break;
         }
@@ -1630,18 +1671,19 @@ function update(dt: number): void {
         p.body.x < b.x + b.w && p.body.x + p.body.w > b.x &&
         p.body.y < b.y + b.h && p.body.y + p.body.h > b.y
       ) {
-        if (boss.boss.hit(PULSE_DAMAGE)) hapticEnemyDown(); else audio.enemyHit(); // 命中音(§6.7)
+        // 2.22 §1: ボスもパルスは部位判定(脚)を通す。重粒子砲(applyBeamToEnemies)は従来どおり hit() で、脚は壊さない
+        onPulseHit(boss.boss.hitAt(PULSE_DAMAGE, hitY), 'boss', boss.spawnId, b, hitX, hitY);
         spent.add(p);
       }
     }
     if (spent.size > 0) pulseGun.pulses = pulseGun.pulses.filter((p) => !spent.has(p));
     // 撃破を記録してから実体を捨てる(記録保持 §4: 倒した敵は再出現しない)。
     // 記録と同時にドロップ抽選も 1 回だけ行う(§3)
-    for (const e of enemies) if (e.walker.dead) onEnemyKilled(e.spawnId, e.walker.centerX, e.walker.centerY, 'walker');
+    for (const e of enemies) if (e.walker.dead) onEnemyKilled(e.spawnId, e.walker.centerX, e.walker.centerY, 'walker', e.walker.legsBroken);
     enemies = enemies.filter((e) => !e.walker.dead);
-    for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY, 'flyer');
+    for (const e of flyers) if (e.flyer.dead) onEnemyKilled(e.spawnId, e.flyer.centerX, e.flyer.centerY, 'flyer', e.flyer.rotorBroken);
     flyers = flyers.filter((e) => !e.flyer.dead);
-    for (const e of turrets) if (e.turret.dead) onEnemyKilled(e.spawnId, e.turret.centerX, e.turret.centerY, 'turret');
+    for (const e of turrets) if (e.turret.dead) onEnemyKilled(e.spawnId, e.turret.centerX, e.turret.centerY, 'turret', e.turret.sensorBroken);
     turrets = turrets.filter((e) => !e.turret.dead);
     if (boss && boss.boss.dead) {
       onBossKilled(boss.spawnId, boss.boss);
@@ -1879,6 +1921,8 @@ function updateHud(): void {
 
 let last = performance.now();
 let acc = 0;
+/** ヒットストップの残り(ミリ秒、2.22 §2)。残っている間は update を見送り、描画だけ続ける */
+let hitStopMs = 0;
 
 function frame(now: number): void {
   acc += Math.min(now - last, 100); // タブ復帰時のスパイラル防止
@@ -1886,10 +1930,15 @@ function frame(now: number): void {
   if (freezeSimulation || boxOpen) {
     acc = 0;
   } else {
-    while (acc >= STEP_MS) {
+    // 固定ステップの消化(core/hitstop の純粋関数)。部位破壊の update が要求した停止ぶんは、
+    // 蓄積した実時間から先に捨てる(シミュレーションだけ止まり、下の描画は毎フレーム走る)
+    const stepped = runFixedSteps(acc, hitStopMs, STEP_MS, () => {
+      pendingHitStopMs = 0;
       update(STEP_MS / 1000);
-      acc -= STEP_MS;
-    }
+      return pendingHitStopMs;
+    });
+    acc = stepped.accMs;
+    hitStopMs = stepped.stopMs;
   }
   const beam = lastBeam ? { angle: lastBeam.angle, alpha: lastBeam.ttl / BEAM_TTL } : null;
   const push = beamPush ? { angle: beamPush.angle, t: beamPush.ttl / PUSH_TTL } : null;
@@ -1942,6 +1991,7 @@ function frame(now: number): void {
         flash: e.walker.flashT > 0,
         dir: e.walker.dir, // 脚の向きと目の側(設計 2026-11-10 §2)
         broken: e.walker.legsBroken, // 脚破壊のよろけ歩行(設計 2026-11-12-action-overhaul §2)
+        damaged: e.walker.legsDamaged, // 脚の破損(1 回当たった。2.22 §2)
       })),
       ...flyers.map((e) => ({
         x: e.flyer.centerX,
@@ -1964,7 +2014,8 @@ function frame(now: number): void {
         // 警告灯と砲身の後退(見た目だけ)
         cooldown: e.turret.cooldown,
         aiming: e.turret.aiming,
-        broken: e.turret.sensorBroken, // センサー破損(発射停止)
+        broken: e.turret.sensorBroken, // センサー破壊(発射停止)
+        damaged: e.turret.sensorDamaged, // センサーの破損(1 回当たった。2.22 §2)
       })),
       // ボス: 体格(w/h)と相を渡し、renderer 側で相の違い(予備動作の点滅・硬直の晒し)を読む
       ...(boss
@@ -1977,6 +2028,7 @@ function frame(now: number): void {
             bossPhase: boss.boss.phase,
             bossPhaseT: boss.boss.phaseT,
             bossDir: boss.boss.dir,
+            broken: boss.boss.legsBroken, // 脚破壊(2.22 §1。足元の帯を描き分ける)
           }]
         : []),
     ],

@@ -1,15 +1,17 @@
 import { isSolid } from '../world/tiles';
 import { moveBody, type Body, type TileLookup } from './physics';
-import { inLowerBand, inUpperBand, type PartHit } from './parts';
+import { inLowerBand, inUpperBand, PART_EXPOSED_DAMAGE_MUL, type PartHit } from './parts';
 
 /**
  * 歩行敵「歩行ドローン」(アクション化 第1弾・第3段、設計書 2026-11-04-action-phase1)。
  * 床を左右巡回し、壁と床の端で反転する。接触ダメージのみ(敵弾は持たない)。梯子は登らない。
  * 2.19(設計 2026-11-12-action-overhaul): 体格を 1.8×1.6 へ大型化し、脚(下端の帯)を部位にした。
- * 脚への被弾 2 回で脚破壊 → 速度が半分以下に落ち、よろけ歩行になる。本体 HP は 3 のまま別枠。
+ * 脚への被弾 2 回で脚破壊 → 速度が半分以下に落ち、よろけ歩行になる。本体 HP は別枠。
+ * 2.22(設計 2026-11-17-parts-overhaul §1): 本体 HP を 3 → 6 に上げ、脚破壊後は本体への被ダメージを
+ * PART_EXPOSED_DAMAGE_MUL 倍にする(脚 2 発 + 露出後 3 発 = 5 発で、本体だけの 6 発より速い)。
  */
 export const WALKER_SPEED = 2; // タイル/秒
-export const WALKER_HP = 3;
+export const WALKER_HP = 6;
 /** 体格(タイル)。頭上 2 タイルの空きがある床ランにそのまま立てる高さに収める(出現位置は spawn.ts が床 - WALKER_H に置く) */
 export const WALKER_W = 1.8;
 export const WALKER_H = 1.6;
@@ -50,9 +52,17 @@ export class Walker {
     return this.legHp <= 0;
   }
 
-  /** 本体へダメージを与える(重粒子砲の即死もここを通す)。倒れたら true */
+  /** 脚が当たって傷んでいるが、まだ壊れていない(2.22 §2 の破損表示) */
+  get legsDamaged(): boolean {
+    return this.legHp > 0 && this.legHp < WALKER_LEG_HP;
+  }
+
+  /**
+   * 本体へダメージを与える(重粒子砲の即死もここを通す)。脚破壊後はフレームが露出して
+   * PART_EXPOSED_DAMAGE_MUL 倍になる。倒れたら true
+   */
   hit(damage: number): boolean {
-    this.hp -= damage;
+    this.hp -= this.legsBroken ? damage * PART_EXPOSED_DAMAGE_MUL : damage;
     this.flashT = 0.09;
     return this.dead;
   }
@@ -95,9 +105,11 @@ export class Walker {
  * 飛行敵「飛行ドローン」(アクション化 第2弾・§1)。重力を受けない空中巡回機。
  * 攻撃手段は接触のみ。状態は巡回/追尾の 2 つだけ。
  * 2.19(設計 2026-11-12-action-overhaul): 幅 1.5 へ大型化し、ローター(上端の帯)を部位にした。
- * ローターへの被弾 1 回でローター破壊 → 重力で落下し、以後は地上を這う(飛ばない)。本体 HP は 2 のまま。
+ * ローターへの被弾 1 回でローター破壊 → 重力で落下し、以後は地上を這う(飛ばない)。本体 HP は別枠。
+ * 2.22(設計 2026-11-17-parts-overhaul §1): 本体 HP を 2 → 3 に上げ、ローターが壊れて接地した後は
+ * 本体への被ダメージを PART_EXPOSED_DAMAGE_MUL 倍にする(落下中は等倍)。
  */
-export const FLYER_HP = 2;
+export const FLYER_HP = 3;
 export const FLYER_W = 1.5;
 export const FLYER_H = 1.0;
 /** ローターの耐久(本体 HP とは別枠) */
@@ -177,9 +189,14 @@ export class Flyer {
     return this.rotorHp <= 0;
   }
 
-  /** ダメージを与える(重粒子砲の即死もここを通す)。倒れたら true */
+  /** ローターが壊れて接地している(露出。本体への被ダメージが倍になる) */
+  get exposed(): boolean {
+    return this.rotorBroken && this.body.onGround;
+  }
+
+  /** ダメージを与える(重粒子砲の即死もここを通す)。露出中は PART_EXPOSED_DAMAGE_MUL 倍。倒れたら true */
   hit(damage: number): boolean {
-    this.hp -= damage;
+    this.hp -= this.exposed ? damage * PART_EXPOSED_DAMAGE_MUL : damage;
     this.flashT = 0.09;
     return this.dead;
   }
@@ -290,6 +307,8 @@ export class Flyer {
  * 行動は 巡回 → 接近 → 予備動作 → 突進 → 硬直 の状態機械で、読み合いの柱は
  * 予備動作 0.7 秒のテレグラフと、硬直中の被ダメージ 2 倍。
  * 番人は広間の矩形の外へ出ない(移動をクランプする)。
+ * 2.22(設計 2026-11-17-parts-overhaul §1): 脚(下端の帯、被弾 4 回)を部位にした。脚破壊後は
+ * 突進速度 9 → 5.5、硬直 1.2 → 1.6 秒になる。重粒子砲は従来どおり hit() を通し、脚は壊さない。
  */
 export const BOSS_HP = 30;
 export const BOSS_W = 2.6;
@@ -306,6 +325,12 @@ export const BOSS_STUN_TIME = 1.2;
 export const BOSS_STUN_DAMAGE_MUL = 2;
 /** 重粒子砲のボスへのダメージ(第2弾 §3。通常敵は即死、ボスだけ固定値) */
 export const BOSS_BEAM_DAMAGE = 10;
+/** 脚の耐久(本体 HP とは別枠。2.22 §1) */
+export const BOSS_LEG_HP = 4;
+/** 脚破壊後の突進速度(タイル/秒) */
+export const BOSS_LEGLESS_CHARGE_SPEED = 5.5;
+/** 脚破壊後の硬直時間(秒) */
+export const BOSS_LEGLESS_STUN_TIME = 1.6;
 
 export type BossPhase = 'patrol' | 'approach' | 'windup' | 'charge' | 'stunned';
 
@@ -314,6 +339,18 @@ export interface BossPhaseContext {
   playerInHall: boolean;
   /** 突進が壁(または広間の端)に当たったか */
   hitWall: boolean;
+  /** 脚が壊れているか(硬直が BOSS_LEGLESS_STUN_TIME に伸びる)。未指定は健在 */
+  legsBroken?: boolean;
+}
+
+/** 硬直時間(純関数)。脚破壊後は長くなる */
+export function bossStunTime(legsBroken: boolean): number {
+  return legsBroken ? BOSS_LEGLESS_STUN_TIME : BOSS_STUN_TIME;
+}
+
+/** 突進速度(純関数)。脚破壊後は遅くなる */
+export function bossChargeSpeed(legsBroken: boolean): number {
+  return legsBroken ? BOSS_LEGLESS_CHARGE_SPEED : BOSS_CHARGE_SPEED;
 }
 
 /**
@@ -340,7 +377,7 @@ export function stepBossPhase(
       if (ctx.hitWall) return { phase: 'stunned', t: 0 };
       return nt >= BOSS_CHARGE_TIME ? { phase: 'stunned', t: 0 } : { phase, t: nt };
     case 'stunned':
-      if (nt < BOSS_STUN_TIME) return { phase, t: nt };
+      if (nt < bossStunTime(ctx.legsBroken ?? false)) return { phase, t: nt };
       return ctx.playerInHall ? { phase: 'approach', t: 0 } : { phase: 'patrol', t: 0 };
   }
 }
@@ -348,6 +385,8 @@ export function stepBossPhase(
 export class Boss {
   body: Body;
   hp = BOSS_HP;
+  /** 脚の残り耐久。0 で脚破壊(突進が遅く、硬直が長くなる) */
+  legHp = BOSS_LEG_HP;
   phase: BossPhase = 'patrol';
   /** 現在の相に入ってからの経過秒 */
   phaseT = 0;
@@ -384,12 +423,29 @@ export class Boss {
     return this.hp <= 0;
   }
 
-  /** ダメージを与える。硬直中は被ダメージが 2 倍。倒れたら true */
+  get legsBroken(): boolean {
+    return this.legHp <= 0;
+  }
+
+  /** ダメージを与える(重粒子砲もここを通す。脚は壊さない)。硬直中は被ダメージが 2 倍。倒れたら true */
   hit(damage: number): boolean {
     const d = this.phase === 'stunned' ? damage * BOSS_STUN_DAMAGE_MUL : damage;
     this.hp -= d;
     this.flashT = 0.09;
     return this.dead;
+  }
+
+  /**
+   * 被弾位置 hitY(タイル)つきのダメージ(パルス用、2.22 §1)。脚が健在で下端の帯に当たれば脚の耐久だけを削る
+   * (硬直中の 2 倍は脚には掛けない: 「被弾 4 回」で数える)。脚破壊後と帯の外は本体へ入る
+   */
+  hitAt(damage: number, hitY: number): PartHit {
+    if (!this.legsBroken && inLowerBand(this.body.y, this.body.h, hitY)) {
+      this.legHp -= damage;
+      this.flashT = 0.09;
+      return { killed: false, part: true, broke: this.legsBroken };
+    }
+    return { killed: this.hit(damage), part: false, broke: false };
   }
 
   update(dt: number, tiles: TileLookup, playerX: number, playerY: number, playerInHall: boolean): void {
@@ -403,7 +459,7 @@ export class Boss {
       if (Math.abs(dx) > 0.1) this.dir = dx > 0 ? 1 : -1;
       b.vx = this.dir * BOSS_APPROACH_SPEED;
     } else if (this.phase === 'charge') {
-      b.vx = this.dir * BOSS_CHARGE_SPEED;
+      b.vx = this.dir * bossChargeSpeed(this.legsBroken);
     } else {
       b.vx = 0;
     }
@@ -428,7 +484,9 @@ export class Boss {
       if (this.phase === 'charge') hitWall = true;
       else if (this.phase === 'patrol') this.dir = -1;
     }
-    const next = stepBossPhase(this.phase, this.phaseT, { playerInHall, hitWall }, dt);
+    const next = stepBossPhase(
+      this.phase, this.phaseT, { playerInHall, hitWall, legsBroken: this.legsBroken }, dt,
+    );
     this.phase = next.phase;
     this.phaseT = next.t;
     this.flashT = Math.max(0, this.flashT - dt);

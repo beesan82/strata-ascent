@@ -522,21 +522,23 @@ export class AudioEngine {
   /**
    * 敵への命中(非撃破): 金属打撃のサンプル(バリエーションを決定論に回す)を主体に、
    * FM 合成の金属ティックを薄く重ねる。サンプルが無いときは従来の矩形波+ノイズ。
+   * pitch は音程の倍率(2.22: 部位に入った被弾だけ音程を変えて、本体ヒットと耳で聞き分ける。
+   * 音量・音声ファイルは変えない)。既定の 1 は従来と同じ音
    */
-  enemyHit(): void {
+  enemyHit(pitch = 1): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const now = ctx.currentTime;
     const idx = this.hitCount++;
     if (this.playSample(HIT_SAMPLES[pickVariant(idx, HIT_SAMPLES.length)], {
-      gain: 0.6, rate: sampleRate(1, idx, 0.04), wet: 0.3,
+      gain: 0.6, rate: sampleRate(pitch, idx, 0.04), wet: 0.3,
     })) {
       this.fmTick(now);
       return;
     }
     const osc = ctx.createOscillator();
     osc.type = 'square';
-    osc.frequency.value = HIT_FREQ;
+    osc.frequency.value = HIT_FREQ * pitch;
     const g = ctx.createGain();
     g.gain.setValueAtTime(HIT_GAIN, now);
     g.gain.exponentialRampToValueAtTime(0.001, now + HIT_SECONDS);

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addKillBurst, advanceKillBursts, KILL_FLASH_COLOR, KILL_FX, KILL_GRAVITY, killFlash, killFragments,
   killKey, killRing, killShake, MAX_KILL_BURSTS, type KillBurst, type KillKind,
+  addSparkBurst, BREAK_FX_KIND, type BreakFxKind, type FxKind, type HitFxKind,
 } from './killFx';
 import { PIXEL_PALETTE } from './palette';
 
@@ -264,5 +265,94 @@ describe('addKillBurst / advanceKillBursts', () => {
   it('寿命ちょうどまでは残す(最後のフレームも描く)', () => {
     expect(advanceKillBursts([burst('flyer', KILL_FX.flyer.ttl)], 0)).toHaveLength(1);
     expect(advanceKillBursts([burst('flyer', KILL_FX.flyer.ttl)], 0.001)).toHaveLength(0);
+  });
+});
+
+describe('2.22: 命中の火花と部位破壊のバースト(設計 2026-11-17-parts-overhaul §2)', () => {
+  const HITS: HitFxKind[] = ['hitBody', 'hitPart'];
+  const BREAKS: BreakFxKind[] = ['breakWalker', 'breakFlyer', 'breakTurret', 'breakBoss'];
+  const NEW_KINDS: FxKind[] = [...HITS, ...BREAKS];
+  const burst = (kind: FxKind, age = 0, x = 0): KillBurst => ({ x, y: 0, kind, key: 1, age });
+
+  it('色はすべてパレット実在色(新色を足していない)', () => {
+    for (const kind of NEW_KINDS) {
+      for (const c of KILL_FX[kind].colors) expect(PIXEL_PALETTE).toContain(c);
+      expect(PIXEL_PALETTE).toContain(KILL_FX[kind].ringColor);
+    }
+  });
+
+  it('本体ヒットと部位ヒットの火花は色が重ならない(色で見分けられる)', () => {
+    for (const c of KILL_FX.hitPart.colors) expect(KILL_FX.hitBody.colors).not.toContain(c);
+  });
+
+  it('火花は小片だけ: 閃光・輪・シェイクを持たず、撃破より数が少なく寿命が短い', () => {
+    for (const kind of HITS) {
+      const s = KILL_FX[kind];
+      for (const age of [0, 0.05, s.ttl]) {
+        expect(killFlash(kind, age)).toBeNull();
+        expect(killRing(kind, KEY, age)).toBeNull();
+        expect(killShake(kind, KEY, age)).toEqual({ x: 0, y: 0 });
+      }
+      expect(killFragments(kind, KEY, 0.05)).toHaveLength(s.count);
+      for (const k of KINDS) {
+        expect(s.count).toBeLessThan(KILL_FX[k].count);
+        expect(s.ttl).toBeLessThan(KILL_FX[k].ttl);
+      }
+    }
+  });
+
+  it('部位破壊のバーストは火花より大きく、同じ敵の撃破より小さい。シェイクは持たない', () => {
+    for (const k of KINDS) {
+      const b = KILL_FX[BREAK_FX_KIND[k]];
+      const kill = KILL_FX[k];
+      expect(b.count).toBeGreaterThan(KILL_FX.hitPart.count);
+      expect(b.sizeMax).toBeGreaterThan(KILL_FX.hitPart.sizeMax);
+      expect(b.count).toBeLessThan(kill.count);
+      expect(b.ringR1).toBeLessThan(kill.ringR1);
+      expect(b.shakePx).toBe(0);
+      expect(b.flashTtl).toBeGreaterThan(0);
+      expect(b.flashTtl).toBeLessThan(b.ttl);
+      expect(b.ringTtl).toBeLessThan(b.ttl);
+    }
+  });
+
+  it('BREAK_FX_KIND は 4 種を別々の種別へ対応させ、ボスの脚が最も大きい', () => {
+    expect(new Set(KINDS.map((k) => BREAK_FX_KIND[k])).size).toBe(4);
+    for (const k of ['walker', 'flyer', 'turret'] as const) {
+      expect(KILL_FX.breakBoss.count).toBeGreaterThan(KILL_FX[BREAK_FX_KIND[k]].count);
+      expect(KILL_FX.breakBoss.ringR1).toBeGreaterThan(KILL_FX[BREAK_FX_KIND[k]].ringR1);
+    }
+  });
+
+  it('新しい種別も同じ式で決まる(寿命の外は空、内は種別の数、決定論、輪と閃光が出る)', () => {
+    for (const kind of NEW_KINDS) {
+      const s = KILL_FX[kind];
+      expect(killFragments(kind, KEY, -0.01)).toEqual([]);
+      expect(killFragments(kind, KEY, s.ttl + 0.01)).toEqual([]);
+      expect(killFragments(kind, KEY, s.ttl / 2)).toHaveLength(s.count);
+      expect(killFragments(kind, KEY, s.ttl / 2)).toEqual(killFragments(kind, KEY, s.ttl / 2));
+      for (const f of killFragments(kind, KEY, s.ttl / 2)) expect(s.colors).toContain(f.color);
+    }
+    for (const kind of BREAKS) {
+      expect(killFlash(kind, 0)).toEqual({ size: KILL_FX[kind].flashSize, alpha: 1 });
+      expect(killRing(kind, KEY, 0)!.points).toHaveLength(KILL_FX[kind].ringSegs);
+    }
+  });
+
+  it('火花は寿命が短いので、同じ時刻の撃破バーストより先に消える', () => {
+    const out = advanceKillBursts([burst('hitPart', 0.2), burst('walker', 0.2)], 0.05);
+    expect(out.map((b) => b.kind)).toEqual(['walker']);
+  });
+
+  it('addSparkBurst: 空きがあれば足し、満杯なら足さない(既存のバーストを押し出さない)', () => {
+    const a = [burst('walker')];
+    const added = addSparkBurst(a, burst('hitBody'));
+    expect(added.map((b) => b.kind)).toEqual(['walker', 'hitBody']);
+    expect(a).toHaveLength(1); // 元の配列は変えない
+    const full = Array.from({ length: MAX_KILL_BURSTS }, (_, i) => burst('boss', 0, i));
+    const same = addSparkBurst(full, burst('hitPart'));
+    expect(same).toBe(full);
+    expect(same.every((b) => b.kind === 'boss')).toBe(true);
+    expect(addSparkBurst(a, burst('hitBody'), 1)).toBe(a);
   });
 });
