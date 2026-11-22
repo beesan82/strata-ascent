@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>STRATA ASCENT</title>
+  <style>
+    html, body {
+      margin: 0; height: 100%; overflow: hidden; background: #000;
+      /* ゲーム画面全体でテキスト/範囲選択と長押しコールアウトを禁止する
+         (ドラッグ照準やボタンの長押しで画面が選択されて青くなるのを防ぐ) */
+      user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    canvas { display: block; }
+    /* HUD は状態の文字行を持たず(状態はアイテムボックスへ集約、弾薬設計 §4)、ボスの HP バーだけを出す */
+    #hud {
+      position: fixed; left: 12px; top: 10px;
+      color: #9aa4ad; font: 12px monospace; letter-spacing: 0.2em;
+      pointer-events: none; user-select: none;
+    }
+    /* 取得ログ(何を取ったかを画面端に短く残す)。HUD の下、左端に新しい順で最大 4 行 */
+    #pickuplog {
+      position: fixed; left: 12px; top: 34px;
+      color: #c8d0d6; font: 12px monospace; letter-spacing: 0.15em; line-height: 1.7;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+      pointer-events: none; user-select: none; white-space: pre-line;
+    }
+    /* 通過演出の字幕(§6.5)。HUD と同じ等幅、文字間 0.3em。不透明度は src/render/caption.ts が毎フレーム更新 */
+    #caption {
+      position: fixed; left: 0; right: 0; bottom: 18%; text-align: center;
+      color: #c8d0d6; font: 16px monospace; letter-spacing: 0.3em; opacity: 0;
+      /* 2 行の字幕(階層と到達者数、探索者番号と止まった階層)を改行で分ける */
+      white-space: pre-line; line-height: 1.9;
+      pointer-events: none; user-select: none;
+    }
+    /* タッチ操作ボタン(src/core/touch.ts が組み立てる)。タッチ端末(pointer: coarse)でのみ表示 */
+    #touch { display: none; }
+    @media (pointer: coarse) {
+      #touch { display: block; }
+      .tcluster {
+        position: fixed; bottom: calc(12px + env(safe-area-inset-bottom));
+        display: flex; gap: 12px;
+        pointer-events: none; z-index: 10;
+      }
+      .tcluster.right { right: 12px; flex-direction: column; gap: 8px; align-items: flex-end; }
+      .trow { display: flex; gap: 10px; }
+      /* 仮想スティックのゾーン(左右 45%)。土台とノブは触れたときだけ出る。
+         ボタン(z-index 10)より下に置き、ボタンの領域ではボタンが優先される */
+      .tstick-zone { position: fixed; top: 0; bottom: 0; z-index: 5; touch-action: none; }
+      .tstick-zone.left { left: 0; width: 45%; }
+      .tstick-zone.right { right: 0; width: 45%; }
+      .tstick-base {
+        position: fixed; width: 112px; height: 112px; border-radius: 50%; display: none;
+        background: rgba(28, 34, 40, 0.35); border: 1px solid rgba(200, 208, 214, 0.35);
+        pointer-events: none; z-index: 6;
+      }
+      .tstick-knob {
+        position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; border-radius: 50%;
+        background: rgba(130, 150, 165, 0.5); border: 1px solid rgba(200, 208, 214, 0.5);
+        transform: translate(-50%, -50%);
+      }
+      /* 溜め中は左スティックを落として無効化する(止まって狙うモードの明示) */
+      #touch.aiming .tstick-zone.left { opacity: 0.25; }
+      .tview {
+        position: fixed; top: calc(10px + env(safe-area-inset-top)); right: 12px;
+        pointer-events: none; z-index: 10;
+      }
+      /* ボタンのラベルは記号 1 文字(弾薬設計 §4)。等幅フォントで描ける字形だけを使い、
+         行の高さをボタンの高さに揃えて記号を中央に置く */
+      .tbtn {
+        pointer-events: auto; border-radius: 50%;
+        background: rgba(28, 34, 40, 0.45); color: #c8d0d6;
+        border: 1px solid rgba(200, 208, 214, 0.4);
+        font: 24px monospace; line-height: 1; padding: 0; touch-action: none;
+        display: inline-flex; align-items: center; justify-content: center;
+        user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+      }
+      .tbtn.on { background: rgba(130, 150, 165, 0.55); }
+      /* 砲モードの明示色(パレットの紫 #8d62cb 系。DOM/CSS は 32 色量子化の対象外で、ゲーム内描画ではない) */
+      .tbtn.mode-cannon { background: rgba(141, 98, 203, 0.45); border-color: rgba(188, 150, 255, 0.75); }
+      #touch.mode-cannon .tstick-base { border-color: rgba(188, 150, 255, 0.55); }
+      #touch.mode-cannon .tstick-knob { background: rgba(141, 98, 203, 0.5); border-color: rgba(188, 150, 255, 0.6); }
+      .sz-jump { width: 84px; height: 84px; font-size: 36px; }
+      .sz-box { width: 48px; height: 48px; font-size: 24px; }
+      /* 切替ボタン(旧 .sz-cannon の枠)。記号 1 文字(» / ●)なので大きめに */
+      .sz-weapon { width: 76px; height: 76px; font-size: 34px; }
+      .sz-view { width: 48px; height: 48px; font-size: 24px; }
+    }
+    /* アイテムボックス(設計 2026-11-09-item-box、状態セクションは弾薬設計 §4)。DOM のパネルで、
+       ゲーム内描画(量子化)の対象外。開いている間は main がゲーム更新を止める */
+    #itembox {
+      position: fixed; left: 50%; top: calc(10px + env(safe-area-inset-top)); transform: translateX(-50%);
+      width: min(92vw, 430px); z-index: 30;
+      /* 横画面のスマホでは縦が短く、状態セクションを足すと入りきらない。中でスクロールさせる */
+      max-height: calc(100dvh - 20px - env(safe-area-inset-top)); overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      background: rgba(16, 20, 24, 0.92); border: 1px solid rgba(200, 208, 214, 0.4);
+      color: #c8d0d6; font: 13px monospace; letter-spacing: 0.12em;
+      padding: 10px 14px; box-sizing: border-box;
+    }
+    #itembox[hidden] { display: none; }
+    .ibox-head {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 14px; margin-bottom: 8px;
+    }
+    #itembox-close {
+      background: none; border: 1px solid rgba(200, 208, 214, 0.4); color: #c8d0d6;
+      width: 30px; height: 30px; font: 16px monospace; cursor: pointer;
+    }
+    .ibox-label { color: #9aa4ad; font-size: 11px; margin: 6px 0 4px; }
+    /* 状態セクション: 2 列の行(左 = 項目名、右 = 値)。HUD の文字行の代わり */
+    .ibox-status { display: grid; grid-template-columns: auto 1fr; column-gap: 12px; row-gap: 3px; font-size: 12px; }
+    .ibox-status .k { color: #9aa4ad; }
+    .ibox-status .v { color: #c8d0d6; white-space: nowrap; }
+    .ibox-status .v.warn { color: #caa64a; }
+    .ibox-status .v.crit { color: #d06a5a; }
+    .ibox-cells { display: flex; gap: 6px; flex-wrap: wrap; }
+    .ibox-cell {
+      width: 44px; height: 44px; box-sizing: border-box;
+      border: 1px solid rgba(200, 208, 214, 0.35); background: rgba(28, 34, 40, 0.5);
+      padding: 0; cursor: pointer;
+    }
+    .ibox-cell.empty { cursor: default; opacity: 0.45; }
+    /* 携行セルの見た目(ゲーム内の色を CSS で寄せる)。素材 = 鋼青+淡色の上端帯、
+       砲弾 = 紫の角型+暗い芯、パルス弾セル = 淡色の束+紫の縦筋 2 本 */
+    .ibox-icon { width: 100%; height: 100%; background: linear-gradient(#c7d0ce 0 22%, #3a73a4 22% 100%); }
+    .ibox-icon.shell {
+      background: radial-gradient(circle at 50% 50%, #30254c 0 24%, #8d62cb 24% 100%);
+    }
+    .ibox-icon.pulsecell {
+      background:
+        linear-gradient(90deg, transparent 0 18%, #8d62cb 18% 32%, transparent 32% 68%, #8d62cb 68% 82%, transparent 82% 100%),
+        linear-gradient(#c7d0ce, #c7d0ce);
+    }
+    /* 貴重品(段階 3-B): 金の菱形(◆)+淡い芯。ゲーム内の貴重品ドロップと同じ色 */
+    .ibox-icon.valuable {
+      background:
+        radial-gradient(circle at 50% 50%, #c7d0ce 0 9%, transparent 9%),
+        linear-gradient(#caa64a, #caa64a);
+      clip-path: polygon(50% 8%, 88% 50%, 50% 92%, 12% 50%);
+    }
+    .ibox-status .v.gold { color: #caa64a; }
+    .ibox-chips { display: flex; gap: 6px; flex-wrap: wrap; min-height: 30px; }
+    .ibox-chip {
+      display: inline-flex; align-items: center; gap: 7px;
+      border: 1px solid rgba(200, 208, 214, 0.35); background: rgba(28, 34, 40, 0.5);
+      color: #c8d0d6; font: 12px monospace; padding: 4px 8px; cursor: pointer;
+    }
+    .ibox-chip .ibox-icon { width: 14px; height: 20px; }
+    .ibox-chip.locked { cursor: default; opacity: 0.6; }
+    .ibox-empty-note { color: #9aa4ad; font-size: 11px; }
+    #itembox-note { color: #9aa4ad; font-size: 11px; margin-top: 9px; min-height: 14px; }
+    /* 「さいしょから」(設計 2026-11-11-persistence)。目立たせない控えめな枠で右下に置き、
+       1 回押した確認の状態だけ警告色にする */
+    .ibox-foot { display: flex; justify-content: flex-end; margin-top: 10px; }
+    #itembox-reset {
+      background: none; border: 1px solid rgba(200, 208, 214, 0.3); color: #9aa4ad;
+      font: 11px monospace; letter-spacing: 0.12em; padding: 5px 10px; cursor: pointer;
+    }
+    #itembox-reset.confirm { color: #d06a5a; border-color: rgba(208, 106, 90, 0.8); }
+  </style>
+  <script type="module" crossorigin src="/strata-ascent/showcase/assets/index-DGJfrJXB.js"></script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="hud"></div>
+  <div id="pickuplog"></div>
+  <div id="caption"></div>
+  <div id="itembox" hidden>
+    <div class="ibox-head"><span>アイテムボックス</span><button id="itembox-close" type="button">×</button></div>
+    <div class="ibox-label">状態</div>
+    <div id="itembox-status" class="ibox-status"></div>
+    <div id="itembox-carry-label" class="ibox-label">携行（タップで落とす）</div>
+    <div id="itembox-carry" class="ibox-cells"></div>
+    <div class="ibox-label">保管（確保済み）</div>
+    <div id="itembox-secured" class="ibox-chips"></div>
+    <div id="itembox-note"></div>
+    <div class="ibox-foot"><button id="itembox-reset" type="button">さいしょから</button></div>
+  </div>
+</body>
+</html>
